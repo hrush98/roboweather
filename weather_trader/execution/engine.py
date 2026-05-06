@@ -15,9 +15,10 @@ from weather_trader.execution.contracts import (
     TradeAction,
     utc_now_iso,
 )
-from weather_trader.execution.decision import DecisionConfig, DecisionEngine, finalize_decision
+from weather_trader.execution.decision import DecisionEngine
 from weather_trader.execution.discovery import MarketDiscoveryService, same_day_markets
 from weather_trader.execution.fair_value import FairValueEngine
+from weather_trader.execution.grouping import GroupMarketContext, StationDateDecisionEngine, group_key
 from weather_trader.execution.paper_executor import PaperOrderExecutor
 from weather_trader.execution.positions import PositionTracker, mark_position
 from weather_trader.execution.risk import RiskConfig, RiskManager
@@ -41,6 +42,7 @@ class PaperTradingEngine:
         book_client: RestBookClient | None = None,
         weather_service: WeatherFeatureService | None = None,
         decision_engine: DecisionEngine | None = None,
+        station_date_decision_engine: StationDateDecisionEngine | None = None,
         risk_manager: RiskManager | None = None,
         paper_executor: PaperOrderExecutor | None = None,
     ) -> None:
@@ -50,6 +52,7 @@ class PaperTradingEngine:
         self.weather_service = weather_service or WeatherFeatureService()
         self.fair_value_engine = fair_value_engine
         self.decision_engine = decision_engine or DecisionEngine()
+        self.station_date_decision_engine = station_date_decision_engine or StationDateDecisionEngine(self.decision_engine)
         self.risk_manager = risk_manager or RiskManager()
         self.paper_executor = paper_executor or PaperOrderExecutor(strict_fok=True)
         self.position_tracker = PositionTracker(load_positions_from_store(store))
@@ -85,6 +88,7 @@ class PaperTradingEngine:
             self.store.insert_book_snapshot(book)
 
         weather_by_station = self._fetch_weather_by_station(markets, now, errors)
+        contexts_by_group: dict[tuple[str, date | None], list[GroupMarketContext]] = {}
         for market in markets:
             try:
                 weather = weather_by_station.get(market.station)
@@ -94,45 +98,60 @@ class PaperTradingEngine:
                 signal = self._build_signal(market, books, now, weather)
                 signals.append(signal)
                 self.store.insert_signal(signal)
-                decision = self.decision_engine.decide(
-                    market=market,
-                    signal=signal,
-                    yes_book=books.get(market.yes_token_id or ""),
-                    no_book=books.get(market.no_token_id or ""),
-                    bankroll_usd=self.risk_manager.config.bankroll_usd,
+                contexts_by_group.setdefault(group_key(market), []).append(
+                    GroupMarketContext(
+                        market=market,
+                        signal=signal,
+                        yes_book=books.get(market.yes_token_id or ""),
+                        no_book=books.get(market.no_token_id or ""),
+                    )
                 )
-                decision = finalize_decision(decision, market.market_id, signal.reason_codes)
-                decision = self.risk_manager.apply(
-                    decision=decision,
-                    market_station=market.station,
-                    market_date=market.market_date,
-                    positions=self.position_tracker.open_positions(),
-                    now_ts=time.time(),
-                )
-                self.store.insert_decision(decision)
-                if decision.action == TradeAction.SKIP:
-                    skipped += 1
-                    continue
-                actionable_decisions += 1
-                if not submit_paper_orders:
-                    continue
-                side_book = books.get(decision.token_id or "")
-                order = self.paper_executor.submit(decision, side_book)
-                orders_submitted += 1
-                self.store.insert_paper_order(order)
-                if order.state in {OrderState.FILLED, OrderState.PARTIAL}:
-                    self.risk_manager.mark_order_submitted(time.time())
-                    current_bid = side_book.best_bid if side_book else None
-                    position = self.position_tracker.apply_order(order, market, current_bid=current_bid)
-                    if position:
-                        self.store.upsert_position(position)
             except Exception as exc:
                 errors.append(f"{market.market_id}: {exc}")
 
-        self._mark_open_positions(books=books, as_of_utc=now, errors=errors, weather_by_station=weather_by_station)
+        market_by_id = {market.market_id: market for market in markets}
+        for contexts in contexts_by_group.values():
+            try:
+                selection = self.station_date_decision_engine.select(
+                    contexts=contexts,
+                    bankroll_usd=self.risk_manager.config.bankroll_usd,
+                )
+                self.store.insert_station_date_decision(selection.trace)
+                for decision in selection.decisions.values():
+                    market = market_by_id[decision.market_id]
+                    if selection.selected_decision is not None and decision.market_id == selection.selected_decision.market_id:
+                        decision = self.risk_manager.apply(
+                            decision=decision,
+                            market_station=market.station,
+                            market_date=market.market_date,
+                            positions=self.position_tracker.open_positions(),
+                            now_ts=time.time(),
+                        )
+                    self.store.insert_decision(decision)
+                    if decision.action == TradeAction.SKIP:
+                        skipped += 1
+                        continue
+                    actionable_decisions += 1
+                    if not submit_paper_orders:
+                        continue
+                    side_book = books.get(decision.token_id or "")
+                    order = self.paper_executor.submit(decision, side_book)
+                    orders_submitted += 1
+                    self.store.insert_paper_order(order)
+                    if order.state in {OrderState.FILLED, OrderState.PARTIAL}:
+                        self.risk_manager.mark_order_submitted(time.time())
+                        current_bid = side_book.best_bid if side_book else None
+                        position = self.position_tracker.apply_order(order, market, current_bid=current_bid)
+                        if position:
+                            self.store.upsert_position(position)
+            except Exception as exc:
+                group_label = f"{contexts[0].market.station}:{contexts[0].market.market_date}" if contexts else "empty"
+                errors.append(f"group:{group_label}: {exc}")
 
         risk_state = self.risk_manager.current_state(self.position_tracker.open_positions())
         self.store.insert_risk_state(risk_state)
+        self._mark_open_positions(books=books, as_of_utc=now, errors=errors, weather_by_station=weather_by_station)
+
         engine_state = EngineState(
             timestamp=utc_now_iso(),
             mode="paper",

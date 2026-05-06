@@ -17,8 +17,10 @@ from weather_trader.execution.contracts import (
 )
 from weather_trader.execution.decision import DecisionConfig, DecisionEngine, finalize_decision
 from weather_trader.execution.fair_value import FairValueEngine
+from weather_trader.execution.grouping import GroupMarketContext, StationDateDecisionEngine
 from weather_trader.execution.paper_executor import PaperOrderExecutor
 from weather_trader.execution.positions import effective_status_for_position, mark_position
+from weather_trader.execution.risk import RiskConfig, RiskManager
 from weather_trader.execution.weather import StationWeatherState
 
 
@@ -185,6 +187,62 @@ def test_effective_status_for_bounded_bucket_overshoot() -> None:
     assert effective_status_for_position(TradeAction.BUY_YES, lower_f=66, upper_f=67, high_so_far=66) == EffectiveStatus.LIVE
 
 
+def test_station_date_group_selects_one_best_candidate() -> None:
+    first = _market(lower=56, upper=57)
+    second = _replace_market(_market(lower=58, upper=59), market_id="m2", yes_token_id="yes2", no_token_id="no2")
+    contexts = [
+        GroupMarketContext(
+            market=first,
+            signal=_signal_for_market(first, fair_yes=0.2, fair_no=0.8, yes_ask=0.9, no_ask=0.6),
+            yes_book=_book("yes", ask=0.9),
+            no_book=_book("no", ask=0.6),
+        ),
+        GroupMarketContext(
+            market=second,
+            signal=_signal_for_market(second, fair_yes=0.1, fair_no=0.9, yes_ask=0.9, no_ask=0.5),
+            yes_book=_book("yes2", ask=0.9),
+            no_book=_book("no2", ask=0.5),
+        ),
+    ]
+
+    selection = StationDateDecisionEngine(DecisionEngine(DecisionConfig(high_conviction_min_edge=0.1))).select(contexts, bankroll_usd=1000)
+
+    assert selection.selected_decision is not None
+    assert selection.selected_decision.market_id == "m2"
+    assert selection.decisions["m2"].action == TradeAction.BUY_NO
+    assert selection.decisions["m1"].action == TradeAction.SKIP
+    assert "GROUP_NOT_SELECTED" in selection.decisions["m1"].skip_reasons
+    assert selection.trace.candidate_count == 2
+    assert selection.trace.selected_market_id == "m2"
+
+
+def test_risk_blocks_second_station_date_position() -> None:
+    decision = Decision(
+        timestamp="now",
+        market_id="m2",
+        token_id="no2",
+        action=TradeAction.BUY_NO,
+        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        max_price=0.5,
+        target_usd=5.0,
+        expected_value=0.2,
+        skip_reasons=[],
+        reason_codes=[],
+    )
+    existing = _position(side=TradeAction.BUY_NO, cost=5)
+
+    result = RiskManager(RiskConfig(bankroll_usd=1000)).apply(
+        decision=decision,
+        market_station="KATL",
+        market_date=date(2026, 5, 5),
+        positions=[existing],
+        now_ts=0,
+    )
+
+    assert result.action == TradeAction.SKIP
+    assert "STATION_DATE_POSITION_EXISTS" in result.skip_reasons
+
+
 def _market(lower: float = 80, upper: float = 81) -> MarketSnapshot:
     return MarketSnapshot(
         market_id="m1",
@@ -202,6 +260,12 @@ def _market(lower: float = 80, upper: float = 81) -> MarketSnapshot:
         resolution_source="",
         discovered_at="now",
     )
+
+
+def _replace_market(market, **updates):
+    from dataclasses import replace
+
+    return replace(market, **updates)
 
 
 def _signal(fair_yes: float, fair_no: float, yes_ask: float, no_ask: float):
@@ -233,6 +297,16 @@ def _signal(fair_yes: float, fair_no: float, yes_ask: float, no_ask: float):
         reason_codes=["MODEL_PROBABILITY"],
         model_name="m",
         model_features_hash="h",
+    )
+
+
+def _signal_for_market(market: MarketSnapshot, fair_yes: float, fair_no: float, yes_ask: float, no_ask: float):
+    signal = _signal(fair_yes=fair_yes, fair_no=fair_no, yes_ask=yes_ask, no_ask=no_ask)
+    return _replace_signal(
+        signal,
+        market_id=market.market_id,
+        lower_f=market.lower_f,
+        upper_f=market.upper_f,
     )
 
 

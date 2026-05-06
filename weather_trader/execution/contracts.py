@@ -197,6 +197,22 @@ class PositionMark:
 
 
 @dataclass(frozen=True)
+class StationDateDecisionTrace:
+    timestamp: str
+    station: str
+    market_date: date | None
+    candidate_count: int
+    selected_market_id: str | None
+    selected_action: TradeAction
+    selected_strategy_bucket: StrategyBucket
+    selected_edge: float | None
+    selected_score: float | None
+    skip_reason: str | None
+    distribution: list[dict[str, Any]]
+    candidates: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
 class Resolution:
     market_id: str
     station: str

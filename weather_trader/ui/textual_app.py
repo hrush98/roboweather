@@ -39,6 +39,10 @@ class RoboWeatherTUI(App):
     #positions {
         height: 9;
     }
+
+    #groups {
+        height: 9;
+    }
     """
     BINDINGS = [
         ("r", "refresh", "Refresh"),
@@ -58,6 +62,8 @@ class RoboWeatherTUI(App):
             yield Static("roboweather paper harness", id="summary")
             yield Static("Paper orders", classes="section-title")
             yield DataTable(id="orders")
+            yield Static("Station / Date Decisions", classes="section-title")
+            yield DataTable(id="groups")
             yield Static("Positions / MTM", classes="section-title")
             yield DataTable(id="positions")
             yield Static("Decisions", classes="section-title")
@@ -79,6 +85,20 @@ class RoboWeatherTUI(App):
             "max",
             "reject",
             "market",
+        )
+
+        groups = self.query_one("#groups", DataTable)
+        groups.cursor_type = "row"
+        groups.add_columns(
+            "time",
+            "station",
+            "date",
+            "cands",
+            "selected",
+            "strategy",
+            "edge",
+            "bucket",
+            "skip",
         )
 
         positions = self.query_one("#positions", DataTable)
@@ -142,6 +162,7 @@ class RoboWeatherTUI(App):
         try:
             signals = store.recent_signals(limit=200)
             orders = store.recent_paper_orders(limit=50)
+            groups = store.recent_station_date_decisions(limit=50)
             position_marks = store.latest_position_marks(limit=50)
             decisions = store.recent_decisions(limit=50)
             order_summary = store.paper_order_summary()
@@ -164,6 +185,27 @@ class RoboWeatherTUI(App):
                 _fmt(order.get("max_price")),
                 str(order.get("reject_reason") or "")[:18],
                 str(order.get("market_id", ""))[:14],
+            )
+
+        groups_table = self.query_one("#groups", DataTable)
+        groups_table.clear()
+        for group in groups:
+            selected_market_id = group.get("selected_market_id")
+            selected_bucket = ""
+            for candidate in group.get("candidates") or []:
+                if candidate.get("market_id") == selected_market_id:
+                    selected_bucket = str(candidate.get("bucket", ""))
+                    break
+            groups_table.add_row(
+                str(group.get("timestamp", ""))[11:19],
+                str(group.get("station", "")),
+                str(group.get("market_date", "")),
+                str(group.get("candidate_count", "")),
+                str(group.get("selected_action", "")),
+                str(group.get("selected_strategy_bucket", "")),
+                _fmt(group.get("selected_edge")),
+                selected_bucket,
+                str(group.get("skip_reason") or "")[:28],
             )
 
         positions_table = self.query_one("#positions", DataTable)

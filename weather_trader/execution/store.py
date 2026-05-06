@@ -17,6 +17,7 @@ from weather_trader.execution.contracts import (
     Resolution,
     RiskState,
     Signal,
+    StationDateDecisionTrace,
     dataclass_to_jsonable,
 )
 
@@ -124,6 +125,21 @@ class ExecutionStore:
                 unrealized_pnl real,
                 unrealized_pnl_pct real,
                 effective_status text not null,
+                raw_json text not null
+            );
+
+            create table if not exists station_date_decisions (
+                id integer primary key autoincrement,
+                timestamp text not null,
+                station text not null,
+                market_date text,
+                candidate_count integer not null,
+                selected_market_id text,
+                selected_action text not null,
+                selected_strategy_bucket text not null,
+                selected_edge real,
+                selected_score real,
+                skip_reason text,
                 raw_json text not null
             );
 
@@ -336,6 +352,33 @@ class ExecutionStore:
         )
         self.connection.commit()
 
+    def insert_station_date_decision(self, trace: StationDateDecisionTrace) -> None:
+        data = dataclass_to_jsonable(trace)
+        self.connection.execute(
+            """
+            insert into station_date_decisions (
+                timestamp, station, market_date, candidate_count, selected_market_id,
+                selected_action, selected_strategy_bucket, selected_edge, selected_score,
+                skip_reason, raw_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                trace.timestamp,
+                trace.station,
+                data["market_date"],
+                trace.candidate_count,
+                trace.selected_market_id,
+                str(trace.selected_action),
+                str(trace.selected_strategy_bucket),
+                trace.selected_edge,
+                trace.selected_score,
+                trace.skip_reason,
+                json.dumps(data, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+
     def insert_resolution(self, resolution: Resolution) -> None:
         data = dataclass_to_jsonable(resolution)
         self.connection.execute(
@@ -430,6 +473,13 @@ class ExecutionStore:
             order by mark.id desc
             limit ?
             """,
+            (limit,),
+        ).fetchall()
+        return [json.loads(row["raw_json"]) for row in rows]
+
+    def recent_station_date_decisions(self, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "select raw_json from station_date_decisions order by id desc limit ?",
             (limit,),
         ).fetchall()
         return [json.loads(row["raw_json"]) for row in rows]

@@ -11,6 +11,7 @@ class RiskConfig:
     bankroll_usd: float = 1000.0
     max_usd_per_order: float = 10.0
     max_open_positions: int = 20
+    max_positions_per_station_date: int = 1
     max_station_date_pct: float = 0.02
     max_portfolio_pct: float = 0.05
     min_seconds_between_orders: float = 3.0
@@ -46,6 +47,13 @@ class RiskManager:
             skip_reasons.append("MAX_OPEN_POSITIONS")
         if any(position.token_id == decision.token_id for position in open_positions):
             skip_reasons.append("DUPLICATE_TOKEN_POSITION")
+        station_date_positions = [
+            position
+            for position in open_positions
+            if position.station == market_station and position.market_date == market_date
+        ]
+        if len(station_date_positions) >= self.config.max_positions_per_station_date:
+            skip_reasons.append("STATION_DATE_POSITION_EXISTS")
 
         station_key = f"{market_station}:{market_date}"
         station_exposure = self.station_date_exposure(open_positions).get(station_key, 0.0)
