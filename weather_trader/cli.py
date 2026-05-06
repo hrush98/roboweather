@@ -18,7 +18,6 @@ from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import WeatherFeatureService
 from weather_trader.features.dataset_builder import build_default_dataset
 from weather_trader.features.build_same_day_features import build_synthetic_threshold_examples
-from weather_trader.forecasts.hrrr_archive import HRRRArchiveClient, enrich_dataset_with_hrrr
 from weather_trader.forecasts.hrrr_client import HRRRClient
 from weather_trader.live.scanner import LiveScanner
 from weather_trader.live.next_day_scanner import NextDayScanner
@@ -30,6 +29,14 @@ from weather_trader.models.train_classifier import (
     save_artifacts,
     train_and_calibrate,
     tune_model_configs,
+)
+from weather_trader.models.bucket_classifier import (
+    build_bucket_calibration_report,
+    build_bucket_heuristic_report,
+    build_bucket_validation_predictions,
+    build_ladder_predictions,
+    save_bucket_artifacts,
+    train_bucket_classifier,
 )
 from weather_trader.models.next_day_classifier import (
     build_next_day_bucket_reports,
@@ -74,6 +81,13 @@ def main() -> None:
     train_model.add_argument("--validation-year", type=int, default=2025)
     train_model.add_argument("--report-dir", required=False)
     train_model.add_argument("--require-hrrr", action="store_true")
+
+    train_bucket_model = subparsers.add_parser("train-bucket-model", help="Train dynamic bucket candidate classifier")
+    train_bucket_model.add_argument("--dataset", required=True)
+    train_bucket_model.add_argument("--output", required=True)
+    train_bucket_model.add_argument("--validation-year", type=int, default=2025)
+    train_bucket_model.add_argument("--report-dir", required=False)
+    train_bucket_model.add_argument("--require-hrrr", action="store_true")
 
     validate_data = subparsers.add_parser("validate-model-data", help="Run training-data diagnostics")
     validate_data.add_argument("--dataset", required=True)
@@ -170,6 +184,9 @@ def main() -> None:
         return
     if args.command == "train-model":
         train_model_command(args.dataset, args.output, args.validation_year, args.report_dir, args.require_hrrr)
+        return
+    if args.command == "train-bucket-model":
+        train_bucket_model_command(args.dataset, args.output, args.validation_year, args.report_dir, args.require_hrrr)
         return
     if args.command == "validate-model-data":
         validate_model_data_command(args.dataset, args.kind, args.validation_year, args.report_dir, args.require_hrrr)
@@ -325,6 +342,48 @@ def train_model_command(
     print(json.dumps(output, indent=2))
 
 
+def train_bucket_model_command(
+    dataset_path: str,
+    output_path: str,
+    validation_year: int,
+    report_dir: str | None,
+    require_hrrr: bool,
+) -> None:
+    dataset = pd.read_csv(dataset_path)
+    if require_hrrr:
+        dataset = dataset.loc[dataset["hrrr_remaining_max"].notna()].copy()
+    diagnostics = validate_same_day_dataset(dataset, validation_year=validation_year)
+    if diagnostics.has_errors:
+        raise ValueError(_format_diagnostic_errors(diagnostics))
+    artifacts = train_bucket_classifier(dataset=dataset, validation_year=validation_year)
+    save_bucket_artifacts(artifacts, Path(output_path))
+    output = {
+        "model_type": "dynamic_bucket",
+        "train_rows": artifacts.train_rows,
+        "validation_rows": artifacts.validation_rows,
+        "feature_columns": artifacts.feature_columns,
+        "ladder_config": artifacts.ladder_config.__dict__,
+        "metrics": artifacts.metrics,
+    }
+    if report_dir:
+        report_path = Path(report_dir)
+        report_path.mkdir(parents=True, exist_ok=True)
+        predictions = build_bucket_validation_predictions(
+            dataset=dataset,
+            model=artifacts.model,
+            feature_columns=artifacts.feature_columns,
+            validation_year=validation_year,
+            ladder_config=artifacts.ladder_config,
+        )
+        predictions.to_csv(report_path / "candidate_validation_predictions.csv", index=False)
+        build_ladder_predictions(predictions).to_csv(report_path / "ladder_predictions.csv", index=False)
+        build_bucket_calibration_report(predictions).to_csv(report_path / "bucket_calibration.csv", index=False)
+        build_bucket_heuristic_report(predictions).to_csv(report_path / "heuristic_comparison.csv", index=False)
+        _write_diagnostics(report_path, diagnostics)
+        output["report_dir"] = str(report_path)
+    print(json.dumps(output, indent=2))
+
+
 def validate_model_data_command(
     dataset_path: str,
     kind: str,
@@ -454,6 +513,8 @@ def enrich_hrrr_command(
     forecast_stride_hours: int,
     sample_strategy: str,
 ) -> None:
+    from weather_trader.forecasts.hrrr_archive import HRRRArchiveClient, enrich_dataset_with_hrrr
+
     dataset = pd.read_csv(dataset_path)
     client = HRRRArchiveClient(forecast_stride_hours=forecast_stride_hours)
     enriched = enrich_dataset_with_hrrr(
