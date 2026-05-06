@@ -1,0 +1,4 @@
+heuristic,grouped_log_loss,grouped_brier_score,top_bucket_accuracy
+model,1.4971491649658517,0.07683559009191865,0.3313766853159681
+uniform_over_ladder,2.197224577336219,0.09876543209876543,
+bucket_containing_max_so_far,,,0.29340548472897365

@@ -6,12 +6,15 @@ import sys
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from weather_trader.models.bucket_classifier import (
     LadderConfig,
+    build_threshold_bucket_validation_predictions,
     build_synthetic_bucket_dataset,
     normalize_grouped_probabilities,
 )
+from weather_trader.models.high_regressor import build_regression_bucket_validation_predictions
 
 
 def test_synthetic_ladder_generation_has_tails_and_one_winner() -> None:
@@ -20,7 +23,7 @@ def test_synthetic_ladder_generation_has_tails_and_one_winner() -> None:
     candidates = build_synthetic_bucket_dataset(dataset, LadderConfig(bounded_buckets_each_side=3))
 
     assert candidates["bucket_label"].tolist() == [
-        "<=75F",
+        "<76F",
         "76-77F",
         "77-78F",
         "78-79F",
@@ -35,12 +38,21 @@ def test_synthetic_ladder_generation_has_tails_and_one_winner() -> None:
     assert winner["bucket_label"] == "79-80F"
 
 
+def test_half_open_bucket_semantics_put_boundary_in_upper_bucket() -> None:
+    dataset = pd.DataFrame([_source_row("KAAA", "2024-07-01", 80.0, 78.0, threshold=80.0, target=1)])
+
+    candidates = build_synthetic_bucket_dataset(dataset, LadderConfig(bounded_buckets_each_side=3))
+
+    assert int(candidates["target"].sum()) == 1
+    assert candidates.loc[candidates["target"] == 1, "bucket_label"].iloc[0] == "80-81F"
+
+
 def test_bucket_feature_construction_handles_gaps_and_open_tails() -> None:
     dataset = pd.DataFrame([_source_row("KAAA", "2024-07-01", 79.5, 78.0, max_so_far=79.0, threshold=79.0, target=1)])
 
     candidates = build_synthetic_bucket_dataset(dataset, LadderConfig(bounded_buckets_each_side=3))
     bounded = candidates.loc[candidates["bucket_label"] == "79-80F"].iloc[0]
-    left_tail = candidates.loc[candidates["bucket_label"] == "<=75F"].iloc[0]
+    left_tail = candidates.loc[candidates["bucket_label"] == "<76F"].iloc[0]
     right_tail = candidates.loc[candidates["bucket_label"] == ">=83F"].iloc[0]
 
     assert bounded["lower_minus_current_temp"] == 1.0
@@ -70,6 +82,62 @@ def test_grouped_normalization_sums_to_one_and_falls_back_to_uniform() -> None:
     assert normalized.iloc[:3].sum() == 1.0
     assert normalized.iloc[0] == 0.2
     assert normalized.iloc[3:].tolist() == [0.5, 0.5]
+
+
+def test_threshold_bucket_derivation_uses_cumulative_differences() -> None:
+    dataset = pd.DataFrame(
+        [
+            _source_row("KAAA", "2024-07-01", 79.5, 78.0, threshold=79.0, target=1),
+            _source_row("KAAA", "2025-07-01", 79.5, 78.0, threshold=79.0, target=1),
+        ]
+    )
+    model = _ThresholdLookupModel({76.0: 0.95, 77.0: 0.90, 78.0: 0.80, 79.0: 0.70, 80.0: 0.30, 81.0: 0.20, 82.0: 0.10, 83.0: 0.05})
+
+    predictions = build_threshold_bucket_validation_predictions(
+        dataset=dataset,
+        threshold_model=model,
+        threshold_feature_columns=["station", "threshold", "threshold_minus_current_temp", "threshold_minus_max_so_far"],
+        validation_year=2025,
+        ladder_config=LadderConfig(bounded_buckets_each_side=3),
+    )
+
+    left_tail = predictions.loc[predictions["bucket_label"] == "<76F"].iloc[0]
+    bounded = predictions.loc[predictions["bucket_label"] == "79-80F"].iloc[0]
+    right_tail = predictions.loc[predictions["bucket_label"] == ">=83F"].iloc[0]
+    assert left_tail["raw_probability"] == pytest.approx(0.05)
+    assert bounded["raw_probability"] == pytest.approx(0.40)
+    assert right_tail["raw_probability"] == pytest.approx(0.05)
+    assert predictions.groupby(["station", "local_date", "snapshot_time_local", "synthetic_ladder_id"])["normalized_probability"].sum().iloc[0] == pytest.approx(1.0)
+
+
+def test_regression_bucket_derivation_uses_empirical_residuals() -> None:
+    dataset = pd.DataFrame(
+        [
+            _source_row("KAAA", "2024-07-01", 79.5, 78.0, threshold=79.0, target=1),
+            _source_row("KAAA", "2025-07-01", 79.5, 78.0, threshold=79.0, target=1),
+        ]
+    )
+    residuals = pd.DataFrame(
+        {
+            "station": ["KAAA"] * 4,
+            "hour_local": [14] * 4,
+            "window": ["late_13_plus"] * 4,
+            "residual": [-1.5, -0.5, 0.25, 1.25],
+        }
+    )
+
+    predictions = build_regression_bucket_validation_predictions(
+        dataset=dataset,
+        model=_ConstantRegressionModel(79.5),
+        feature_columns=["station", "current_temp"],
+        residuals=residuals,
+        validation_year=2025,
+        ladder_config=LadderConfig(bounded_buckets_each_side=3),
+    )
+
+    bounded = predictions.loc[predictions["bucket_label"] == "79-80F"].iloc[0]
+    assert bounded["raw_probability"] == pytest.approx(0.5)
+    assert predictions.groupby(["station", "local_date", "snapshot_time_local", "synthetic_ladder_id"])["normalized_probability"].sum().iloc[0] == pytest.approx(1.0)
 
 
 def test_train_bucket_model_cli_writes_artifact_and_reports(tmp_path) -> None:
@@ -105,6 +173,23 @@ def test_train_bucket_model_cli_writes_artifact_and_reports(tmp_path) -> None:
     assert (report_dir / "ladder_predictions.csv").exists()
     assert (report_dir / "bucket_calibration.csv").exists()
     assert (report_dir / "heuristic_comparison.csv").exists()
+
+
+class _ThresholdLookupModel:
+    def __init__(self, probabilities: dict[float, float]) -> None:
+        self.probabilities = probabilities
+
+    def predict_proba(self, frame: pd.DataFrame) -> np.ndarray:
+        yes = frame["threshold"].astype(float).map(self.probabilities).fillna(0.5).to_numpy()
+        return np.column_stack([1.0 - yes, yes])
+
+
+class _ConstantRegressionModel:
+    def __init__(self, value: float) -> None:
+        self.value = value
+
+    def predict(self, frame: pd.DataFrame) -> np.ndarray:
+        return np.full(len(frame), self.value)
 
 
 def _candidate(station: str, local_date: str, ladder_id: str, raw_probability: float) -> dict[str, object]:

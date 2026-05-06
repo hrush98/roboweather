@@ -10,6 +10,7 @@ from sklearn.calibration import CalibratedClassifierCV
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.impute import SimpleImputer
+from sklearn.isotonic import IsotonicRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OrdinalEncoder
 
@@ -54,7 +55,7 @@ FEATURE_COLUMNS = BASE_FEATURE_COLUMNS + HRRR_FEATURE_COLUMNS
 @dataclass(frozen=True)
 class LadderConfig:
     bounded_buckets_each_side: int = 3
-    tail_gap_f: int = 1
+    tail_gap_f: int = 0
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,7 @@ def build_synthetic_bucket_dataset(
         first_lower = center - config.bounded_buckets_each_side
         last_lower = center + config.bounded_buckets_each_side
         ladder_id = f"{item.station}_{item.local_date}_{index}"
-        specs: list[tuple[float | None, float | None]] = [(None, float(first_lower - config.tail_gap_f))]
+        specs: list[tuple[float | None, float | None]] = [(None, float(first_lower))]
         specs.extend((float(lower), float(lower + 1)) for lower in range(first_lower, last_lower + 1))
         specs.append((float(last_lower + 1), None))
         winner_index = _winning_bucket_index(final_high, specs)
@@ -205,6 +206,48 @@ def build_bucket_validation_predictions(
     return validation
 
 
+def build_threshold_bucket_validation_predictions(
+    dataset: pd.DataFrame,
+    threshold_model,
+    threshold_feature_columns: list[str],
+    validation_year: int,
+    ladder_config: LadderConfig | None = None,
+) -> pd.DataFrame:
+    config = ladder_config or LadderConfig()
+    candidates = build_synthetic_bucket_dataset(dataset, ladder_config)
+    candidates["local_date"] = pd.to_datetime(candidates["local_date"])
+    validation = candidates.loc[candidates["local_date"].dt.year == validation_year].copy()
+    if validation.empty:
+        raise ValueError(f"No validation rows for {validation_year}")
+
+    lower_thresholds = pd.to_numeric(validation["bucket_lower"], errors="coerce")
+    upper_thresholds = pd.to_numeric(validation["bucket_upper"], errors="coerce")
+    lower_survival = _predict_threshold_survival(
+        candidates=validation,
+        thresholds=lower_thresholds,
+        threshold_model=threshold_model,
+        feature_columns=threshold_feature_columns,
+        default_probability=1.0,
+    )
+    upper_survival = _predict_threshold_survival(
+        candidates=validation,
+        thresholds=upper_thresholds,
+        threshold_model=threshold_model,
+        feature_columns=threshold_feature_columns,
+        default_probability=0.0,
+    )
+    validation["_lower_threshold"] = lower_thresholds
+    validation["_upper_threshold"] = upper_thresholds
+    validation["_lower_survival"] = lower_survival
+    validation["_upper_survival"] = upper_survival
+    validation["raw_probability"] = _derive_monotonic_bucket_probabilities(validation)
+    validation["normalized_probability"] = normalize_grouped_probabilities(validation, "raw_probability")
+    validation["error"] = validation["normalized_probability"] - validation["target"]
+    validation["abs_error"] = validation["error"].abs()
+    validation["squared_error"] = validation["error"] ** 2
+    return validation.drop(columns=["_lower_threshold", "_upper_threshold", "_lower_survival", "_upper_survival"])
+
+
 def normalize_grouped_probabilities(frame: pd.DataFrame, score_column: str) -> pd.Series:
     scores = pd.to_numeric(frame[score_column], errors="coerce").clip(lower=0.0)
     normalized = pd.Series(index=frame.index, dtype=float)
@@ -306,6 +349,42 @@ def build_bucket_heuristic_report(predictions: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def build_model_comparison_report(
+    dynamic_predictions: pd.DataFrame,
+    threshold_bucket_predictions: pd.DataFrame,
+) -> pd.DataFrame:
+    dynamic_metrics = build_grouped_metrics(dynamic_predictions)
+    threshold_metrics = build_grouped_metrics(threshold_bucket_predictions)
+    return pd.DataFrame(
+        [
+            {
+                "model": "dynamic_bucket_classifier",
+                "grouped_log_loss": dynamic_metrics["grouped_log_loss"],
+                "grouped_brier_score": dynamic_metrics["grouped_brier_score"],
+                "top_bucket_accuracy": dynamic_metrics["top_bucket_accuracy"],
+            },
+            {
+                "model": "cumulative_threshold_derived_bucket",
+                "grouped_log_loss": threshold_metrics["grouped_log_loss"],
+                "grouped_brier_score": threshold_metrics["grouped_brier_score"],
+                "top_bucket_accuracy": threshold_metrics["top_bucket_accuracy"],
+            },
+            {
+                "model": "uniform_over_ladder",
+                "grouped_log_loss": dynamic_metrics["uniform_grouped_log_loss"],
+                "grouped_brier_score": dynamic_metrics["uniform_grouped_brier_score"],
+                "top_bucket_accuracy": np.nan,
+            },
+            {
+                "model": "bucket_containing_max_so_far",
+                "grouped_log_loss": np.nan,
+                "grouped_brier_score": np.nan,
+                "top_bucket_accuracy": dynamic_metrics["max_so_far_bucket_accuracy"],
+            },
+        ]
+    )
+
+
 def _candidate_row(item, ladder_id: str, bucket_index: int, lower: float | None, upper: float | None, target: bool) -> dict[str, object]:
     current_temp = float(item.current_temp)
     max_so_far = float(item.max_temp_so_far)
@@ -356,6 +435,58 @@ def _candidate_row(item, ladder_id: str, bucket_index: int, lower: float | None,
     return row
 
 
+def _predict_threshold_survival(
+    candidates: pd.DataFrame,
+    thresholds: pd.Series,
+    threshold_model,
+    feature_columns: list[str],
+    default_probability: float,
+) -> pd.Series:
+    probabilities = pd.Series(default_probability, index=candidates.index, dtype=float)
+    active = thresholds.notna()
+    if not active.any():
+        return probabilities
+    examples = candidates.loc[active].copy()
+    examples["threshold"] = thresholds.loc[active].astype(float)
+    examples["threshold_minus_current_temp"] = examples["threshold"] - examples["current_temp"].astype(float)
+    examples["threshold_minus_max_so_far"] = examples["threshold"] - examples["max_temp_so_far"].astype(float)
+    if "hrrr_remaining_max" in examples:
+        examples["hrrr_remaining_max_minus_threshold"] = examples["hrrr_remaining_max"] - examples["threshold"]
+    for column in feature_columns:
+        if column not in examples:
+            examples[column] = np.nan
+    probabilities.loc[active] = threshold_model.predict_proba(examples[feature_columns])[:, 1]
+    return probabilities
+
+
+def _derive_monotonic_bucket_probabilities(candidates: pd.DataFrame) -> pd.Series:
+    probabilities = pd.Series(index=candidates.index, dtype=float)
+    for _, group in candidates.groupby(GROUP_COLUMNS, observed=True):
+        cutpoint_rows = []
+        for threshold_column, survival_column in [
+            ("_lower_threshold", "_lower_survival"),
+            ("_upper_threshold", "_upper_survival"),
+        ]:
+            values = group[[threshold_column, survival_column]].dropna()
+            values.columns = ["threshold", "survival"]
+            cutpoint_rows.append(values)
+        cutpoints = pd.concat(cutpoint_rows, ignore_index=True).groupby("threshold", as_index=False)["survival"].mean()
+        cutpoints = cutpoints.sort_values("threshold")
+        if cutpoints.empty:
+            probabilities.loc[group.index] = 1.0 / len(group)
+            continue
+        thresholds = cutpoints["threshold"].astype(float).to_numpy()
+        survival = cutpoints["survival"].astype(float).clip(0.0, 1.0).to_numpy()
+        if len(cutpoints) > 1:
+            survival = IsotonicRegression(increasing=False, y_min=0.0, y_max=1.0, out_of_bounds="clip").fit_transform(thresholds, survival)
+        survival_by_threshold = dict(zip(thresholds, survival))
+        for index, row in group.iterrows():
+            lower_survival = 1.0 if pd.isna(row["_lower_threshold"]) else survival_by_threshold[float(row["_lower_threshold"])]
+            upper_survival = 0.0 if pd.isna(row["_upper_threshold"]) else survival_by_threshold[float(row["_upper_threshold"])]
+            probabilities.loc[index] = max(float(lower_survival - upper_survival), 0.0)
+    return probabilities
+
+
 def _winning_bucket_index(final_high: float, specs: list[tuple[float | None, float | None]]) -> int:
     for index, (lower, upper) in enumerate(specs):
         if _contains(final_high, lower, upper):
@@ -365,15 +496,15 @@ def _winning_bucket_index(final_high: float, specs: list[tuple[float | None, flo
 
 def _contains(value: float, lower: float | None, upper: float | None) -> bool:
     if lower is None:
-        return value <= float(upper)
+        return value < float(upper)
     if upper is None:
         return value >= float(lower)
-    return float(lower) <= value <= float(upper)
+    return float(lower) <= value < float(upper)
 
 
 def _bucket_label(lower: float | None, upper: float | None) -> str:
     if lower is None:
-        return f"<={upper:g}F"
+        return f"<{upper:g}F"
     if upper is None:
         return f">={lower:g}F"
     return f"{lower:g}-{upper:g}F"

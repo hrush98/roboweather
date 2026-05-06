@@ -34,9 +34,22 @@ from weather_trader.models.bucket_classifier import (
     build_bucket_calibration_report,
     build_bucket_heuristic_report,
     build_bucket_validation_predictions,
+    build_grouped_metrics,
     build_ladder_predictions,
+    build_model_comparison_report,
+    build_threshold_bucket_validation_predictions,
     save_bucket_artifacts,
     train_bucket_classifier,
+)
+from weather_trader.models.high_regressor import (
+    build_ngboost_bucket_validation_predictions,
+    build_regression_bucket_validation_predictions,
+    build_regression_report,
+    entry_window,
+    save_ngboost_artifacts,
+    save_high_regression_artifacts,
+    train_high_regressor,
+    train_ngboost_high_regressor,
 )
 from weather_trader.models.next_day_classifier import (
     build_next_day_bucket_reports,
@@ -88,6 +101,32 @@ def main() -> None:
     train_bucket_model.add_argument("--validation-year", type=int, default=2025)
     train_bucket_model.add_argument("--report-dir", required=False)
     train_bucket_model.add_argument("--require-hrrr", action="store_true")
+
+    compare_bucket_models = subparsers.add_parser("compare-bucket-models", help="Compare dynamic and threshold-derived bucket probabilities")
+    compare_bucket_models.add_argument("--dataset", required=True)
+    compare_bucket_models.add_argument("--threshold-model", required=True)
+    compare_bucket_models.add_argument("--bucket-model", required=True)
+    compare_bucket_models.add_argument("--regression-model", required=False)
+    compare_bucket_models.add_argument("--ngboost-model", required=False)
+    compare_bucket_models.add_argument("--validation-year", type=int, default=2025)
+    compare_bucket_models.add_argument("--report-dir", required=True)
+    compare_bucket_models.add_argument("--require-hrrr", action="store_true")
+
+    train_regression_model = subparsers.add_parser("train-high-regression-model", help="Train final-high regression model")
+    train_regression_model.add_argument("--dataset", required=True)
+    train_regression_model.add_argument("--output", required=True)
+    train_regression_model.add_argument("--validation-year", type=int, default=2025)
+    train_regression_model.add_argument("--report-dir", required=False)
+    train_regression_model.add_argument("--require-hrrr", action="store_true")
+
+    train_ngboost_model = subparsers.add_parser("train-ngboost-model", help="Train NGBoost Normal distribution model for final high")
+    train_ngboost_model.add_argument("--dataset", required=True)
+    train_ngboost_model.add_argument("--output", required=True)
+    train_ngboost_model.add_argument("--validation-year", type=int, default=2025)
+    train_ngboost_model.add_argument("--report-dir", required=False)
+    train_ngboost_model.add_argument("--require-hrrr", action="store_true")
+    train_ngboost_model.add_argument("--n-estimators", type=int, default=350)
+    train_ngboost_model.add_argument("--learning-rate", type=float, default=0.03)
 
     validate_data = subparsers.add_parser("validate-model-data", help="Run training-data diagnostics")
     validate_data.add_argument("--dataset", required=True)
@@ -187,6 +226,32 @@ def main() -> None:
         return
     if args.command == "train-bucket-model":
         train_bucket_model_command(args.dataset, args.output, args.validation_year, args.report_dir, args.require_hrrr)
+        return
+    if args.command == "compare-bucket-models":
+        compare_bucket_models_command(
+            args.dataset,
+            args.threshold_model,
+            args.bucket_model,
+            args.regression_model,
+            args.ngboost_model,
+            args.validation_year,
+            args.report_dir,
+            args.require_hrrr,
+        )
+        return
+    if args.command == "train-high-regression-model":
+        train_high_regression_model_command(args.dataset, args.output, args.validation_year, args.report_dir, args.require_hrrr)
+        return
+    if args.command == "train-ngboost-model":
+        train_ngboost_model_command(
+            args.dataset,
+            args.output,
+            args.validation_year,
+            args.report_dir,
+            args.require_hrrr,
+            args.n_estimators,
+            args.learning_rate,
+        )
         return
     if args.command == "validate-model-data":
         validate_model_data_command(args.dataset, args.kind, args.validation_year, args.report_dir, args.require_hrrr)
@@ -379,6 +444,290 @@ def train_bucket_model_command(
         build_ladder_predictions(predictions).to_csv(report_path / "ladder_predictions.csv", index=False)
         build_bucket_calibration_report(predictions).to_csv(report_path / "bucket_calibration.csv", index=False)
         build_bucket_heuristic_report(predictions).to_csv(report_path / "heuristic_comparison.csv", index=False)
+        _write_diagnostics(report_path, diagnostics)
+        output["report_dir"] = str(report_path)
+    print(json.dumps(output, indent=2))
+
+
+def compare_bucket_models_command(
+    dataset_path: str,
+    threshold_model_path: str,
+    bucket_model_path: str,
+    regression_model_path: str | None,
+    ngboost_model_path: str | None,
+    validation_year: int,
+    report_dir: str,
+    require_hrrr: bool,
+) -> None:
+    import joblib
+
+    dataset = pd.read_csv(dataset_path)
+    if require_hrrr:
+        dataset = dataset.loc[dataset["hrrr_remaining_max"].notna()].copy()
+    threshold_artifact = joblib.load(threshold_model_path)
+    bucket_artifact = joblib.load(bucket_model_path)
+    ladder_config_data = bucket_artifact.get("ladder_config") or {}
+    from weather_trader.models.bucket_classifier import LadderConfig
+
+    ladder_config = LadderConfig(**ladder_config_data)
+    dynamic_predictions = build_bucket_validation_predictions(
+        dataset=dataset,
+        model=bucket_artifact["model"],
+        feature_columns=bucket_artifact["feature_columns"],
+        validation_year=validation_year,
+        ladder_config=ladder_config,
+    )
+    threshold_predictions = build_threshold_bucket_validation_predictions(
+        dataset=dataset,
+        threshold_model=threshold_artifact["model"],
+        threshold_feature_columns=threshold_artifact["feature_columns"],
+        validation_year=validation_year,
+        ladder_config=ladder_config,
+    )
+    dynamic_predictions["window"] = dynamic_predictions["hour_local"].map(entry_window)
+    threshold_predictions["window"] = threshold_predictions["hour_local"].map(entry_window)
+    comparison = build_model_comparison_report(dynamic_predictions, threshold_predictions)
+    regression_predictions = None
+    regression_artifact = None
+    ngboost_predictions = None
+    ngboost_artifact = None
+    if regression_model_path:
+        regression_artifact = joblib.load(regression_model_path)
+        regression_predictions = build_regression_bucket_validation_predictions(
+            dataset=dataset,
+            model=regression_artifact["model"],
+            feature_columns=regression_artifact["feature_columns"],
+            residuals=regression_artifact["residuals"],
+            validation_year=validation_year,
+            ladder_config=ladder_config,
+        )
+        regression_metrics = build_grouped_metrics(regression_predictions)
+        comparison = pd.concat(
+            [
+                comparison,
+                pd.DataFrame(
+                    [
+                        {
+                            "model": "regression_empirical_residual_bucket",
+                            "grouped_log_loss": regression_metrics["grouped_log_loss"],
+                            "grouped_brier_score": regression_metrics["grouped_brier_score"],
+                            "top_bucket_accuracy": regression_metrics["top_bucket_accuracy"],
+                        }
+                    ]
+                ),
+            ],
+            ignore_index=True,
+        )
+    if ngboost_model_path:
+        ngboost_artifact = joblib.load(ngboost_model_path)
+        ngboost_predictions = build_ngboost_bucket_validation_predictions(
+            dataset=dataset,
+            model=ngboost_artifact["model"],
+            feature_columns=ngboost_artifact["feature_columns"],
+            validation_year=validation_year,
+            ladder_config=ladder_config,
+        )
+        ngboost_metrics = build_grouped_metrics(ngboost_predictions)
+        comparison = pd.concat(
+            [
+                comparison,
+                pd.DataFrame(
+                    [
+                        {
+                            "model": "ngboost_normal_crps_bucket",
+                            "grouped_log_loss": ngboost_metrics["grouped_log_loss"],
+                            "grouped_brier_score": ngboost_metrics["grouped_brier_score"],
+                            "top_bucket_accuracy": ngboost_metrics["top_bucket_accuracy"],
+                        }
+                    ]
+                ),
+            ],
+            ignore_index=True,
+        )
+
+    report_path = Path(report_dir)
+    report_path.mkdir(parents=True, exist_ok=True)
+    comparison.to_csv(report_path / "model_comparison.csv", index=False)
+    _build_window_model_comparison(dynamic_predictions, threshold_predictions, regression_predictions, ngboost_predictions).to_csv(
+        report_path / "model_comparison_by_window.csv",
+        index=False,
+    )
+    build_ladder_predictions(dynamic_predictions).to_csv(report_path / "dynamic_bucket_ladder_predictions.csv", index=False)
+    build_ladder_predictions(threshold_predictions).to_csv(report_path / "threshold_derived_ladder_predictions.csv", index=False)
+    build_bucket_calibration_report(threshold_predictions).to_csv(report_path / "threshold_derived_calibration.csv", index=False)
+    if regression_predictions is not None:
+        regression_predictions.to_csv(report_path / "regression_bucket_validation_predictions.csv", index=False)
+        build_ladder_predictions(regression_predictions).to_csv(report_path / "regression_ladder_predictions.csv", index=False)
+        build_bucket_calibration_report(regression_predictions).to_csv(report_path / "regression_bucket_calibration.csv", index=False)
+        build_regression_report(regression_predictions).to_csv(report_path / "regression_window_metrics.csv", index=False)
+    if ngboost_predictions is not None:
+        ngboost_predictions.to_csv(report_path / "ngboost_bucket_validation_predictions.csv", index=False)
+        build_ladder_predictions(ngboost_predictions).to_csv(report_path / "ngboost_ladder_predictions.csv", index=False)
+        build_bucket_calibration_report(ngboost_predictions).to_csv(report_path / "ngboost_bucket_calibration.csv", index=False)
+        build_regression_report(ngboost_predictions).to_csv(report_path / "ngboost_window_metrics.csv", index=False)
+    output = {
+        "report_dir": str(report_path),
+        "validation_year": validation_year,
+        "threshold_model_metrics": threshold_artifact.get("metrics", {}),
+        "bucket_model_metrics": bucket_artifact.get("metrics", {}),
+        "regression_model_metrics": regression_artifact.get("metrics", {}) if regression_artifact else {},
+        "ngboost_model_metrics": ngboost_artifact.get("metrics", {}) if ngboost_artifact else {},
+        "comparison": comparison.to_dict(orient="records"),
+    }
+    print(json.dumps(output, indent=2))
+
+
+def _build_window_model_comparison(
+    dynamic_predictions: pd.DataFrame,
+    threshold_predictions: pd.DataFrame,
+    regression_predictions: pd.DataFrame | None,
+    ngboost_predictions: pd.DataFrame | None,
+) -> pd.DataFrame:
+    frames: list[tuple[str, pd.DataFrame]] = [
+        ("dynamic_bucket_classifier", dynamic_predictions),
+        ("cumulative_threshold_derived_bucket", threshold_predictions),
+    ]
+    if regression_predictions is not None:
+        frames.append(("regression_empirical_residual_bucket", regression_predictions))
+    if ngboost_predictions is not None:
+        frames.append(("ngboost_normal_crps_bucket", ngboost_predictions))
+
+    rows = []
+    for model_name, predictions in frames:
+        for window, window_frame in predictions.groupby("window", observed=True):
+            metrics = build_grouped_metrics(window_frame)
+            rows.append(
+                {
+                    "window": window,
+                    "model": model_name,
+                    "groups": metrics["groups"],
+                    "grouped_log_loss": metrics["grouped_log_loss"],
+                    "grouped_brier_score": metrics["grouped_brier_score"],
+                    "top_bucket_accuracy": metrics["top_bucket_accuracy"],
+                }
+            )
+    for window, window_frame in dynamic_predictions.groupby("window", observed=True):
+        metrics = build_grouped_metrics(window_frame)
+        rows.extend(
+            [
+                {
+                    "window": window,
+                    "model": "uniform_over_ladder",
+                    "groups": metrics["groups"],
+                    "grouped_log_loss": metrics["uniform_grouped_log_loss"],
+                    "grouped_brier_score": metrics["uniform_grouped_brier_score"],
+                    "top_bucket_accuracy": np.nan,
+                },
+                {
+                    "window": window,
+                    "model": "bucket_containing_max_so_far",
+                    "groups": metrics["groups"],
+                    "grouped_log_loss": np.nan,
+                    "grouped_brier_score": np.nan,
+                    "top_bucket_accuracy": metrics["max_so_far_bucket_accuracy"],
+                },
+            ]
+        )
+    report = pd.DataFrame(rows)
+    window_order = {"early_09_10": 0, "midday_11_12": 1, "late_13_plus": 2}
+    model_order = {
+        "dynamic_bucket_classifier": 0,
+        "cumulative_threshold_derived_bucket": 1,
+        "regression_empirical_residual_bucket": 2,
+        "ngboost_normal_crps_bucket": 3,
+        "uniform_over_ladder": 4,
+        "bucket_containing_max_so_far": 5,
+    }
+    report["_window_order"] = report["window"].map(window_order)
+    report["_model_order"] = report["model"].map(model_order)
+    return report.sort_values(["_window_order", "_model_order"]).drop(columns=["_window_order", "_model_order"]).reset_index(drop=True)
+
+
+def train_high_regression_model_command(
+    dataset_path: str,
+    output_path: str,
+    validation_year: int,
+    report_dir: str | None,
+    require_hrrr: bool,
+) -> None:
+    dataset = pd.read_csv(dataset_path)
+    if require_hrrr:
+        dataset = dataset.loc[dataset["hrrr_remaining_max"].notna()].copy()
+    diagnostics = validate_same_day_dataset(dataset, validation_year=validation_year)
+    if diagnostics.has_errors:
+        raise ValueError(_format_diagnostic_errors(diagnostics))
+    artifacts = train_high_regressor(dataset=dataset, validation_year=validation_year)
+    save_high_regression_artifacts(artifacts, Path(output_path))
+    output = {
+        "model_type": "high_regression_empirical_residual",
+        "train_rows": artifacts.train_rows,
+        "validation_rows": artifacts.validation_rows,
+        "feature_columns": artifacts.feature_columns,
+        "metrics": artifacts.metrics,
+    }
+    if report_dir:
+        report_path = Path(report_dir)
+        report_path.mkdir(parents=True, exist_ok=True)
+        predictions = build_regression_bucket_validation_predictions(
+            dataset=dataset,
+            model=artifacts.model,
+            feature_columns=artifacts.feature_columns,
+            residuals=artifacts.residuals,
+            validation_year=validation_year,
+            ladder_config=artifacts.ladder_config,
+        )
+        predictions.to_csv(report_path / "regression_bucket_validation_predictions.csv", index=False)
+        build_ladder_predictions(predictions).to_csv(report_path / "regression_ladder_predictions.csv", index=False)
+        build_bucket_calibration_report(predictions).to_csv(report_path / "regression_bucket_calibration.csv", index=False)
+        build_regression_report(predictions).to_csv(report_path / "regression_window_metrics.csv", index=False)
+        _write_diagnostics(report_path, diagnostics)
+        output["report_dir"] = str(report_path)
+    print(json.dumps(output, indent=2))
+
+
+def train_ngboost_model_command(
+    dataset_path: str,
+    output_path: str,
+    validation_year: int,
+    report_dir: str | None,
+    require_hrrr: bool,
+    n_estimators: int,
+    learning_rate: float,
+) -> None:
+    dataset = pd.read_csv(dataset_path)
+    if require_hrrr:
+        dataset = dataset.loc[dataset["hrrr_remaining_max"].notna()].copy()
+    diagnostics = validate_same_day_dataset(dataset, validation_year=validation_year)
+    if diagnostics.has_errors:
+        raise ValueError(_format_diagnostic_errors(diagnostics))
+    artifacts = train_ngboost_high_regressor(
+        dataset=dataset,
+        validation_year=validation_year,
+        n_estimators=n_estimators,
+        learning_rate=learning_rate,
+    )
+    save_ngboost_artifacts(artifacts, Path(output_path))
+    output = {
+        "model_type": "ngboost_normal_crps",
+        "train_rows": artifacts.train_rows,
+        "validation_rows": artifacts.validation_rows,
+        "feature_columns": artifacts.feature_columns,
+        "metrics": artifacts.metrics,
+    }
+    if report_dir:
+        report_path = Path(report_dir)
+        report_path.mkdir(parents=True, exist_ok=True)
+        predictions = build_ngboost_bucket_validation_predictions(
+            dataset=dataset,
+            model=artifacts.model,
+            feature_columns=artifacts.feature_columns,
+            validation_year=validation_year,
+            ladder_config=artifacts.ladder_config,
+        )
+        predictions.to_csv(report_path / "ngboost_bucket_validation_predictions.csv", index=False)
+        build_ladder_predictions(predictions).to_csv(report_path / "ngboost_ladder_predictions.csv", index=False)
+        build_bucket_calibration_report(predictions).to_csv(report_path / "ngboost_bucket_calibration.csv", index=False)
+        build_regression_report(predictions).to_csv(report_path / "ngboost_window_metrics.csv", index=False)
         _write_diagnostics(report_path, diagnostics)
         output["report_dir"] = str(report_path)
     print(json.dumps(output, indent=2))

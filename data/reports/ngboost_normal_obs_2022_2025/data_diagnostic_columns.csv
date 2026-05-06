@@ -1,0 +1,16 @@
+column,non_null_rate,unique_values,is_constant,dtype
+station,1.0,5,False,object
+hour_local,1.0,8,False,int64
+day_of_year,1.0,366,False,int64
+current_temp,1.0,145,False,float64
+max_temp_so_far,1.0,155,False,float64
+threshold,1.0,112,False,float64
+threshold_minus_current_temp,1.0,255,False,float64
+threshold_minus_max_so_far,1.0,307,False,float64
+temp_change_1h,0.06527397260273973,57,False,float64
+temp_change_3h,0.04518264840182648,76,False,float64
+dewpoint,1.0,139,False,float64
+wind_speed,0.9994292237442922,33,False,float64
+wind_dir_sin,0.9641780821917808,29,False,float64
+wind_dir_cos,0.9641780821917808,30,False,float64
+cloud_cover_code,1.0,5,False,int64

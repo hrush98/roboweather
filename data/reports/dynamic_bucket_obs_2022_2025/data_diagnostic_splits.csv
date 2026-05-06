@@ -1,0 +1,4 @@
+split,rows,start_date,end_date,event_rate,stations
+train,295920,2022-01-01,2024-12-31,0.5543187347931874,5
+validation,98280,2025-01-01,2025-12-30,0.5550671550671551,5
+future_holdout,0,,,,0
