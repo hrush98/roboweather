@@ -7,4 +7,5 @@ __pycache__/
 # Runtime/cache files.
 data/cache/*.sqlite-shm
 data/cache/*.sqlite-wal
+data/logs/
 data/paper/

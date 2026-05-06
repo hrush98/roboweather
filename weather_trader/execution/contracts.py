@@ -246,6 +246,65 @@ class EngineState:
     errors: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class PredictionSnapshot:
+    timestamp: str
+    station: str
+    market_date: date
+    decision_time_utc: str
+    decision_time_local: str
+    latest_obs_time_utc: str
+    latest_obs_time_local: str
+    obs_age_minutes: float
+    obs_delay_bucket: str
+    current_temp: float
+    high_so_far: float
+    hrrr_remaining_max: float | None
+    selected_market_id: str | None
+    selected_bucket: str | None
+    selected_side: TradeAction
+    selected_edge: float | None
+    selected_fair_yes: float | None
+    selected_fair_no: float | None
+    selected_yes_ask: float | None
+    selected_no_ask: float | None
+    high_conviction: bool
+    skip_reason: str | None
+    candidate_count: int
+    candidate_distribution: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class StationDateOutcome:
+    timestamp: str
+    station: str
+    market_date: date
+    final_high_tmpf: float
+    source: str
+    resolved_at: str
+
+
+@dataclass(frozen=True)
+class PredictionResult:
+    timestamp: str
+    prediction_snapshot_id: int
+    station: str
+    market_date: date
+    obs_delay_bucket: str
+    selected_market_id: str | None
+    selected_bucket: str | None
+    selected_side: TradeAction
+    final_high_tmpf: float
+    winning_side: TradeAction | None
+    correct: bool | None
+    entry_price: float | None
+    paper_pnl: float | None
+    edge: float | None
+    decision_time_local: str
+    obs_age_minutes: float
+    resolved_at: str
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 

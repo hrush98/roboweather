@@ -87,6 +87,40 @@ Run the live scanner:
 python -m weather_trader.cli scan-live --model data/models/mvp.joblib
 ```
 
+Run the paper-trading engine with station/date-level pick selection:
+
+```bash
+./scripts/run_paper.sh
+```
+
+The wrapper defaults to one cycle, writes a log under `data/logs/`, and uses
+`data/models/mvp_obs_corrected.joblib`. Loop mode defaults to a 360-second
+cadence and blocks entries when the latest observation is more than 30 minutes
+old. Set environment variables when needed:
+
+```bash
+SUBMIT=1 ./scripts/run_paper.sh cycle
+SUBMIT=1 MAX_CYCLES=6 ./scripts/run_paper.sh loop
+SUBMIT=1 INTERVAL_SECONDS=360 MAX_OBS_AGE_MINUTES=30 ./scripts/run_paper.sh loop
+./scripts/run_paper.sh tui
+```
+
+Run the headless research collector:
+
+```bash
+./scripts/run_research.sh
+```
+
+This records prediction snapshots for fresh observation-delay buckets during
+the 10:00-15:00 local window, auto-resolves prior station/dates after the next
+local morning, and scores snapshots against IEM ASOS final highs. It does not
+submit paper trades. Monitor the same database from another terminal or SSH
+session:
+
+```bash
+./scripts/run_research.sh tui
+```
+
 ## Current status
 
 Working:

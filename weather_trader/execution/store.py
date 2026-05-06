@@ -12,11 +12,14 @@ from weather_trader.execution.contracts import (
     EngineState,
     MarketSnapshot,
     PaperOrder,
+    PredictionResult,
+    PredictionSnapshot,
     Position,
     PositionMark,
     Resolution,
     RiskState,
     Signal,
+    StationDateOutcome,
     StationDateDecisionTrace,
     dataclass_to_jsonable,
 )
@@ -172,6 +175,67 @@ class ExecutionStore:
                 actionable_signals integer not null,
                 orders_submitted integer not null,
                 skipped integer not null,
+                raw_json text not null
+            );
+
+            create table if not exists prediction_snapshots (
+                id integer primary key autoincrement,
+                timestamp text not null,
+                station text not null,
+                market_date text not null,
+                decision_time_utc text not null,
+                decision_time_local text not null,
+                latest_obs_time_utc text not null,
+                latest_obs_time_local text not null,
+                obs_age_minutes real not null,
+                obs_delay_bucket text not null,
+                current_temp real not null,
+                high_so_far real not null,
+                hrrr_remaining_max real,
+                selected_market_id text,
+                selected_bucket text,
+                selected_side text not null,
+                selected_edge real,
+                selected_fair_yes real,
+                selected_fair_no real,
+                selected_yes_ask real,
+                selected_no_ask real,
+                high_conviction integer not null,
+                skip_reason text,
+                candidate_count integer not null,
+                raw_json text not null,
+                unique(station, market_date, latest_obs_time_utc, obs_delay_bucket)
+            );
+
+            create table if not exists station_date_outcomes (
+                station text not null,
+                market_date text not null,
+                timestamp text not null,
+                final_high_tmpf real not null,
+                source text not null,
+                resolved_at text not null,
+                raw_json text not null,
+                primary key(station, market_date)
+            );
+
+            create table if not exists prediction_results (
+                prediction_snapshot_id integer primary key,
+                timestamp text not null,
+                station text not null,
+                market_date text not null,
+                obs_delay_bucket text not null,
+                selected_market_id text,
+                selected_bucket text,
+                selected_side text not null,
+                final_high_tmpf real not null,
+                winning_side text,
+                correct integer,
+                entry_price real,
+                paper_pnl real,
+                edge real,
+                decision_time_local text not null,
+                obs_age_minutes real not null,
+                resolved_at text not null,
                 raw_json text not null
             );
             """
@@ -442,6 +506,124 @@ class ExecutionStore:
         )
         self.connection.commit()
 
+    def insert_prediction_snapshot(self, snapshot: PredictionSnapshot) -> int | None:
+        data = dataclass_to_jsonable(snapshot)
+        cursor = self.connection.execute(
+            """
+            insert or ignore into prediction_snapshots (
+                timestamp, station, market_date, decision_time_utc, decision_time_local,
+                latest_obs_time_utc, latest_obs_time_local, obs_age_minutes,
+                obs_delay_bucket, current_temp, high_so_far, hrrr_remaining_max,
+                selected_market_id, selected_bucket, selected_side, selected_edge,
+                selected_fair_yes, selected_fair_no, selected_yes_ask, selected_no_ask,
+                high_conviction, skip_reason, candidate_count, raw_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot.timestamp,
+                snapshot.station,
+                data["market_date"],
+                snapshot.decision_time_utc,
+                snapshot.decision_time_local,
+                snapshot.latest_obs_time_utc,
+                snapshot.latest_obs_time_local,
+                snapshot.obs_age_minutes,
+                snapshot.obs_delay_bucket,
+                snapshot.current_temp,
+                snapshot.high_so_far,
+                snapshot.hrrr_remaining_max,
+                snapshot.selected_market_id,
+                snapshot.selected_bucket,
+                str(snapshot.selected_side),
+                snapshot.selected_edge,
+                snapshot.selected_fair_yes,
+                snapshot.selected_fair_no,
+                snapshot.selected_yes_ask,
+                snapshot.selected_no_ask,
+                int(snapshot.high_conviction),
+                snapshot.skip_reason,
+                snapshot.candidate_count,
+                json.dumps(data, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+        if cursor.rowcount == 0:
+            return None
+        return int(cursor.lastrowid)
+
+    def upsert_station_date_outcome(self, outcome: StationDateOutcome) -> None:
+        data = dataclass_to_jsonable(outcome)
+        self.connection.execute(
+            """
+            insert into station_date_outcomes (
+                station, market_date, timestamp, final_high_tmpf, source, resolved_at, raw_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?)
+            on conflict(station, market_date) do update set
+                timestamp=excluded.timestamp,
+                final_high_tmpf=excluded.final_high_tmpf,
+                source=excluded.source,
+                resolved_at=excluded.resolved_at,
+                raw_json=excluded.raw_json
+            """,
+            (
+                outcome.station,
+                data["market_date"],
+                outcome.timestamp,
+                outcome.final_high_tmpf,
+                outcome.source,
+                outcome.resolved_at,
+                json.dumps(data, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+
+    def upsert_prediction_result(self, result: PredictionResult) -> None:
+        data = dataclass_to_jsonable(result)
+        self.connection.execute(
+            """
+            insert into prediction_results (
+                prediction_snapshot_id, timestamp, station, market_date, obs_delay_bucket,
+                selected_market_id, selected_bucket, selected_side, final_high_tmpf,
+                winning_side, correct, entry_price, paper_pnl, edge,
+                decision_time_local, obs_age_minutes, resolved_at, raw_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(prediction_snapshot_id) do update set
+                timestamp=excluded.timestamp,
+                final_high_tmpf=excluded.final_high_tmpf,
+                winning_side=excluded.winning_side,
+                correct=excluded.correct,
+                entry_price=excluded.entry_price,
+                paper_pnl=excluded.paper_pnl,
+                edge=excluded.edge,
+                resolved_at=excluded.resolved_at,
+                raw_json=excluded.raw_json
+            """,
+            (
+                result.prediction_snapshot_id,
+                result.timestamp,
+                result.station,
+                data["market_date"],
+                result.obs_delay_bucket,
+                result.selected_market_id,
+                result.selected_bucket,
+                str(result.selected_side),
+                result.final_high_tmpf,
+                str(result.winning_side) if result.winning_side is not None else None,
+                None if result.correct is None else int(result.correct),
+                result.entry_price,
+                result.paper_pnl,
+                result.edge,
+                result.decision_time_local,
+                result.obs_age_minutes,
+                result.resolved_at,
+                json.dumps(data, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+
     def recent_positions(self, state: str = "OPEN") -> list[dict[str, Any]]:
         rows = self.connection.execute("select raw_json from positions where state = ?", (state,)).fetchall()
         return [json.loads(row["raw_json"]) for row in rows]
@@ -483,6 +665,82 @@ class ExecutionStore:
             (limit,),
         ).fetchall()
         return [json.loads(row["raw_json"]) for row in rows]
+
+    def recent_engine_states(self, limit: int = 20) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "select raw_json from engine_state order by id desc limit ?",
+            (limit,),
+        ).fetchall()
+        return [json.loads(row["raw_json"]) for row in rows]
+
+    def recent_prediction_snapshots(self, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "select id, raw_json from prediction_snapshots order by id desc limit ?",
+            (limit,),
+        ).fetchall()
+        snapshots = []
+        for row in rows:
+            payload = json.loads(row["raw_json"])
+            payload["id"] = int(row["id"])
+            snapshots.append(payload)
+        return snapshots
+
+    def unresolved_snapshot_groups(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            select distinct snapshots.station, snapshots.market_date
+            from prediction_snapshots snapshots
+            left join station_date_outcomes outcomes
+                on outcomes.station = snapshots.station
+                and outcomes.market_date = snapshots.market_date
+            where outcomes.station is null
+            order by snapshots.market_date, snapshots.station
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def prediction_snapshots_for_group(self, station: str, market_date: str) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            select id, raw_json
+            from prediction_snapshots
+            where station = ? and market_date = ?
+            order by id
+            """,
+            (station, market_date),
+        ).fetchall()
+        snapshots = []
+        for row in rows:
+            payload = json.loads(row["raw_json"])
+            payload["id"] = int(row["id"])
+            snapshots.append(payload)
+        return snapshots
+
+    def prediction_result_summary(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            select
+                obs_delay_bucket,
+                count(*) as snapshots,
+                sum(case when correct is not null then 1 else 0 end) as scored,
+                sum(case when correct = 1 then 1 else 0 end) as correct,
+                avg(case when correct is not null then correct else null end) as win_rate,
+                avg(edge) as avg_edge,
+                avg(paper_pnl) as avg_pnl
+            from prediction_results
+            group by obs_delay_bucket
+            order by
+                case obs_delay_bucket
+                    when 'instant' then 0
+                    when '5m' then 5
+                    when '10m' then 10
+                    when '15m' then 15
+                    when '30m' then 30
+                    else 999
+                end
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def paper_order_summary(self) -> dict[str, Any]:
         row = self.connection.execute(

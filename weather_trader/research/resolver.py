@@ -1,0 +1,165 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+from weather_trader.execution.contracts import (
+    PredictionResult,
+    StationDateOutcome,
+    TradeAction,
+    utc_now_iso,
+)
+from weather_trader.execution.positions import winning_side_for_bucket
+from weather_trader.execution.store import ExecutionStore
+from weather_trader.features.build_same_day_features import prepare_station_observations
+from weather_trader.stations.iem_asos_client import IEMASOSClient
+from weather_trader.stations.metadata import get_station
+
+
+@dataclass(frozen=True)
+class ResolverConfig:
+    resolve_after_local_hour: int = 6
+    source: str = "IEM_ASOS"
+
+
+@dataclass(frozen=True)
+class ResolveSummary:
+    groups_checked: int
+    groups_resolved: int
+    results_written: int
+    errors: list[str]
+
+
+class ResearchResolver:
+    def __init__(
+        self,
+        store: ExecutionStore,
+        config: ResolverConfig | None = None,
+        obs_client: IEMASOSClient | None = None,
+    ) -> None:
+        self.store = store
+        self.config = config or ResolverConfig()
+        self.obs_client = obs_client or IEMASOSClient()
+
+    def resolve_due(self, as_of_utc: datetime | None = None) -> ResolveSummary:
+        now = as_of_utc or datetime.now(timezone.utc)
+        groups = self.store.unresolved_snapshot_groups()
+        resolved = 0
+        results_written = 0
+        errors: list[str] = []
+        for group in groups:
+            station_id = str(group["station"])
+            market_date = date.fromisoformat(str(group["market_date"]))
+            if not self._is_due(station_id, market_date, now):
+                continue
+            try:
+                outcome = self._resolve_station_date(station_id, market_date)
+                self.store.upsert_station_date_outcome(outcome)
+                resolved += 1
+                snapshots = self.store.prediction_snapshots_for_group(station_id, str(market_date))
+                for snapshot in snapshots:
+                    self.store.upsert_prediction_result(score_snapshot(snapshot, outcome))
+                    results_written += 1
+            except Exception as exc:
+                errors.append(f"{station_id}:{market_date}: {exc}")
+        return ResolveSummary(
+            groups_checked=len(groups),
+            groups_resolved=resolved,
+            results_written=results_written,
+            errors=errors,
+        )
+
+    def _is_due(self, station_id: str, market_date: date, as_of_utc: datetime) -> bool:
+        station = get_station(station_id)
+        zone = ZoneInfo(station.timezone)
+        resolve_at_local = datetime.combine(
+            market_date + timedelta(days=1),
+            time(self.config.resolve_after_local_hour, 0),
+            tzinfo=zone,
+        )
+        return as_of_utc >= resolve_at_local.astimezone(timezone.utc)
+
+    def _resolve_station_date(self, station_id: str, market_date: date) -> StationDateOutcome:
+        station = get_station(station_id)
+        observations = self.obs_client.fetch_observations(
+            station=station.station,
+            start=market_date,
+            end=market_date + timedelta(days=1),
+        )
+        prepared = prepare_station_observations(observations, station)
+        day = prepared.loc[prepared["local_date"] == market_date]
+        if day.empty:
+            raise ValueError(f"No IEM observations for {station.station} on {market_date}")
+        final_high = float(day["tmpf"].max())
+        resolved_at = utc_now_iso()
+        return StationDateOutcome(
+            timestamp=resolved_at,
+            station=station.station,
+            market_date=market_date,
+            final_high_tmpf=final_high,
+            source=self.config.source,
+            resolved_at=resolved_at,
+        )
+
+
+def score_snapshot(snapshot: dict, outcome: StationDateOutcome) -> PredictionResult:
+    selected_side = TradeAction(str(snapshot.get("selected_side") or TradeAction.SKIP))
+    lower, upper = _parse_bucket(snapshot.get("selected_bucket"))
+    winning_side = None
+    correct = None
+    entry_price = _entry_price(snapshot, selected_side)
+    paper_pnl = None
+    if selected_side != TradeAction.SKIP and (lower is not None or upper is not None):
+        winning_side = winning_side_for_bucket(outcome.final_high_tmpf, lower, upper)
+        correct = selected_side == winning_side
+        if entry_price is not None:
+            paper_pnl = (1.0 - entry_price) if correct else -entry_price
+    return PredictionResult(
+        timestamp=utc_now_iso(),
+        prediction_snapshot_id=int(snapshot["id"]),
+        station=outcome.station,
+        market_date=outcome.market_date,
+        obs_delay_bucket=str(snapshot.get("obs_delay_bucket", "")),
+        selected_market_id=snapshot.get("selected_market_id"),
+        selected_bucket=snapshot.get("selected_bucket"),
+        selected_side=selected_side,
+        final_high_tmpf=outcome.final_high_tmpf,
+        winning_side=winning_side,
+        correct=correct,
+        entry_price=entry_price,
+        paper_pnl=paper_pnl,
+        edge=_float_or_none(snapshot.get("selected_edge")),
+        decision_time_local=str(snapshot.get("decision_time_local", "")),
+        obs_age_minutes=float(snapshot.get("obs_age_minutes") or 0.0),
+        resolved_at=outcome.resolved_at,
+    )
+
+
+def _entry_price(snapshot: dict, side: TradeAction) -> float | None:
+    if side == TradeAction.BUY_YES:
+        return _float_or_none(snapshot.get("selected_yes_ask"))
+    if side == TradeAction.BUY_NO:
+        return _float_or_none(snapshot.get("selected_no_ask"))
+    return None
+
+
+def _parse_bucket(bucket: object) -> tuple[float | None, float | None]:
+    if not bucket:
+        return None, None
+    text = str(bucket).removesuffix("F")
+    if text.startswith(">="):
+        return _float_or_none(text.removeprefix(">=")), None
+    if text.startswith("<="):
+        return None, _float_or_none(text.removeprefix("<="))
+    if "-" in text:
+        lower, upper = text.split("-", 1)
+        return _float_or_none(lower), _float_or_none(upper)
+    return None, None
+
+
+def _float_or_none(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

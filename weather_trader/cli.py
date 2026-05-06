@@ -38,6 +38,8 @@ from weather_trader.models.next_day_classifier import (
     save_next_day_artifacts,
     train_next_day_classifier,
 )
+from weather_trader.research.collector import ResearchConfig, run_research_loop
+from weather_trader.research.resolver import ResearchResolver, ResolverConfig
 from weather_trader.stations.iem_asos_client import IEMASOSClient
 from weather_trader.stations.metadata import get_station
 
@@ -110,17 +112,34 @@ def main() -> None:
     paper_cycle.add_argument("--market-limit", type=int, default=50000)
     paper_cycle.add_argument("--bankroll", type=float, default=1000.0)
     paper_cycle.add_argument("--submit-paper-orders", action="store_true")
-    paper_cycle.add_argument("--max-obs-age-minutes", type=int, default=25)
+    paper_cycle.add_argument("--max-obs-age-minutes", type=int, default=30)
 
     paper_loop = subparsers.add_parser("paper-loop", help="Run repeated paper-trading cycles for live logging")
     paper_loop.add_argument("--model", required=True)
     paper_loop.add_argument("--db", default=str(PAPER_DIR / "roboweather.sqlite"))
     paper_loop.add_argument("--market-limit", type=int, default=50000)
     paper_loop.add_argument("--bankroll", type=float, default=1000.0)
-    paper_loop.add_argument("--interval-seconds", type=int, default=300)
+    paper_loop.add_argument("--interval-seconds", type=int, default=360)
     paper_loop.add_argument("--submit-paper-orders", action="store_true")
     paper_loop.add_argument("--max-cycles", type=int, default=None)
-    paper_loop.add_argument("--max-obs-age-minutes", type=int, default=25)
+    paper_loop.add_argument("--max-obs-age-minutes", type=int, default=30)
+
+    research_loop = subparsers.add_parser("research-loop", help="Run headless research snapshot collection and auto-resolution")
+    research_loop.add_argument("--model", required=True)
+    research_loop.add_argument("--db", default=str(PAPER_DIR / "roboweather.sqlite"))
+    research_loop.add_argument("--market-limit", type=int, default=50000)
+    research_loop.add_argument("--bankroll", type=float, default=1000.0)
+    research_loop.add_argument("--interval-seconds", type=int, default=360)
+    research_loop.add_argument("--max-cycles", type=int, default=None)
+    research_loop.add_argument("--max-obs-age-minutes", type=int, default=30)
+    research_loop.add_argument("--entry-start-local", default="10:00")
+    research_loop.add_argument("--entry-end-local", default="15:00")
+    research_loop.add_argument("--resolver-interval-seconds", type=int, default=3600)
+    research_loop.add_argument("--resolve-after-local-hour", type=int, default=6)
+
+    resolve_research = subparsers.add_parser("resolve-research", help="Resolve and score due research snapshots")
+    resolve_research.add_argument("--db", default=str(PAPER_DIR / "roboweather.sqlite"))
+    resolve_research.add_argument("--resolve-after-local-hour", type=int, default=6)
 
     tui = subparsers.add_parser("tui", help="Open Textual UI for the paper-trading database")
     tui.add_argument("--db", default=str(PAPER_DIR / "roboweather.sqlite"))
@@ -189,6 +208,24 @@ def main() -> None:
             max_cycles=args.max_cycles,
             max_obs_age_minutes=args.max_obs_age_minutes,
         )
+        return
+    if args.command == "research-loop":
+        research_loop_command(
+            model_path=args.model,
+            db_path=args.db,
+            market_limit=args.market_limit,
+            bankroll=args.bankroll,
+            interval_seconds=args.interval_seconds,
+            max_cycles=args.max_cycles,
+            max_obs_age_minutes=args.max_obs_age_minutes,
+            entry_start_local=args.entry_start_local,
+            entry_end_local=args.entry_end_local,
+            resolver_interval_seconds=args.resolver_interval_seconds,
+            resolve_after_local_hour=args.resolve_after_local_hour,
+        )
+        return
+    if args.command == "resolve-research":
+        resolve_research_command(args.db, args.resolve_after_local_hour)
         return
     if args.command == "tui":
         tui_command(args.db)
@@ -535,6 +572,57 @@ def paper_loop_command(
         store.close()
 
 
+def research_loop_command(
+    model_path: str,
+    db_path: str,
+    market_limit: int,
+    bankroll: float,
+    interval_seconds: int,
+    max_cycles: int | None,
+    max_obs_age_minutes: int,
+    entry_start_local: str,
+    entry_end_local: str,
+    resolver_interval_seconds: int,
+    resolve_after_local_hour: int,
+) -> None:
+    store = ExecutionStore(Path(db_path))
+    try:
+        config = ResearchConfig(
+            entry_start_local=_parse_hhmm(entry_start_local),
+            entry_end_local=_parse_hhmm(entry_end_local),
+            max_obs_age_minutes=max_obs_age_minutes,
+            bankroll_usd=bankroll,
+            market_limit=market_limit,
+        )
+        resolver = ResearchResolver(
+            store=store,
+            config=ResolverConfig(resolve_after_local_hour=resolve_after_local_hour),
+        )
+        run_research_loop(
+            store=store,
+            model_path=Path(model_path),
+            config=config,
+            interval_seconds=interval_seconds,
+            max_cycles=max_cycles,
+            resolver=resolver,
+            resolver_interval_seconds=resolver_interval_seconds,
+        )
+    finally:
+        store.close()
+
+
+def resolve_research_command(db_path: str, resolve_after_local_hour: int) -> None:
+    store = ExecutionStore(Path(db_path))
+    try:
+        summary = ResearchResolver(
+            store=store,
+            config=ResolverConfig(resolve_after_local_hour=resolve_after_local_hour),
+        ).resolve_due()
+        print(json.dumps(summary.__dict__, indent=2))
+    finally:
+        store.close()
+
+
 def _bucket_label(lower_f: float | None, upper_f: float | None) -> str:
     if lower_f is not None and upper_f is not None:
         return f"{lower_f:g}-{upper_f:g}F"
@@ -543,6 +631,13 @@ def _bucket_label(lower_f: float | None, upper_f: float | None) -> str:
     if upper_f is not None:
         return f"<={upper_f:g}F"
     return "unknown"
+
+
+def _parse_hhmm(value: str):
+    from datetime import time
+
+    hour, minute = value.split(":", 1)
+    return time(int(hour), int(minute))
 
 
 def tui_command(db_path: str) -> None:

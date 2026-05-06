@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from textual.app import App, ComposeResult
-from textual.containers import Vertical
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.containers import Horizontal, Vertical
+from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, TabPane
 
 from weather_trader.execution.store import ExecutionStore
 
@@ -12,36 +12,56 @@ from weather_trader.execution.store import ExecutionStore
 class RoboWeatherTUI(App):
     CSS = """
     Screen {
-        background: #10140f;
-        color: #e7ead7;
+        background: #111315;
+        color: #ece7dc;
     }
 
     #summary {
         height: 3;
         padding: 1 2;
-        background: #27301f;
-        color: #f7f1c5;
+        background: #22272b;
+        color: #f8e6b0;
+    }
+
+    .section-title {
+        height: 1;
+        padding: 0 1;
+        background: #2a3035;
+        color: #f8e6b0;
+    }
+
+    TabbedContent {
+        height: 1fr;
     }
 
     DataTable {
         height: 1fr;
-        background: #141a12;
+        background: #15191d;
+        color: #ece7dc;
     }
 
     #orders {
-        height: 9;
+        height: 8;
+    }
+
+    #engine {
+        height: 8;
+    }
+
+    #signals {
+        height: 1fr;
     }
 
     #decisions {
-        height: 9;
+        height: 1fr;
     }
 
-    #positions {
-        height: 9;
+    .split {
+        height: 2fr;
     }
 
-    #groups {
-        height: 9;
+    .stack {
+        height: 1fr;
     }
     """
     BINDINGS = [
@@ -60,16 +80,32 @@ class RoboWeatherTUI(App):
         yield Header(show_clock=True)
         with Vertical():
             yield Static("roboweather paper harness", id="summary")
-            yield Static("Paper orders", classes="section-title")
-            yield DataTable(id="orders")
-            yield Static("Station / Date Decisions", classes="section-title")
-            yield DataTable(id="groups")
-            yield Static("Positions / MTM", classes="section-title")
-            yield DataTable(id="positions")
-            yield Static("Decisions", classes="section-title")
-            yield DataTable(id="decisions")
-            yield Static("Signals", classes="section-title")
-            yield DataTable(id="signals")
+            with TabbedContent():
+                with TabPane("Overview", id="overview-tab"):
+                    with Horizontal(classes="split"):
+                        with Vertical(classes="stack"):
+                            yield Static("Station / Date Picks", classes="section-title")
+                            yield DataTable(id="groups")
+                        with Vertical(classes="stack"):
+                            yield Static("Open Positions / MTM", classes="section-title")
+                            yield DataTable(id="positions")
+                    yield Static("Paper Orders", classes="section-title")
+                    yield DataTable(id="orders")
+                    yield Static("Engine Cycles", classes="section-title")
+                    yield DataTable(id="engine")
+                with TabPane("Pick Detail", id="pick-detail-tab"):
+                    yield Static("Station / Date Candidate Detail", classes="section-title")
+                    yield DataTable(id="candidates")
+                with TabPane("Research", id="research-tab"):
+                    yield Static("Prediction Snapshots", classes="section-title")
+                    yield DataTable(id="snapshots")
+                    yield Static("Resolved Results By Delay Bucket", classes="section-title")
+                    yield DataTable(id="results")
+                with TabPane("Raw", id="raw-tab"):
+                    yield Static("Decisions", classes="section-title")
+                    yield DataTable(id="decisions")
+                    yield Static("Signals", classes="section-title")
+                    yield DataTable(id="signals")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -94,10 +130,27 @@ class RoboWeatherTUI(App):
             "station",
             "date",
             "cands",
-            "selected",
-            "strategy",
+            "pick",
+            "side",
             "edge",
+            "skip",
+        )
+
+        candidates = self.query_one("#candidates", DataTable)
+        candidates.cursor_type = "row"
+        candidates.add_columns(
+            "time",
+            "station",
+            "date",
+            "sel",
             "bucket",
+            "action",
+            "strategy",
+            "edge yes",
+            "edge no",
+            "ev",
+            "target",
+            "max",
             "skip",
         )
 
@@ -115,6 +168,46 @@ class RoboWeatherTUI(App):
             "pnl",
             "pnl %",
             "status",
+        )
+
+        engine = self.query_one("#engine", DataTable)
+        engine.cursor_type = "row"
+        engine.add_columns(
+            "time",
+            "mode",
+            "markets",
+            "actionable",
+            "orders",
+            "skipped",
+            "errors",
+            "first error",
+        )
+
+        snapshots = self.query_one("#snapshots", DataTable)
+        snapshots.cursor_type = "row"
+        snapshots.add_columns(
+            "time",
+            "station",
+            "date",
+            "delay",
+            "obs age",
+            "high",
+            "pick",
+            "side",
+            "edge",
+            "conv",
+        )
+
+        results = self.query_one("#results", DataTable)
+        results.cursor_type = "row"
+        results.add_columns(
+            "delay",
+            "snapshots",
+            "scored",
+            "correct",
+            "win rate",
+            "avg edge",
+            "avg pnl",
         )
 
         decisions = self.query_one("#decisions", DataTable)
@@ -165,6 +258,9 @@ class RoboWeatherTUI(App):
             groups = store.recent_station_date_decisions(limit=50)
             position_marks = store.latest_position_marks(limit=50)
             decisions = store.recent_decisions(limit=50)
+            engine_states = store.recent_engine_states(limit=20)
+            snapshots = store.recent_prediction_snapshots(limit=100)
+            result_summary = store.prediction_result_summary()
             order_summary = store.paper_order_summary()
             open_positions = store.recent_positions()
         finally:
@@ -201,12 +297,32 @@ class RoboWeatherTUI(App):
                 str(group.get("station", "")),
                 str(group.get("market_date", "")),
                 str(group.get("candidate_count", "")),
-                str(group.get("selected_action", "")),
-                str(group.get("selected_strategy_bucket", "")),
-                _fmt(group.get("selected_edge")),
                 selected_bucket,
+                str(group.get("selected_action", "")),
+                _fmt(group.get("selected_edge")),
                 str(group.get("skip_reason") or "")[:28],
             )
+
+        candidates_table = self.query_one("#candidates", DataTable)
+        candidates_table.clear()
+        for group in groups[:20]:
+            selected_market_id = group.get("selected_market_id")
+            for candidate in group.get("candidates") or []:
+                candidates_table.add_row(
+                    str(group.get("timestamp", ""))[11:19],
+                    str(group.get("station", "")),
+                    str(group.get("market_date", "")),
+                    "*" if candidate.get("market_id") == selected_market_id else "",
+                    str(candidate.get("bucket", "")),
+                    str(candidate.get("action", "")),
+                    str(candidate.get("strategy_bucket", "")),
+                    _fmt(candidate.get("edge_yes")),
+                    _fmt(candidate.get("edge_no")),
+                    _fmt(candidate.get("expected_value")),
+                    _fmt_money(candidate.get("target_usd")),
+                    _fmt(candidate.get("max_price")),
+                    ",".join(candidate.get("skip_reasons") or [])[:44],
+                )
 
         positions_table = self.query_one("#positions", DataTable)
         positions_table.clear()
@@ -223,6 +339,50 @@ class RoboWeatherTUI(App):
                 _fmt_money(mark.get("unrealized_pnl")),
                 _fmt_pct(mark.get("unrealized_pnl_pct")),
                 str(mark.get("effective_status", "")),
+            )
+
+        engine_table = self.query_one("#engine", DataTable)
+        engine_table.clear()
+        for state in engine_states:
+            errors = state.get("errors") or []
+            engine_table.add_row(
+                str(state.get("timestamp", ""))[11:19],
+                str(state.get("mode", "")),
+                str(state.get("discovered_markets", "")),
+                str(state.get("actionable_signals", "")),
+                str(state.get("orders_submitted", "")),
+                str(state.get("skipped", "")),
+                str(len(errors)),
+                str(errors[0] if errors else "")[:80],
+            )
+
+        snapshots_table = self.query_one("#snapshots", DataTable)
+        snapshots_table.clear()
+        for snapshot in snapshots:
+            snapshots_table.add_row(
+                str(snapshot.get("decision_time_local", ""))[11:19],
+                str(snapshot.get("station", "")),
+                str(snapshot.get("market_date", "")),
+                str(snapshot.get("obs_delay_bucket", "")),
+                _fmt(snapshot.get("obs_age_minutes")),
+                _fmt(snapshot.get("high_so_far")),
+                str(snapshot.get("selected_bucket") or ""),
+                str(snapshot.get("selected_side", "")),
+                _fmt(snapshot.get("selected_edge")),
+                "Y" if snapshot.get("high_conviction") else "",
+            )
+
+        results_table = self.query_one("#results", DataTable)
+        results_table.clear()
+        for row in result_summary:
+            results_table.add_row(
+                str(row.get("obs_delay_bucket", "")),
+                str(row.get("snapshots", "")),
+                str(row.get("scored", "")),
+                str(row.get("correct", "")),
+                _fmt_pct(row.get("win_rate")),
+                _fmt(row.get("avg_edge")),
+                _fmt(row.get("avg_pnl")),
             )
 
         decisions_table = self.query_one("#decisions", DataTable)
@@ -265,6 +425,8 @@ class RoboWeatherTUI(App):
             " | ".join(
                 [
                     f"{len(signals)} signals",
+                    f"{len(groups)} station/date picks",
+                    f"{len(snapshots)} research snapshots",
                     f"{order_summary.get('orders', 0)} orders",
                     f"{order_summary.get('filled', 0)} filled",
                     f"{order_summary.get('rejected', 0)} rejected",

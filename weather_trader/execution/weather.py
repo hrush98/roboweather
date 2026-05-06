@@ -40,7 +40,7 @@ class WeatherFeatureService:
         self,
         obs_client: IEMASOSClient | None = None,
         hrrr_client: HRRRClient | None = None,
-        max_obs_age_minutes: int = 25,
+        max_obs_age_minutes: int = 30,
     ) -> None:
         self.obs_client = obs_client or IEMASOSClient()
         self.hrrr_client = hrrr_client or HRRRClient()
