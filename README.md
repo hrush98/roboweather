@@ -55,6 +55,16 @@ python -m weather_trader.cli train-model \
   --report-dir data/reports/mvp
 ```
 
+Run training-data diagnostics before trusting a model run:
+
+```bash
+python -m weather_trader.cli validate-model-data \
+  --dataset data/raw/dataset_2022-01-01_2025-12-31_initial5.csv \
+  --kind same-day \
+  --validation-year 2025 \
+  --report-dir data/reports/data_diagnostics_same_day
+```
+
 Train only rows that have historical HRRR features:
 
 ```bash

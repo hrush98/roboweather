@@ -38,6 +38,11 @@ from weather_trader.models.next_day_classifier import (
     save_next_day_artifacts,
     train_next_day_classifier,
 )
+from weather_trader.models.diagnostics import (
+    DatasetDiagnostics,
+    validate_next_day_dataset,
+    validate_same_day_dataset,
+)
 from weather_trader.research.collector import ResearchConfig, run_research_loop
 from weather_trader.research.resolver import ResearchResolver, ResolverConfig
 from weather_trader.stations.iem_asos_client import IEMASOSClient
@@ -69,6 +74,13 @@ def main() -> None:
     train_model.add_argument("--validation-year", type=int, default=2025)
     train_model.add_argument("--report-dir", required=False)
     train_model.add_argument("--require-hrrr", action="store_true")
+
+    validate_data = subparsers.add_parser("validate-model-data", help="Run training-data diagnostics")
+    validate_data.add_argument("--dataset", required=True)
+    validate_data.add_argument("--kind", choices=["same-day", "next-day"], default="same-day")
+    validate_data.add_argument("--validation-year", type=int, default=2025)
+    validate_data.add_argument("--report-dir", required=False)
+    validate_data.add_argument("--require-hrrr", action="store_true")
 
     tune_model = subparsers.add_parser("tune-model", help="Compare same-day classifier configs on chronological validation")
     tune_model.add_argument("--dataset", required=True)
@@ -158,6 +170,9 @@ def main() -> None:
         return
     if args.command == "train-model":
         train_model_command(args.dataset, args.output, args.validation_year, args.report_dir, args.require_hrrr)
+        return
+    if args.command == "validate-model-data":
+        validate_model_data_command(args.dataset, args.kind, args.validation_year, args.report_dir, args.require_hrrr)
         return
     if args.command == "tune-model":
         tune_model_command(args.dataset, args.output, args.validation_year, args.require_hrrr)
@@ -279,6 +294,9 @@ def train_model_command(
     dataset = pd.read_csv(dataset_path)
     if require_hrrr:
         dataset = dataset.loc[dataset["hrrr_remaining_max"].notna()].copy()
+    diagnostics = validate_same_day_dataset(dataset, validation_year=validation_year)
+    if diagnostics.has_errors:
+        raise ValueError(_format_diagnostic_errors(diagnostics))
     artifacts = train_and_calibrate(dataset=dataset, validation_year=validation_year)
     save_artifacts(artifacts, Path(output_path))
     output = {
@@ -302,8 +320,42 @@ def train_model_command(
             frame.to_csv(report_path / f"bucket_{name}.csv", index=False)
         build_reliability_report(predictions).to_csv(report_path / "reliability.csv", index=False)
         build_station_report(predictions).to_csv(report_path / "station_metrics.csv", index=False)
+        _write_diagnostics(report_path, diagnostics)
         output["report_dir"] = str(report_path)
     print(json.dumps(output, indent=2))
+
+
+def validate_model_data_command(
+    dataset_path: str,
+    kind: str,
+    validation_year: int,
+    report_dir: str | None,
+    require_hrrr: bool,
+) -> None:
+    dataset = pd.read_csv(dataset_path)
+    if require_hrrr:
+        dataset = dataset.loc[dataset["hrrr_remaining_max"].notna()].copy()
+    diagnostics = (
+        validate_next_day_dataset(dataset, validation_year=validation_year)
+        if kind == "next-day"
+        else validate_same_day_dataset(dataset, validation_year=validation_year)
+    )
+    if report_dir:
+        report_path = Path(report_dir)
+        report_path.mkdir(parents=True, exist_ok=True)
+        _write_diagnostics(report_path, diagnostics)
+    output = {
+        **diagnostics.summary,
+        "kind": kind,
+        "issue_count": len(diagnostics.issues),
+        "error_count": sum(issue.severity == "error" for issue in diagnostics.issues),
+        "warning_count": sum(issue.severity == "warning" for issue in diagnostics.issues),
+    }
+    print(json.dumps(output, indent=2))
+    if diagnostics.issues:
+        print(diagnostics.issue_frame().to_string(index=False))
+    if diagnostics.has_errors:
+        raise SystemExit(1)
 
 
 def tune_model_command(dataset_path: str, output_path: str, validation_year: int, require_hrrr: bool) -> None:
@@ -353,6 +405,9 @@ def train_next_day_model_command(
     report_dir: str | None,
 ) -> None:
     dataset = pd.read_csv(dataset_path)
+    diagnostics = validate_next_day_dataset(dataset, validation_year=validation_year)
+    if diagnostics.has_errors:
+        raise ValueError(_format_diagnostic_errors(diagnostics))
     artifacts = train_next_day_classifier(dataset, validation_year=validation_year)
     save_next_day_artifacts(artifacts, Path(output_path))
     output = {
@@ -374,8 +429,21 @@ def train_next_day_model_command(
         bucket_reports = build_next_day_bucket_reports(predictions)
         for name, frame in bucket_reports.items():
             frame.to_csv(report_path / f"bucket_{name}.csv", index=False)
+        _write_diagnostics(report_path, diagnostics)
         output["report_dir"] = str(report_path)
     print(json.dumps(output, indent=2))
+
+
+def _write_diagnostics(report_path: Path, diagnostics: DatasetDiagnostics) -> None:
+    diagnostics.issue_frame().to_csv(report_path / "data_diagnostic_issues.csv", index=False)
+    diagnostics.column_report.to_csv(report_path / "data_diagnostic_columns.csv", index=False)
+    diagnostics.split_report.to_csv(report_path / "data_diagnostic_splits.csv", index=False)
+    diagnostics.policy_report.to_csv(report_path / "data_diagnostic_policies.csv", index=False)
+
+
+def _format_diagnostic_errors(diagnostics: DatasetDiagnostics) -> str:
+    errors = [issue for issue in diagnostics.issues if issue.severity == "error"]
+    return "Training data diagnostics failed: " + "; ".join(f"{issue.check}: {issue.message}" for issue in errors)
 
 
 def enrich_hrrr_command(
