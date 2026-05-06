@@ -191,6 +191,7 @@ def main() -> None:
 
     research_loop = subparsers.add_parser("research-loop", help="Run headless research snapshot collection and auto-resolution")
     research_loop.add_argument("--model", required=True)
+    research_loop.add_argument("--threshold-model", default=None)
     research_loop.add_argument("--db", default=str(PAPER_DIR / "roboweather.sqlite"))
     research_loop.add_argument("--market-limit", type=int, default=50000)
     research_loop.add_argument("--bankroll", type=float, default=1000.0)
@@ -309,6 +310,7 @@ def main() -> None:
     if args.command == "research-loop":
         research_loop_command(
             model_path=args.model,
+            threshold_model_path=args.threshold_model,
             db_path=args.db,
             market_limit=args.market_limit,
             bankroll=args.bankroll,
@@ -1052,6 +1054,7 @@ def paper_loop_command(
 
 def research_loop_command(
     model_path: str,
+    threshold_model_path: str | None,
     db_path: str,
     market_limit: int,
     bankroll: float,
@@ -1076,9 +1079,12 @@ def research_loop_command(
             store=store,
             config=ResolverConfig(resolve_after_local_hour=resolve_after_local_hour),
         )
+        model_paths = [Path(model_path)]
+        if threshold_model_path:
+            model_paths.append(Path(threshold_model_path))
         run_research_loop(
             store=store,
-            model_path=Path(model_path),
+            model_paths=model_paths,
             config=config,
             interval_seconds=interval_seconds,
             max_cycles=max_cycles,

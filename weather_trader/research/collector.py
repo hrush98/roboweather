@@ -47,7 +47,7 @@ class ResearchCollector:
     def __init__(
         self,
         store: ExecutionStore,
-        model_path: Path,
+        model_paths: list[Path],
         config: ResearchConfig | None = None,
         discovery: MarketDiscoveryService | None = None,
         book_client: RestBookClient | None = None,
@@ -59,9 +59,9 @@ class ResearchCollector:
         self.discovery = discovery or MarketDiscoveryService()
         self.book_client = book_client or RestBookClient()
         self.weather_service = weather_service or WeatherFeatureService(max_obs_age_minutes=self.config.max_obs_age_minutes)
-        self.fair_value_engine = FairValueEngine(model_path)
         self.decision_engine = decision_engine or DecisionEngine()
         self.station_date_decision_engine = StationDateDecisionEngine(self.decision_engine)
+        self.fair_value_engines = [FairValueEngine(path) for path in model_paths]
 
     def run_once(self, as_of_utc: datetime | None = None) -> ResearchCycleResult:
         now = as_of_utc or datetime.now(timezone.utc)
@@ -86,61 +86,70 @@ class ResearchCollector:
             self.store.insert_book_snapshot(book)
 
         weather_by_station = self._fetch_weather_by_station(markets, now, errors)
-        contexts_by_group: dict[tuple[str, date | None], list[GroupMarketContext]] = {}
+        markets_by_group: dict[tuple[str, date | None], list[MarketSnapshot]] = {}
         for market in markets:
-            try:
-                weather = weather_by_station.get(market.station)
-                if weather is None:
-                    errors.append(f"{market.market_id}: missing weather for {market.station}")
-                    continue
-                signal = self._build_signal(market, books, weather)
-                contexts_by_group.setdefault(group_key(market), []).append(
-                    GroupMarketContext(
-                        market=market,
-                        signal=signal,
-                        yes_book=books.get(market.yes_token_id or ""),
-                        no_book=books.get(market.no_token_id or ""),
-                    )
-                )
-            except Exception as exc:
-                errors.append(f"{market.market_id}: {exc}")
+            markets_by_group.setdefault(group_key(market), []).append(market)
 
-        for key, contexts in contexts_by_group.items():
-            station_id, market_date = key
-            if market_date is None:
-                skipped += len(contexts)
-                continue
-            weather = weather_by_station.get(station_id)
-            if weather is None:
-                skipped += len(contexts)
-                continue
-            due_buckets = due_delay_buckets(
-                weather=weather,
-                as_of_utc=now,
-                config=self.config,
-            )
-            if not due_buckets:
-                skipped += len(contexts)
-                continue
-            try:
-                selection = self.station_date_decision_engine.select(
-                    contexts=contexts,
-                    bankroll_usd=self.config.bankroll_usd,
+        for engine in self.fair_value_engines:
+            contexts_by_group: dict[tuple[str, date | None], list[GroupMarketContext]] = {}
+            for key, group_markets in markets_by_group.items():
+                station_id, _ = key
+                try:
+                    weather = weather_by_station.get(station_id)
+                    if weather is None:
+                        continue
+                    fair_values = engine.price_markets(group_markets, weather)
+                    for market in group_markets:
+                        signal = self._build_signal(market, books, weather, fair_values[market.market_id])
+                        contexts_by_group.setdefault(group_key(market), []).append(
+                            GroupMarketContext(
+                                market=market,
+                                signal=signal,
+                                yes_book=books.get(market.yes_token_id or ""),
+                                no_book=books.get(market.no_token_id or ""),
+                            )
+                        )
+                except Exception as exc:
+                    errors.append(f"model:{engine.model_name}:group:{station_id}: {exc}")
+
+            for key, contexts in contexts_by_group.items():
+                station_id, market_date = key
+                if market_date is None:
+                    skipped += len(contexts)
+                    continue
+                weather = weather_by_station.get(station_id)
+                if weather is None:
+                    skipped += len(contexts)
+                    continue
+                due_buckets = due_delay_buckets(
+                    weather=weather,
+                    as_of_utc=now,
+                    config=self.config,
                 )
-                for bucket in due_buckets:
-                    snapshot = build_prediction_snapshot(
-                        selection=selection,
+                if not due_buckets:
+                    skipped += len(contexts)
+                    continue
+                try:
+                    selections = self.station_date_decision_engine.select_all_strategies(
                         contexts=contexts,
-                        weather=weather,
-                        market_date=market_date,
-                        as_of_utc=now,
-                        obs_delay_bucket=bucket,
+                        bankroll_usd=self.config.bankroll_usd,
                     )
-                    snapshot_id = self.store.insert_prediction_snapshot(snapshot)
-                    if snapshot_id is not None:
-                        snapshots_written += 1
-            except Exception as exc:
-                errors.append(f"group:{station_id}:{market_date}: {exc}")
+                    for selection in selections:
+                        for bucket in due_buckets:
+                            snapshot = build_prediction_snapshot(
+                                selection=selection,
+                                contexts=contexts,
+                                weather=weather,
+                                market_date=market_date,
+                                as_of_utc=now,
+                                obs_delay_bucket=bucket,
+                                model_name=engine.model_name,
+                            )
+                            snapshot_id = self.store.insert_prediction_snapshot(snapshot)
+                            if snapshot_id is not None:
+                                snapshots_written += 1
+                except Exception as exc:
+                    errors.append(f"model:{engine.model_name}:group:{station_id}:{market_date}: {exc}")
 
         engine_state = EngineState(
             timestamp=utc_now_iso(),
@@ -173,8 +182,8 @@ class ResearchCollector:
         market: MarketSnapshot,
         books: dict[str, BookSnapshot],
         weather: StationWeatherState,
+        fair,
     ) -> Signal:
-        fair = self.fair_value_engine.price_market(market, weather)
         yes_book = books.get(market.yes_token_id or "")
         no_book = books.get(market.no_token_id or "")
         yes_ask = yes_book.best_ask if yes_book else None
@@ -256,6 +265,7 @@ def build_prediction_snapshot(
     market_date: date,
     as_of_utc: datetime,
     obs_delay_bucket: str,
+    model_name: str = "",
 ) -> PredictionSnapshot:
     selected_market_id = selection.selected_decision.market_id if selection.selected_decision else None
     selected_candidate = next(
@@ -285,19 +295,31 @@ def build_prediction_snapshot(
         current_temp=weather.current_temp,
         high_so_far=weather.high_so_far,
         hrrr_remaining_max=weather.hrrr_remaining_max,
+        strategy_bucket=selection.trace.selected_strategy_bucket,
         selected_market_id=selected_market_id,
         selected_bucket=str(selected_candidate.get("bucket")) if selected_candidate else None,
         selected_side=selected_side,
         selected_edge=selection.selected_decision.expected_value if selection.selected_decision else None,
-        selected_fair_yes=selected_context.signal.fair_yes if selected_context else None,
-        selected_fair_no=selected_context.signal.fair_no if selected_context else None,
+        selected_fair_yes=_candidate_float(selected_candidate, "fair_yes", selected_context.signal.fair_yes if selected_context else None),
+        selected_fair_no=_candidate_float(selected_candidate, "fair_no", selected_context.signal.fair_no if selected_context else None),
         selected_yes_ask=selected_context.signal.yes_ask if selected_context else None,
         selected_no_ask=selected_context.signal.no_ask if selected_context else None,
+        model_name=model_name,
         high_conviction=bool(selection.selected_decision and selection.selected_decision.strategy_bucket == StrategyBucket.HIGH_CONVICTION),
         skip_reason=selection.trace.skip_reason,
         candidate_count=selection.trace.candidate_count,
         candidate_distribution=selection.trace.candidates,
     )
+
+
+def _candidate_float(candidate: dict[str, object] | None, key: str, default: float | None) -> float | None:
+    if candidate is None:
+        return default
+    try:
+        value = candidate.get(key)
+        return float(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
 
 
 def _time_in_window(value: day_time, start: day_time, end: day_time) -> bool:
@@ -308,14 +330,14 @@ def _time_in_window(value: day_time, start: day_time, end: day_time) -> bool:
 
 def run_research_loop(
     store: ExecutionStore,
-    model_path: Path,
+    model_paths: list[Path],
     config: ResearchConfig,
     interval_seconds: int,
     max_cycles: int | None = None,
     resolver=None,
     resolver_interval_seconds: int = 3600,
 ) -> None:
-    collector = ResearchCollector(store=store, model_path=model_path, config=config)
+    collector = ResearchCollector(store=store, model_paths=model_paths, config=config)
     cycle = 0
     last_resolved_at = 0.0
     try:

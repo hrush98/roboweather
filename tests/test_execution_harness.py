@@ -154,6 +154,64 @@ def test_fair_value_inside_bucket_conditions_on_not_overshooting_upper() -> None
     assert "HIGH_SO_FAR_INSIDE_BUCKET" in result.reason_codes
 
 
+def test_dynamic_bucket_fair_values_normalize_across_ladder() -> None:
+    engine = FairValueEngine.__new__(FairValueEngine)
+    engine.model = _BucketModel({"m1": 0.2, "m2": 0.6, "m3": 0.2})
+    engine.feature_columns = ["bucket_lower", "bucket_upper"]
+    engine.model_type = "dynamic_bucket"
+    engine.model_name = "dummy"
+    engine.model_features_hash = "hash"
+    markets = [
+        _market(lower=78, upper=79),
+        _replace_market(_market(lower=80, upper=81), market_id="m2", yes_token_id="yes2", no_token_id="no2"),
+        _replace_market(_market(lower=82, upper=83), market_id="m3", yes_token_id="yes3", no_token_id="no3"),
+    ]
+
+    results = engine.price_markets(markets, _weather(high_so_far=78))
+
+    assert np.isclose(sum(result.fair_yes for result in results.values()), 1.0)
+    assert np.isclose(results["m2"].fair_yes, 0.6)
+
+
+def test_station_date_group_records_all_research_strategies() -> None:
+    first = _market(lower=80, upper=81)
+    second = _replace_market(_market(lower=82, upper=83), market_id="m2", yes_token_id="yes2", no_token_id="no2")
+    third = _replace_market(_market(lower=86, upper=None), market_id="m3", yes_token_id="yes3", no_token_id="no3")
+    contexts = [
+        GroupMarketContext(
+            market=first,
+            signal=_replace_signal(_signal_for_market(first, fair_yes=0.14, fair_no=0.86, yes_ask=0.05, no_ask=0.9), high_so_far=80),
+            yes_book=_book("yes", ask=0.05),
+            no_book=_book("no", ask=0.9),
+        ),
+        GroupMarketContext(
+            market=second,
+            signal=_replace_signal(_signal_for_market(second, fair_yes=0.22, fair_no=0.78, yes_ask=0.14, no_ask=0.9), high_so_far=80),
+            yes_book=_book("yes2", ask=0.14),
+            no_book=_book("no2", ask=0.9),
+        ),
+        GroupMarketContext(
+            market=third,
+            signal=_replace_signal(_signal_for_market(third, fair_yes=0.03, fair_no=0.97, yes_ask=0.4, no_ask=0.9), high_so_far=80),
+            yes_book=_book("yes3", ask=0.4),
+            no_book=_book("no3", ask=0.9),
+        ),
+    ]
+
+    selections = StationDateDecisionEngine(DecisionEngine()).select_all_strategies(contexts, bankroll_usd=1000)
+    by_strategy = {selection.trace.selected_strategy_bucket: selection for selection in selections}
+
+    assert by_strategy[StrategyBucket.BEST_BUCKET].selected_decision is not None
+    assert by_strategy[StrategyBucket.BEST_BUCKET].selected_decision.market_id == "m2"
+    assert by_strategy[StrategyBucket.BEST_BUCKET].selected_decision.action == TradeAction.BUY_YES
+    assert by_strategy[StrategyBucket.TAIL].selected_decision is not None
+    assert by_strategy[StrategyBucket.TAIL].selected_decision.market_id == "m1"
+    assert by_strategy[StrategyBucket.TAIL].selected_decision.action == TradeAction.BUY_YES
+    assert by_strategy[StrategyBucket.MAX_SO_FAR].selected_decision is not None
+    assert by_strategy[StrategyBucket.MAX_SO_FAR].selected_decision.market_id == "m1"
+    assert by_strategy[StrategyBucket.MAX_SO_FAR].selected_decision.target_usd == 0.0
+
+
 def test_mark_position_uses_current_bid_for_unrealized_pnl() -> None:
     position = _position(side=TradeAction.BUY_NO, shares=10, cost=5, avg_entry_price=0.5)
     book = BookSnapshot(token_id="no", bids=[BookLevel(0.7, 100)], asks=[BookLevel(0.72, 100)], timestamp="now")
@@ -377,3 +435,20 @@ class _ThresholdModel:
         threshold = float(frame["threshold"].iloc[0])
         p = 0.2 if threshold == 90 else 1.0
         return np.array([[1.0 - p, p]])
+
+
+class _BucketModel:
+    def __init__(self, probabilities: dict[str, float]) -> None:
+        self.probabilities = probabilities
+
+    def predict_proba(self, frame):
+        values = []
+        for row in frame.itertuples(index=False):
+            if row.bucket_lower == 78:
+                p = self.probabilities["m1"]
+            elif row.bucket_lower == 80:
+                p = self.probabilities["m2"]
+            else:
+                p = self.probabilities["m3"]
+            values.append([1.0 - p, p])
+        return np.array(values)

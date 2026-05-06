@@ -14,9 +14,13 @@ class DecisionConfig:
     tail_max_ask: float = 0.10
     tail_min_relative_value: float = 2.0
     tail_min_edge: float = 0.05
+    best_bucket_min_probability: float = 0.18
+    best_bucket_min_edge: float = 0.05
     max_spread: float = 0.08
     high_conviction_bankroll_pct: float = 0.005
     tail_bankroll_pct: float = 0.001
+    best_bucket_bankroll_pct: float = 0.001
+    max_so_far_bankroll_pct: float = 0.0
     hrrr_veto_enabled: bool = True
 
 
@@ -140,6 +144,111 @@ class DecisionEngine:
         if strategy_bucket == StrategyBucket.NONE:
             return self._skip(["NO_DECISION_RULE_MATCH"])
 
+        return Decision(
+            timestamp=utc_now_iso(),
+            market_id="",
+            token_id=token_id,
+            action=action,
+            strategy_bucket=strategy_bucket,
+            max_price=ask,
+            target_usd=bankroll_usd * target_pct,
+            expected_value=edge,
+            skip_reasons=[],
+            reason_codes=[],
+        )
+
+    def candidate_for_strategy(
+        self,
+        *,
+        market: MarketSnapshot,
+        signal: Signal,
+        action: TradeAction,
+        fair: float,
+        edge: float | None,
+        book: BookSnapshot | None,
+        bankroll_usd: float,
+        strategy_bucket: StrategyBucket,
+        apply_hrrr_veto: bool = True,
+    ) -> Decision:
+        blocked_reasons = [code for code in signal.reason_codes if code.endswith("_BLOCKED")]
+        if blocked_reasons:
+            return finalize_decision(self._skip(blocked_reasons), market.market_id, signal.reason_codes)
+
+        veto_reasons: list[str] = []
+        if apply_hrrr_veto and self.config.hrrr_veto_enabled and "HRRR_MISSING_LOG" not in signal.reason_codes:
+            veto_reasons = _hrrr_veto_reasons(action, signal)
+
+        decision = self._forced_candidate(
+            action=action,
+            token_id=market.yes_token_id if action == TradeAction.BUY_YES else market.no_token_id,
+            fair=fair,
+            edge=edge,
+            book=book,
+            bankroll_usd=bankroll_usd,
+            strategy_bucket=strategy_bucket,
+            veto_reasons=veto_reasons,
+        )
+        return finalize_decision(decision, market.market_id, signal.reason_codes)
+
+    def strategy_matches(self, strategy_bucket: StrategyBucket, fair: float, edge: float | None, ask: float | None) -> bool:
+        if edge is None or ask is None:
+            return False
+        if strategy_bucket == StrategyBucket.HIGH_CONVICTION:
+            return fair >= self.config.high_conviction_min_probability and edge >= self.config.high_conviction_min_edge
+        if strategy_bucket == StrategyBucket.TAIL:
+            return (
+                self.config.tail_min_probability <= fair <= self.config.tail_max_probability
+                and ask <= self.config.tail_max_ask
+                and fair / ask >= self.config.tail_min_relative_value
+                and edge >= self.config.tail_min_edge
+            )
+        if strategy_bucket == StrategyBucket.BEST_BUCKET:
+            return fair >= self.config.best_bucket_min_probability and edge > self.config.best_bucket_min_edge
+        if strategy_bucket == StrategyBucket.MAX_SO_FAR:
+            return True
+        return False
+
+    def _forced_candidate(
+        self,
+        action: TradeAction,
+        token_id: str | None,
+        fair: float,
+        edge: float | None,
+        book: BookSnapshot | None,
+        bankroll_usd: float,
+        strategy_bucket: StrategyBucket,
+        veto_reasons: list[str] | None = None,
+    ) -> Decision:
+        skip_reasons: list[str] = []
+        skip_reasons.extend(veto_reasons or [])
+        if not token_id:
+            skip_reasons.append("MISSING_TOKEN")
+        if book is None:
+            skip_reasons.append("MISSING_BOOK")
+            ask = None
+            spread = None
+        else:
+            ask = book.best_ask
+            spread = book.spread
+        if ask is None:
+            skip_reasons.append("MISSING_ASK")
+        if spread is None:
+            skip_reasons.append("MISSING_SPREAD")
+        elif spread > self.config.max_spread:
+            skip_reasons.append("SPREAD_TOO_WIDE")
+        if edge is None:
+            skip_reasons.append("MISSING_EDGE")
+        if skip_reasons:
+            return self._skip(skip_reasons)
+        if not self.strategy_matches(strategy_bucket, fair, edge, ask):
+            return self._skip(["NO_DECISION_RULE_MATCH"])
+
+        target_pct = {
+            StrategyBucket.HIGH_CONVICTION: self.config.high_conviction_bankroll_pct,
+            StrategyBucket.TAIL: self.config.tail_bankroll_pct,
+            StrategyBucket.BEST_BUCKET: self.config.best_bucket_bankroll_pct,
+            StrategyBucket.MAX_SO_FAR: self.config.max_so_far_bankroll_pct,
+        }.get(strategy_bucket, 0.0)
         return Decision(
             timestamp=utc_now_iso(),
             market_id="",

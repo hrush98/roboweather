@@ -192,6 +192,7 @@ class ExecutionStore:
                 current_temp real not null,
                 high_so_far real not null,
                 hrrr_remaining_max real,
+                strategy_bucket text not null,
                 selected_market_id text,
                 selected_bucket text,
                 selected_side text not null,
@@ -203,8 +204,9 @@ class ExecutionStore:
                 high_conviction integer not null,
                 skip_reason text,
                 candidate_count integer not null,
+                model_name text not null default '',
                 raw_json text not null,
-                unique(station, market_date, latest_obs_time_utc, obs_delay_bucket)
+                unique(station, market_date, latest_obs_time_utc, obs_delay_bucket, strategy_bucket, model_name)
             );
 
             create table if not exists station_date_outcomes (
@@ -240,7 +242,81 @@ class ExecutionStore:
             );
             """
         )
+        self._migrate_prediction_snapshots_schema()
         self.connection.commit()
+
+    def _migrate_prediction_snapshots_schema(self) -> None:
+        row = self.connection.execute(
+            "select sql from sqlite_master where type = 'table' and name = 'prediction_snapshots'"
+        ).fetchone()
+        if row is None:
+            return
+        schema_sql = str(row["sql"] or "")
+        if "strategy_bucket text not null" in schema_sql and "model_name" in schema_sql:
+            return
+
+        columns = {
+            str(item["name"])
+            for item in self.connection.execute("pragma table_info(prediction_snapshots)").fetchall()
+        }
+        strategy_expr = "strategy_bucket" if "strategy_bucket" in columns else "'LEGACY'"
+        self.connection.executescript(
+            """
+            alter table prediction_snapshots rename to prediction_snapshots_old;
+
+            create table prediction_snapshots (
+                id integer primary key autoincrement,
+                timestamp text not null,
+                station text not null,
+                market_date text not null,
+                decision_time_utc text not null,
+                decision_time_local text not null,
+                latest_obs_time_utc text not null,
+                latest_obs_time_local text not null,
+                obs_age_minutes real not null,
+                obs_delay_bucket text not null,
+                current_temp real not null,
+                high_so_far real not null,
+                hrrr_remaining_max real,
+                strategy_bucket text not null,
+                selected_market_id text,
+                selected_bucket text,
+                selected_side text not null,
+                selected_edge real,
+                selected_fair_yes real,
+                selected_fair_no real,
+                selected_yes_ask real,
+                selected_no_ask real,
+                high_conviction integer not null,
+                skip_reason text,
+                candidate_count integer not null,
+                model_name text not null default '',
+                raw_json text not null,
+                unique(station, market_date, latest_obs_time_utc, obs_delay_bucket, strategy_bucket, model_name)
+            );
+            """
+        )
+        self.connection.execute(
+            f"""
+            insert or ignore into prediction_snapshots (
+                id, timestamp, station, market_date, decision_time_utc, decision_time_local,
+                latest_obs_time_utc, latest_obs_time_local, obs_age_minutes,
+                obs_delay_bucket, current_temp, high_so_far, hrrr_remaining_max,
+                strategy_bucket, selected_market_id, selected_bucket, selected_side, selected_edge,
+                selected_fair_yes, selected_fair_no, selected_yes_ask, selected_no_ask,
+                high_conviction, skip_reason, candidate_count, model_name, raw_json
+            )
+            select
+                id, timestamp, station, market_date, decision_time_utc, decision_time_local,
+                latest_obs_time_utc, latest_obs_time_local, obs_age_minutes,
+                obs_delay_bucket, current_temp, high_so_far, hrrr_remaining_max,
+                {strategy_expr}, selected_market_id, selected_bucket, selected_side, selected_edge,
+                selected_fair_yes, selected_fair_no, selected_yes_ask, selected_no_ask,
+                high_conviction, skip_reason, candidate_count, '', raw_json
+            from prediction_snapshots_old
+            """
+        )
+        self.connection.execute("drop table prediction_snapshots_old")
 
     def upsert_market(self, market: MarketSnapshot) -> None:
         data = dataclass_to_jsonable(market)
@@ -514,11 +590,11 @@ class ExecutionStore:
                 timestamp, station, market_date, decision_time_utc, decision_time_local,
                 latest_obs_time_utc, latest_obs_time_local, obs_age_minutes,
                 obs_delay_bucket, current_temp, high_so_far, hrrr_remaining_max,
-                selected_market_id, selected_bucket, selected_side, selected_edge,
+                strategy_bucket, selected_market_id, selected_bucket, selected_side, selected_edge,
                 selected_fair_yes, selected_fair_no, selected_yes_ask, selected_no_ask,
-                high_conviction, skip_reason, candidate_count, raw_json
+                high_conviction, skip_reason, candidate_count, model_name, raw_json
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 snapshot.timestamp,
@@ -533,6 +609,7 @@ class ExecutionStore:
                 snapshot.current_temp,
                 snapshot.high_so_far,
                 snapshot.hrrr_remaining_max,
+                str(snapshot.strategy_bucket),
                 snapshot.selected_market_id,
                 snapshot.selected_bucket,
                 str(snapshot.selected_side),
@@ -544,6 +621,7 @@ class ExecutionStore:
                 int(snapshot.high_conviction),
                 snapshot.skip_reason,
                 snapshot.candidate_count,
+                snapshot.model_name,
                 json.dumps(data, sort_keys=True),
             ),
         )
@@ -720,17 +798,21 @@ class ExecutionStore:
         rows = self.connection.execute(
             """
             select
-                obs_delay_bucket,
+                snapshots.strategy_bucket,
+                results.obs_delay_bucket,
                 count(*) as snapshots,
                 sum(case when correct is not null then 1 else 0 end) as scored,
                 sum(case when correct = 1 then 1 else 0 end) as correct,
                 avg(case when correct is not null then correct else null end) as win_rate,
                 avg(edge) as avg_edge,
                 avg(paper_pnl) as avg_pnl
-            from prediction_results
-            group by obs_delay_bucket
+            from prediction_results results
+            left join prediction_snapshots snapshots
+                on snapshots.id = results.prediction_snapshot_id
+            group by snapshots.strategy_bucket, results.obs_delay_bucket
             order by
-                case obs_delay_bucket
+                snapshots.strategy_bucket,
+                case results.obs_delay_bucket
                     when 'instant' then 0
                     when '5m' then 5
                     when '10m' then 10

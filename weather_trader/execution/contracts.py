@@ -20,6 +20,8 @@ class TradeAction(StringEnum):
 class StrategyBucket(StringEnum):
     HIGH_CONVICTION = "HIGH_CONVICTION"
     TAIL = "TAIL"
+    BEST_BUCKET = "BEST_BUCKET"
+    MAX_SO_FAR = "MAX_SO_FAR"
     NONE = "NONE"
 
 
@@ -260,6 +262,7 @@ class PredictionSnapshot:
     current_temp: float
     high_so_far: float
     hrrr_remaining_max: float | None
+    strategy_bucket: StrategyBucket
     selected_market_id: str | None
     selected_bucket: str | None
     selected_side: TradeAction
@@ -268,6 +271,7 @@ class PredictionSnapshot:
     selected_fair_no: float | None
     selected_yes_ask: float | None
     selected_no_ask: float | None
+    model_name: str
     high_conviction: bool
     skip_reason: str | None
     candidate_count: int

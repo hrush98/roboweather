@@ -12,7 +12,8 @@ Runs the headless research collector by default. It writes prediction snapshots,
 auto-resolves prior station/date outcomes, and does not submit paper trades.
 
 Environment overrides:
-  MODEL=data/models/mvp_obs_corrected.joblib
+  MODEL=data/models/dynamic_bucket_obs_2022_2025.joblib
+  THRESHOLD_MODEL=data/models/mvp_obs_corrected.joblib
   DB=data/paper/roboweather.sqlite
   MARKET_LIMIT=50000
   BANKROLL=1000
@@ -47,7 +48,8 @@ if [[ -z "${PYTHON:-}" ]]; then
   fi
 fi
 
-MODEL="${MODEL:-data/models/mvp_obs_corrected.joblib}"
+MODEL="${MODEL:-data/models/dynamic_bucket_obs_2022_2025.joblib}"
+THRESHOLD_MODEL="${THRESHOLD_MODEL:-data/models/mvp_obs_corrected.joblib}"
 DB="${DB:-data/paper/roboweather.sqlite}"
 MARKET_LIMIT="${MARKET_LIMIT:-50000}"
 BANKROLL="${BANKROLL:-1000}"
@@ -80,6 +82,7 @@ case "${mode}" in
     command=(
       nice -n 10 "${PYTHON}" -u -m weather_trader.cli research-loop
       --model "${MODEL}"
+      --threshold-model "${THRESHOLD_MODEL}"
       --db "${DB}"
       --market-limit "${MARKET_LIMIT}"
       --bankroll "${BANKROLL}"
