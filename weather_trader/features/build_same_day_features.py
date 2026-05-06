@@ -11,6 +11,7 @@ from weather_trader.stations.metadata import Station
 
 SNAPSHOT_HOURS = [10, 11, 12, 13, 14, 15]
 THRESHOLD_OFFSETS = [-4, -3, -2, -1, 0, 1, 2, 3, 4]
+LOOKBACK_TOLERANCE = pd.Timedelta(minutes=45)
 
 
 @dataclass(frozen=True)
@@ -28,8 +29,8 @@ def prepare_station_observations(observations: pd.DataFrame, station: Station) -
     frame["hour_local"] = frame["valid_local"].dt.hour
     frame["minute_local"] = frame["valid_local"].dt.minute
     frame["doy"] = frame["valid_local"].dt.dayofyear
-    frame["temp_change_1h"] = frame["tmpf"] - frame["tmpf"].shift(12)
-    frame["temp_change_3h"] = frame["tmpf"] - frame["tmpf"].shift(36)
+    frame["temp_change_1h"] = _temperature_change_at_lookback(frame, pd.Timedelta(hours=1))
+    frame["temp_change_3h"] = _temperature_change_at_lookback(frame, pd.Timedelta(hours=3))
     frame["wind_dir_sin"] = np.sin(np.deg2rad(frame["drct"]))
     frame["wind_dir_cos"] = np.cos(np.deg2rad(frame["drct"]))
     frame["cloud_cover_code"] = frame.apply(_cloud_cover_code, axis=1)
@@ -82,6 +83,30 @@ def build_synthetic_threshold_examples(
                     )
                 )
     return pd.DataFrame(rows)
+
+
+def _temperature_change_at_lookback(frame: pd.DataFrame, lookback: pd.Timedelta) -> pd.Series:
+    ordered = frame.sort_values("valid").copy()
+    ordered["_original_index"] = ordered.index
+    valid_temperatures = ordered.loc[ordered["tmpf"].notna(), ["valid", "tmpf"]].copy()
+    if valid_temperatures.empty:
+        return pd.Series(np.nan, index=frame.index, dtype=float)
+    targets = ordered[["valid"]].copy()
+    targets["_original_index"] = ordered["_original_index"].to_numpy()
+    targets["target_valid"] = targets["valid"] - lookback
+    matched = pd.merge_asof(
+        targets.sort_values("target_valid"),
+        valid_temperatures.rename(columns={"valid": "matched_valid", "tmpf": "lookback_tmpf"}).sort_values("matched_valid"),
+        left_on="target_valid",
+        right_on="matched_valid",
+        direction="nearest",
+        tolerance=LOOKBACK_TOLERANCE,
+    )
+    current = ordered[["_original_index", "tmpf"]]
+    changes = matched.merge(current, on="_original_index", how="left")
+    result = changes["tmpf"].astype(float) - changes["lookback_tmpf"].astype(float)
+    result.index = changes["_original_index"]
+    return result.reindex(frame.index)
 
 
 def _select_snapshot(day_frame: pd.DataFrame, hour_local: int):
