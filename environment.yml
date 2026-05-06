@@ -1,0 +1,16 @@
+name: roboweather
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - joblib
+  - numpy
+  - pandas
+  - pygrib
+  - pytest
+  - requests
+  - scikit-learn=1.5.2
+  - textual
+  - pip
+  - pip:
+      - -e .

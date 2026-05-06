@@ -1,0 +1,10 @@
+.conda/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Runtime/cache files.
+data/cache/*.sqlite-shm
+data/cache/*.sqlite-wal
+data/paper/

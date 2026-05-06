@@ -1,0 +1,13 @@
+city,station,display_name,timezone,latitude,longitude
+New York City,KLGA,LaGuardia Airport,America/New_York,40.7769,-73.8740
+Boston,KBOS,Boston Logan Airport,America/New_York,42.3629,-71.0064
+Washington DC,KDCA,Reagan National Airport,America/New_York,38.8512,-77.0402
+Chicago,KORD,Chicago O'Hare Airport,America/Chicago,41.9786,-87.9048
+Atlanta,KATL,Hartsfield-Jackson Atlanta,America/New_York,33.6367,-84.4281
+Dallas,KDFW,Dallas/Fort Worth Airport,America/Chicago,32.8998,-97.0403
+Dallas,KDAL,Dallas Love Field,America/Chicago,32.8471,-96.8518
+Denver,KDEN,Denver International Airport,America/Denver,39.8561,-104.6737
+Denver,KBKF,Buckley Space Force Base,America/Denver,39.7017,-104.7517
+Los Angeles,KLAX,Los Angeles International,America/Los_Angeles,33.9425,-118.4081
+San Francisco,KSFO,San Francisco International,America/Los_Angeles,37.6213,-122.3790
+Miami,KMIA,Miami International Airport,America/New_York,25.7959,-80.2870
