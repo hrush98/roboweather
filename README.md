@@ -2,6 +2,11 @@
 
 Simple MVP for same-day U.S. daily-high temperature markets.
 
+Reference docs:
+
+- [Changelog](docs/changelog.md)
+- [Modeling and trading decisions](docs/modeling-and-trading-decisions.md)
+
 Scope:
 
 - 5 U.S. stations
@@ -15,6 +20,8 @@ Scope:
 This project is intentionally narrow. It targets:
 
 `P(final daily high >= threshold | live obs + time + forecast guidance)`
+
+Update [docs/changelog.md](docs/changelog.md) for meaningful data, modeling, or trading changes, and use [docs/modeling-and-trading-decisions.md](docs/modeling-and-trading-decisions.md) as the running technical reference for future discussions.
 
 ## Quick start
 
