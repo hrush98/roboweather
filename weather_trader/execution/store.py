@@ -17,6 +17,7 @@ from weather_trader.execution.contracts import (
     Position,
     PositionMark,
     Resolution,
+    ResearchPolicyPosition,
     RiskState,
     Signal,
     StationDateOutcome,
@@ -239,6 +240,27 @@ class ExecutionStore:
                 obs_age_minutes real not null,
                 resolved_at text not null,
                 raw_json text not null
+            );
+
+            create table if not exists research_policy_positions (
+                id integer primary key autoincrement,
+                timestamp text not null,
+                policy_name text not null,
+                station text not null,
+                market_date text not null,
+                scope_key text not null,
+                model_group text not null,
+                strategy_bucket text not null,
+                obs_delay_bucket text not null,
+                selected_market_id text not null,
+                selected_side text not null,
+                selected_bucket text,
+                entry_price real not null,
+                entry_edge real,
+                entry_fair real,
+                source_prediction_snapshot_ids text not null,
+                raw_json text not null,
+                unique(policy_name, station, market_date, scope_key)
             );
             """
         )
@@ -701,6 +723,54 @@ class ExecutionStore:
             ),
         )
         self.connection.commit()
+
+    def insert_research_policy_position(self, position: ResearchPolicyPosition) -> int | None:
+        data = dataclass_to_jsonable(position)
+        cursor = self.connection.execute(
+            """
+            insert or ignore into research_policy_positions (
+                timestamp, policy_name, station, market_date, scope_key, model_group,
+                strategy_bucket, obs_delay_bucket, selected_market_id, selected_side,
+                selected_bucket, entry_price, entry_edge, entry_fair,
+                source_prediction_snapshot_ids, raw_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                position.timestamp,
+                position.policy_name,
+                position.station,
+                data["market_date"],
+                position.scope_key,
+                position.model_group,
+                str(position.strategy_bucket),
+                position.obs_delay_bucket,
+                position.selected_market_id,
+                str(position.selected_side),
+                position.selected_bucket,
+                position.entry_price,
+                position.entry_edge,
+                position.entry_fair,
+                json.dumps(position.source_prediction_snapshot_ids),
+                json.dumps(data, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+        if cursor.rowcount == 0:
+            return None
+        return int(cursor.lastrowid)
+
+    def recent_research_policy_positions(self, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "select id, raw_json from research_policy_positions order by id desc limit ?",
+            (limit,),
+        ).fetchall()
+        positions = []
+        for row in rows:
+            payload = json.loads(row["raw_json"])
+            payload["id"] = int(row["id"])
+            positions.append(payload)
+        return positions
 
     def recent_positions(self, state: str = "OPEN") -> list[dict[str, Any]]:
         rows = self.connection.execute("select raw_json from positions where state = ?", (state,)).fetchall()

@@ -309,6 +309,26 @@ class PredictionResult:
     resolved_at: str
 
 
+@dataclass(frozen=True)
+class ResearchPolicyPosition:
+    timestamp: str
+    policy_name: str
+    station: str
+    market_date: date
+    scope_key: str
+    model_group: str
+    strategy_bucket: StrategyBucket
+    obs_delay_bucket: str
+    selected_market_id: str
+    selected_side: TradeAction
+    selected_bucket: str | None
+    entry_price: float
+    entry_edge: float | None
+    entry_fair: float | None
+    source_prediction_snapshot_ids: list[int]
+    raw_policy: dict[str, Any]
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 

@@ -26,7 +26,7 @@ class RestBookClient:
             response.raise_for_status()
             payload = response.json()
         except requests.RequestException:
-            return {token_id: self.fetch_book(token_id) for token_id in token_ids}
+            return self._fetch_books_individually(token_ids)
 
         books: dict[str, BookSnapshot] = {}
         if isinstance(payload, list):
@@ -37,7 +37,9 @@ class RestBookClient:
 
         for token_id in token_ids:
             if token_id not in books:
-                books[token_id] = self.fetch_book(token_id)
+                book = self._fetch_book_if_available(token_id)
+                if book is not None:
+                    books[token_id] = book
         return books
 
     def fetch_book(self, token_id: str) -> BookSnapshot:
@@ -48,6 +50,20 @@ class RestBookClient:
         )
         response.raise_for_status()
         return parse_book_snapshot(token_id, response.json(), source="rest")
+
+    def _fetch_books_individually(self, token_ids: list[str]) -> dict[str, BookSnapshot]:
+        books: dict[str, BookSnapshot] = {}
+        for token_id in token_ids:
+            book = self._fetch_book_if_available(token_id)
+            if book is not None:
+                books[token_id] = book
+        return books
+
+    def _fetch_book_if_available(self, token_id: str) -> BookSnapshot | None:
+        try:
+            return self.fetch_book(token_id)
+        except requests.RequestException:
+            return None
 
 
 def parse_book_snapshot(token_id: str, payload: dict[str, Any], source: str = "rest") -> BookSnapshot:

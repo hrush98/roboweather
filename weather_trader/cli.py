@@ -64,6 +64,7 @@ from weather_trader.models.diagnostics import (
     validate_same_day_dataset,
 )
 from weather_trader.research.collector import ResearchConfig, run_research_loop
+from weather_trader.research.policies import ResearchPolicyEvaluator
 from weather_trader.research.resolver import ResearchResolver, ResolverConfig
 from weather_trader.stations.iem_asos_client import IEMASOSClient
 from weather_trader.stations.metadata import get_station
@@ -1079,6 +1080,7 @@ def research_loop_command(
             store=store,
             config=ResolverConfig(resolve_after_local_hour=resolve_after_local_hour),
         )
+        policy_evaluator = ResearchPolicyEvaluator(store=store)
         model_paths = [Path(model_path)]
         if threshold_model_path:
             model_paths.append(Path(threshold_model_path))
@@ -1090,6 +1092,7 @@ def research_loop_command(
             max_cycles=max_cycles,
             resolver=resolver,
             resolver_interval_seconds=resolver_interval_seconds,
+            policy_evaluator=policy_evaluator,
         )
     finally:
         store.close()

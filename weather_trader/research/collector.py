@@ -336,6 +336,7 @@ def run_research_loop(
     max_cycles: int | None = None,
     resolver=None,
     resolver_interval_seconds: int = 3600,
+    policy_evaluator=None,
 ) -> None:
     collector = ResearchCollector(store=store, model_paths=model_paths, config=config)
     cycle = 0
@@ -345,12 +346,14 @@ def run_research_loop(
             cycle += 1
             started = time.time()
             result = collector.run_once()
+            policy_positions_written = policy_evaluator.evaluate() if policy_evaluator is not None else 0
             print(
                 {
                     "cycle": cycle,
                     "timestamp": result.engine_state.timestamp,
                     "markets": result.engine_state.discovered_markets,
                     "snapshots_written": result.snapshots_written,
+                    "policy_positions_written": policy_positions_written,
                     "errors": result.engine_state.errors[:5],
                 },
                 flush=True,
