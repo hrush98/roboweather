@@ -12,6 +12,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 from weather_trader.config import CACHE_DIR, PROCESSED_DIR, ensure_directories
 from weather_trader.forecasts.hrrr_archive import HRRRArchiveClient, enrich_dataset_with_hrrr
 from weather_trader.stations.metadata import get_station
@@ -110,7 +114,140 @@ def build_cache(
     cache_hits = 0
     cache_misses = 0
     errors: list[str] = []
-    tasks = [
+    tasks = _snapshot_tasks(
+        snapshots=snapshots,
+        cache_path=cache_path,
+        forecast_stride_hours=forecast_stride_hours,
+        max_forecast_hour=max_forecast_hour,
+    )
+    client = HRRRArchiveClient(
+        cache_path=cache_path,
+        forecast_stride_hours=forecast_stride_hours,
+        max_forecast_hour=max_forecast_hour,
+    )
+    final_cached = 0
+    point_tasks_by_key: dict[str, dict[str, object]] = {}
+    snapshot_tasks_to_materialize: list[dict[str, object]] = []
+    for task in tasks:
+        station = get_station(str(task["station"]))
+        as_of_utc = pd.Timestamp(str(task["snapshot_time_utc"])).to_pydatetime()
+        if client.has_cached_features(station=station, as_of_utc=as_of_utc):
+            final_cached += 1
+            continue
+        snapshot_tasks_to_materialize.append(task)
+        cycle, forecast_hours = client.forecast_plan(station=station, as_of_utc=as_of_utc)
+        for forecast_hour in forecast_hours:
+            key = f"{station.station}|{cycle.isoformat()}|{forecast_hour}"
+            if key in point_tasks_by_key or client.has_cached_point_row(station=station, cycle_utc=cycle, forecast_hour=forecast_hour):
+                continue
+            point_tasks_by_key[key] = {
+                "station": station.station,
+                "cycle_utc": cycle.isoformat(),
+                "forecast_hour": forecast_hour,
+                "cache_path": str(cache_path),
+                "forecast_stride_hours": forecast_stride_hours,
+                "max_forecast_hour": max_forecast_hour,
+            }
+
+    point_tasks = list(point_tasks_by_key.values())
+    print(
+        (
+            f"HRRR cache build starting snapshots={total} final_cached={final_cached} "
+            f"missing_point_rows={len(point_tasks)} workers={workers} cache={cache_path}"
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
+
+    point_started_at = time.monotonic()
+    point_completed = 0
+    point_hits = 0
+    point_fetched = 0
+    if workers == 1:
+        iterator = (_fetch_one_point_row(task) for task in point_tasks)
+        for result in iterator:
+            point_completed, point_hits, point_fetched = _handle_result(
+                result,
+                point_completed,
+                point_hits,
+                point_fetched,
+                errors,
+                len(point_tasks),
+                point_started_at,
+                progress_every,
+                label="HRRR point cache",
+            )
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(_fetch_one_point_row, task) for task in point_tasks]
+            for future in as_completed(futures):
+                point_completed, point_hits, point_fetched = _handle_result(
+                    future.result(),
+                    point_completed,
+                    point_hits,
+                    point_fetched,
+                    errors,
+                    len(point_tasks),
+                    point_started_at,
+                    progress_every,
+                    label="HRRR point cache",
+                )
+
+    materialize_started_at = time.monotonic()
+    completed = final_cached
+    cache_hits = final_cached
+    if workers == 1:
+        iterator = (_materialize_one_snapshot(task) for task in snapshot_tasks_to_materialize)
+        for result in iterator:
+            completed, cache_hits, cache_misses = _handle_result(
+                result,
+                completed,
+                cache_hits,
+                cache_misses,
+                errors,
+                total,
+                materialize_started_at,
+                progress_every,
+                label="HRRR cache",
+            )
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(_materialize_one_snapshot, task) for task in snapshot_tasks_to_materialize]
+            for future in as_completed(futures):
+                completed, cache_hits, cache_misses = _handle_result(
+                    future.result(),
+                    completed,
+                    cache_hits,
+                    cache_misses,
+                    errors,
+                    total,
+                    materialize_started_at,
+                    progress_every,
+                    label="HRRR cache",
+                )
+
+    return {
+        "cache": str(cache_path),
+        "snapshots": total,
+        "completed": completed,
+        "cache_hits": cache_hits,
+        "cache_misses": cache_misses,
+        "point_rows_completed": point_completed,
+        "point_rows_cache_hits": point_hits,
+        "point_rows_fetched": point_fetched,
+        "errors": errors[:20],
+        "workers": workers,
+        "elapsed_minutes": round((time.monotonic() - started_at) / 60.0, 2),
+    }
+
+
+def _snapshot_tasks(
+    snapshots: pd.DataFrame,
+    cache_path: Path,
+    forecast_stride_hours: int,
+    max_forecast_hour: int,
+) -> list[dict[str, object]]:
+    return [
         {
             "station": row.station,
             "snapshot_time_utc": row.snapshot_time_utc.isoformat(),
@@ -120,36 +257,6 @@ def build_cache(
         }
         for row in snapshots.itertuples(index=False)
     ]
-
-    print(
-        f"HRRR cache build starting snapshots={total} workers={workers} cache={cache_path}",
-        file=sys.stderr,
-        flush=True,
-    )
-    if workers == 1:
-        iterator = (_fetch_one_snapshot(task) for task in tasks)
-        for result in iterator:
-            completed, cache_hits, cache_misses = _handle_result(
-                result, completed, cache_hits, cache_misses, errors, total, started_at, progress_every
-            )
-    else:
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(_fetch_one_snapshot, task) for task in tasks]
-            for future in as_completed(futures):
-                completed, cache_hits, cache_misses = _handle_result(
-                    future.result(), completed, cache_hits, cache_misses, errors, total, started_at, progress_every
-                )
-
-    return {
-        "cache": str(cache_path),
-        "snapshots": total,
-        "completed": completed,
-        "cache_hits": cache_hits,
-        "cache_misses": cache_misses,
-        "errors": errors[:20],
-        "workers": workers,
-        "elapsed_minutes": round((time.monotonic() - started_at) / 60.0, 2),
-    }
 
 
 def _handle_result(
@@ -161,6 +268,7 @@ def _handle_result(
     total: int,
     started_at: float,
     progress_every: int,
+    label: str,
 ) -> tuple[int, int, int]:
     completed += 1
     if result["status"] == "cached":
@@ -175,7 +283,7 @@ def _handle_result(
         remaining = (total - completed) / rate if rate else 0.0
         print(
             (
-                f"HRRR cache {completed}/{total} ({completed / total:.1%}) "
+                f"{label} {completed}/{total} ({completed / total:.1%}) "
                 f"hits={cache_hits} fetched={cache_misses} errors={len(errors)} "
                 f"rate={rate:.2f}/s eta_minutes={remaining / 60:.1f}"
             ),
@@ -185,7 +293,31 @@ def _handle_result(
     return completed, cache_hits, cache_misses
 
 
-def _fetch_one_snapshot(task: dict[str, object]) -> dict[str, object]:
+def _fetch_one_point_row(task: dict[str, object]) -> dict[str, object]:
+    try:
+        client = _thread_client(
+            cache_path=Path(str(task["cache_path"])),
+            forecast_stride_hours=int(task["forecast_stride_hours"]),
+            max_forecast_hour=int(task["max_forecast_hour"]),
+        )
+        station = get_station(str(task["station"]))
+        cycle_utc = pd.Timestamp(str(task["cycle_utc"])).to_pydatetime()
+        forecast_hour = int(task["forecast_hour"])
+        if client.has_cached_point_row(station=station, cycle_utc=cycle_utc, forecast_hour=forecast_hour):
+            return {"status": "cached", "station": station.station, "cycle_utc": task["cycle_utc"], "forecast_hour": forecast_hour}
+        client.fetch_point_feature_row(station=station, cycle_utc=cycle_utc, forecast_hour=forecast_hour)
+        return {"status": "fetched", "station": station.station, "cycle_utc": task["cycle_utc"], "forecast_hour": forecast_hour}
+    except Exception as exc:
+        return {
+            "status": "error",
+            "station": task.get("station"),
+            "cycle_utc": task.get("cycle_utc"),
+            "forecast_hour": task.get("forecast_hour"),
+            "error": f"{task.get('station')} {task.get('cycle_utc')} f{task.get('forecast_hour')}: {exc}",
+        }
+
+
+def _materialize_one_snapshot(task: dict[str, object]) -> dict[str, object]:
     try:
         client = _thread_client(
             cache_path=Path(str(task["cache_path"])),

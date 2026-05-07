@@ -12,14 +12,28 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-import pygrib
 import requests
+
+try:
+    import pygrib
+except ModuleNotFoundError:  # pragma: no cover - exercised only in minimal local envs
+    pygrib = None
 
 from weather_trader.forecasts.hrrr_client import _kelvin_to_f, _nearest_index
 from weather_trader.stations.metadata import Station, get_station
 
 
 S3_BASE = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com"
+FEATURE_RECORDS = (
+    ("tmpf", "TMP", "2 m above ground", _kelvin_to_f, False),
+    ("dwpf", "DPT", "2 m above ground", _kelvin_to_f, True),
+    ("rh", "RH", "2 m above ground", None, True),
+    ("u10", "UGRD", "10 m above ground", None, True),
+    ("v10", "VGRD", "10 m above ground", None, True),
+    ("gust_mph", "GUST", "surface", lambda value: value * 2.23694, True),
+    ("tcdc", "TCDC", "entire atmosphere", None, True),
+    ("dswrf", "DSWRF", "surface", None, True),
+)
 
 
 @dataclass(frozen=True)
@@ -50,23 +64,9 @@ class HRRRArchiveClient:
         cached = self._get_cached_features(station=station, as_of_utc=as_of_utc)
         if cached is not None:
             return cached
-        cycle = self._cycle_for_as_of(as_of_utc)
-        current_forecast_hour = max(0, int(np.ceil((as_of_utc - cycle).total_seconds() / 3600)))
-        local_now = as_of_utc.astimezone(ZoneInfo(station.timezone))
-        local_midnight = datetime.combine(
-            local_now.date() + timedelta(days=1),
-            datetime.min.time(),
-            tzinfo=ZoneInfo(station.timezone),
-        )
-        remaining_hours = max(
-            0,
-            int(np.ceil((local_midnight.astimezone(ZoneInfo("UTC")) - as_of_utc).total_seconds() / 3600)),
-        )
-        final_forecast_hour = min(self.max_forecast_hour, current_forecast_hour + remaining_hours)
+        cycle, forecast_hours = self.forecast_plan(station=station, as_of_utc=as_of_utc)
         rows = []
-        forecast_hours = [current_forecast_hour]
-        forecast_hours.extend(range(current_forecast_hour + self.forecast_stride_hours, final_forecast_hour + 1, self.forecast_stride_hours))
-        for forecast_hour in sorted(set(forecast_hours)):
+        for forecast_hour in forecast_hours:
             try:
                 rows.append(self.fetch_point_feature_row(station=station, cycle_utc=cycle, forecast_hour=forecast_hour))
             except (LookupError, requests.HTTPError):
@@ -85,6 +85,28 @@ class HRRRArchiveClient:
         self._set_cached_features(station=station, as_of_utc=as_of_utc, features=features)
         return features
 
+    def forecast_plan(self, station: Station, as_of_utc: datetime) -> tuple[datetime, list[int]]:
+        if as_of_utc.tzinfo is None:
+            raise ValueError("as_of_utc must be timezone-aware")
+        cycle = self._cycle_for_as_of(as_of_utc)
+        current_forecast_hour = max(0, int(np.ceil((as_of_utc - cycle).total_seconds() / 3600)))
+        local_now = as_of_utc.astimezone(ZoneInfo(station.timezone))
+        local_midnight = datetime.combine(
+            local_now.date() + timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=ZoneInfo(station.timezone),
+        )
+        remaining_hours = max(
+            0,
+            int(np.ceil((local_midnight.astimezone(ZoneInfo("UTC")) - as_of_utc).total_seconds() / 3600)),
+        )
+        final_forecast_hour = min(self.max_forecast_hour, current_forecast_hour + remaining_hours)
+        forecast_hours = [current_forecast_hour]
+        forecast_hours.extend(
+            range(current_forecast_hour + self.forecast_stride_hours, final_forecast_hour + 1, self.forecast_stride_hours)
+        )
+        return cycle, sorted(set(forecast_hours))
+
     def fetch_point_tmpf(self, station: Station, cycle_utc: datetime, forecast_hour: int) -> float:
         return self.fetch_point_value(
             station=station,
@@ -96,19 +118,65 @@ class HRRRArchiveClient:
         )
 
     def fetch_point_feature_row(self, station: Station, cycle_utc: datetime, forecast_hour: int) -> dict[str, float]:
+        cached = self._get_cached_point_row(station=station, cycle_utc=cycle_utc, forecast_hour=forecast_hour)
+        if cached is not None:
+            return cached
+        row = self._fetch_point_feature_row_uncached(station=station, cycle_utc=cycle_utc, forecast_hour=forecast_hour)
+        self._set_cached_point_row(station=station, cycle_utc=cycle_utc, forecast_hour=forecast_hour, row=row)
+        return row
+
+    def has_cached_point_row(self, station: Station, cycle_utc: datetime, forecast_hour: int) -> bool:
+        return self._get_cached_point_row(station=station, cycle_utc=cycle_utc, forecast_hour=forecast_hour) is not None
+
+    def _fetch_point_feature_row_uncached(self, station: Station, cycle_utc: datetime, forecast_hour: int) -> dict[str, float]:
+        values = self._fetch_point_feature_values(station=station, cycle_utc=cycle_utc, forecast_hour=forecast_hour)
         row = {
             "forecast_hour": forecast_hour,
-            "tmpf": self.fetch_point_tmpf(station=station, cycle_utc=cycle_utc, forecast_hour=forecast_hour),
-            "dwpf": self.fetch_point_value_optional(station, cycle_utc, forecast_hour, "DPT", "2 m above ground", _kelvin_to_f),
-            "rh": self.fetch_point_value_optional(station, cycle_utc, forecast_hour, "RH", "2 m above ground"),
-            "u10": self.fetch_point_value_optional(station, cycle_utc, forecast_hour, "UGRD", "10 m above ground"),
-            "v10": self.fetch_point_value_optional(station, cycle_utc, forecast_hour, "VGRD", "10 m above ground"),
-            "gust_mph": self.fetch_point_value_optional(station, cycle_utc, forecast_hour, "GUST", "surface", lambda value: value * 2.23694),
-            "tcdc": self.fetch_point_value_optional(station, cycle_utc, forecast_hour, "TCDC", "entire atmosphere"),
-            "dswrf": self.fetch_point_value_optional(station, cycle_utc, forecast_hour, "DSWRF", "surface"),
+            **values,
         }
         row["wind_speed_mph"] = float(np.hypot(row["u10"], row["v10"]) * 2.23694) if pd.notna(row["u10"]) and pd.notna(row["v10"]) else np.nan
         return row
+
+    def _fetch_point_feature_values(self, station: Station, cycle_utc: datetime, forecast_hour: int) -> dict[str, float]:
+        records = self._feature_records(cycle_utc, forecast_hour)
+        if "tmpf" not in records:
+            raise LookupError(f"No HRRR record for {cycle_utc=} {forecast_hour=} variable='TMP' level='2 m above ground'")
+        payloads = [(name, transform, self._download_byte_range(cycle_utc, forecast_hour, record)) for name, record, transform in records.values()]
+        include_grid = station.station not in self._grid_index_cache
+        values: dict[str, float] = {name: np.nan for name, *_ in FEATURE_RECORDS}
+        with NamedTemporaryFile(suffix=".grib2") as handle:
+            for _, _, payload in payloads:
+                handle.write(payload)
+            handle.flush()
+            if pygrib is None:
+                raise RuntimeError("pygrib is required for HRRR archive GRIB decoding")
+            messages = pygrib.open(handle.name)
+            try:
+                for idx, message in enumerate(messages, start=0):
+                    name, transform, _ = payloads[idx]
+                    if include_grid and station.station not in self._grid_index_cache:
+                        data, lats, lons = message.data()
+                        self._grid_index_cache[station.station] = _nearest_index(lats, lons, station.latitude, station.longitude)
+                    else:
+                        data = message.values
+                    lat_idx, lon_idx = self._grid_index_cache[station.station]
+                    value = float(data[lat_idx, lon_idx])
+                    values[name] = float(transform(value)) if transform is not None else value
+            finally:
+                messages.close()
+        return values
+
+    def _feature_records(self, cycle_utc: datetime, forecast_hour: int) -> dict[str, tuple[str, IndexRecord, object]]:
+        index = self._load_index(cycle_utc, forecast_hour)
+        records: dict[str, tuple[str, IndexRecord, object]] = {}
+        for name, variable, level, transform, optional in FEATURE_RECORDS:
+            record = next((item for item in index if item.variable == variable and item.level == level), None)
+            if record is None:
+                if optional:
+                    continue
+                raise LookupError(f"No HRRR record for {cycle_utc=} {forecast_hour=} {variable=} {level=}")
+            records[name] = (name, record, transform)
+        return records
 
     def fetch_point_value_optional(
         self,
@@ -168,6 +236,18 @@ class HRRRArchiveClient:
     def has_cached_features(self, station: Station, as_of_utc: datetime) -> bool:
         return self._get_cached_features(station=station, as_of_utc=as_of_utc) is not None
 
+    def _get_cached_point_row(self, station: Station, cycle_utc: datetime, forecast_hour: int) -> dict[str, float] | None:
+        cache = self._cache()
+        if cache is None:
+            return None
+        return cache.get_point_row(station=station.station, cycle_utc=cycle_utc, forecast_hour=forecast_hour)
+
+    def _set_cached_point_row(self, station: Station, cycle_utc: datetime, forecast_hour: int, row: dict[str, float]) -> None:
+        cache = self._cache()
+        if cache is None:
+            return
+        cache.set_point_row(station=station.station, cycle_utc=cycle_utc, forecast_hour=forecast_hour, row=row)
+
     def _set_cached_features(self, station: Station, as_of_utc: datetime, features: dict[str, float]) -> None:
         cache = self._cache()
         if cache is None:
@@ -201,6 +281,8 @@ class HRRRArchiveClient:
         with NamedTemporaryFile(suffix=".grib2") as handle:
             handle.write(payload)
             handle.flush()
+            if pygrib is None:
+                raise RuntimeError("pygrib is required for HRRR archive GRIB decoding")
             message = pygrib.open(handle.name).message(1)
             if include_grid:
                 data, lats, lons = message.data()
@@ -341,6 +423,18 @@ class HRRRFeatureCache:
             )
             """
         )
+        self.connection.execute(
+            """
+            create table if not exists hrrr_point_rows (
+                cache_key text primary key,
+                station text not null,
+                cycle_utc text not null,
+                forecast_hour integer not null,
+                row_json text not null,
+                created_at text not null default current_timestamp
+            )
+            """
+        )
         self.connection.commit()
 
     def get(
@@ -390,6 +484,35 @@ class HRRRFeatureCache:
         )
         self.connection.commit()
 
+    def get_point_row(self, station: str, cycle_utc: datetime, forecast_hour: int) -> dict[str, float] | None:
+        key = _point_row_cache_key(station, cycle_utc, forecast_hour)
+        row = self.connection.execute(
+            "select row_json from hrrr_point_rows where cache_key = ?",
+            (key,),
+        ).fetchone()
+        if row is None:
+            return None
+        return json.loads(row[0])
+
+    def set_point_row(self, station: str, cycle_utc: datetime, forecast_hour: int, row: dict[str, float]) -> None:
+        key = _point_row_cache_key(station, cycle_utc, forecast_hour)
+        self.connection.execute(
+            """
+            insert or replace into hrrr_point_rows (
+                cache_key, station, cycle_utc, forecast_hour, row_json
+            )
+            values (?, ?, ?, ?, ?)
+            """,
+            (
+                key,
+                station,
+                cycle_utc.isoformat(),
+                forecast_hour,
+                json.dumps(_json_safe_features(row), sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+
 
 def _cache_key(
     station: str,
@@ -408,6 +531,10 @@ def _cache_key(
             "v2",
         ]
     )
+
+
+def _point_row_cache_key(station: str, cycle_utc: datetime, forecast_hour: int) -> str:
+    return "|".join([station, cycle_utc.isoformat(), f"fh={forecast_hour}", "point_v1"])
 
 
 def _json_safe_features(features: dict[str, float]) -> dict[str, float | str | None]:
