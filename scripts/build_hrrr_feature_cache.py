@@ -163,68 +163,36 @@ def build_cache(
     point_completed = 0
     point_hits = 0
     point_fetched = 0
-    if workers == 1:
-        iterator = (_fetch_one_point_row(task) for task in point_tasks)
-        for result in iterator:
-            point_completed, point_hits, point_fetched = _handle_result(
-                result,
-                point_completed,
-                point_hits,
-                point_fetched,
-                errors,
-                len(point_tasks),
-                point_started_at,
-                progress_every,
-                label="HRRR point cache",
-            )
-    else:
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(_fetch_one_point_row, task) for task in point_tasks]
-            for future in as_completed(futures):
-                point_completed, point_hits, point_fetched = _handle_result(
-                    future.result(),
-                    point_completed,
-                    point_hits,
-                    point_fetched,
-                    errors,
-                    len(point_tasks),
-                    point_started_at,
-                    progress_every,
-                    label="HRRR point cache",
-                )
+    point_completed, point_hits, point_fetched = _run_task_batch(
+        tasks=point_tasks,
+        worker_fn=_fetch_one_point_row,
+        completed=point_completed,
+        cache_hits=point_hits,
+        cache_misses=point_fetched,
+        errors=errors,
+        total=len(point_tasks),
+        started_at=point_started_at,
+        progress_every=progress_every,
+        label="HRRR point cache",
+        workers=workers,
+    )
 
     materialize_started_at = time.monotonic()
     completed = final_cached
     cache_hits = final_cached
-    if workers == 1:
-        iterator = (_materialize_one_snapshot(task) for task in snapshot_tasks_to_materialize)
-        for result in iterator:
-            completed, cache_hits, cache_misses = _handle_result(
-                result,
-                completed,
-                cache_hits,
-                cache_misses,
-                errors,
-                total,
-                materialize_started_at,
-                progress_every,
-                label="HRRR cache",
-            )
-    else:
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(_materialize_one_snapshot, task) for task in snapshot_tasks_to_materialize]
-            for future in as_completed(futures):
-                completed, cache_hits, cache_misses = _handle_result(
-                    future.result(),
-                    completed,
-                    cache_hits,
-                    cache_misses,
-                    errors,
-                    total,
-                    materialize_started_at,
-                    progress_every,
-                    label="HRRR cache",
-                )
+    completed, cache_hits, cache_misses = _run_task_batch(
+        tasks=snapshot_tasks_to_materialize,
+        worker_fn=_materialize_one_snapshot,
+        completed=completed,
+        cache_hits=cache_hits,
+        cache_misses=cache_misses,
+        errors=errors,
+        total=total,
+        started_at=materialize_started_at,
+        progress_every=progress_every,
+        label="HRRR cache",
+        workers=workers,
+    )
 
     return {
         "cache": str(cache_path),
@@ -257,6 +225,79 @@ def _snapshot_tasks(
         }
         for row in snapshots.itertuples(index=False)
     ]
+
+
+def _run_task_batch(
+    tasks: list[dict[str, object]],
+    worker_fn,
+    completed: int,
+    cache_hits: int,
+    cache_misses: int,
+    errors: list[str],
+    total: int,
+    started_at: float,
+    progress_every: int,
+    label: str,
+    workers: int,
+) -> tuple[int, int, int]:
+    if workers == 1:
+        try:
+            for task in tasks:
+                completed, cache_hits, cache_misses = _handle_result(
+                    worker_fn(task),
+                    completed,
+                    cache_hits,
+                    cache_misses,
+                    errors,
+                    total,
+                    started_at,
+                    progress_every,
+                    label=label,
+                )
+        except KeyboardInterrupt:
+            print(f"{label} interrupted; completed={completed}/{total}", file=sys.stderr, flush=True)
+            raise
+        return completed, cache_hits, cache_misses
+
+    executor = ThreadPoolExecutor(max_workers=workers)
+    task_iter = iter(tasks)
+    futures = {}
+    try:
+        for _ in range(workers):
+            try:
+                task = next(task_iter)
+            except StopIteration:
+                break
+            futures[executor.submit(worker_fn, task)] = task
+        while futures:
+            future = next(as_completed(tuple(futures)))
+            futures.pop(future)
+            completed, cache_hits, cache_misses = _handle_result(
+                future.result(),
+                completed,
+                cache_hits,
+                cache_misses,
+                errors,
+                total,
+                started_at,
+                progress_every,
+                label=label,
+            )
+            try:
+                task = next(task_iter)
+            except StopIteration:
+                pass
+            else:
+                futures[executor.submit(worker_fn, task)] = task
+    except KeyboardInterrupt:
+        for future in futures:
+            future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+        print(f"{label} interrupted; completed={completed}/{total}", file=sys.stderr, flush=True)
+        raise
+    else:
+        executor.shutdown(wait=True)
+    return completed, cache_hits, cache_misses
 
 
 def _handle_result(
