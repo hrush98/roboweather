@@ -772,6 +772,62 @@ class ExecutionStore:
             positions.append(payload)
         return positions
 
+    def live_research_policy_positions(self, limit: int = 1000) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            with latest_books as (
+                select bs.token_id, bs.best_bid, bs.best_ask, bs.timestamp
+                from book_snapshots bs
+                join (
+                    select token_id, max(id) as id
+                    from book_snapshots
+                    group by token_id
+                ) latest on latest.id = bs.id
+            )
+            select
+                rpp.id,
+                rpp.timestamp,
+                rpp.policy_name,
+                case
+                    when rpp.policy_name like 'max_so_far%' then 'max_so_far'
+                    else rpp.model_group
+                end as model_group,
+                rpp.station,
+                rpp.market_date,
+                rpp.scope_key,
+                rpp.strategy_bucket,
+                rpp.obs_delay_bucket,
+                rpp.selected_market_id,
+                rpp.selected_side,
+                rpp.selected_bucket,
+                rpp.entry_price,
+                rpp.entry_edge,
+                rpp.entry_fair,
+                m.yes_token_id,
+                m.no_token_id,
+                case
+                    when rpp.selected_side = 'BUY_YES' then m.yes_token_id
+                    else m.no_token_id
+                end as selected_token_id,
+                lb.best_bid as current_bid,
+                lb.timestamp as current_book_time,
+                case
+                    when lb.best_bid is null then null
+                    else lb.best_bid - rpp.entry_price
+                end as unrealized_pnl
+            from research_policy_positions rpp
+            join markets m on m.market_id = rpp.selected_market_id
+            left join latest_books lb on lb.token_id = case
+                when rpp.selected_side = 'BUY_YES' then m.yes_token_id
+                else m.no_token_id
+            end
+            order by rpp.timestamp desc, rpp.id desc
+            limit ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def recent_positions(self, state: str = "OPEN") -> list[dict[str, Any]]:
         rows = self.connection.execute("select raw_json from positions where state = ?", (state,)).fetchall()
         return [json.loads(row["raw_json"]) for row in rows]
@@ -890,6 +946,73 @@ class ExecutionStore:
                     when '30m' then 30
                     else 999
                 end
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def policy_performance_summary(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            with joined as (
+                select
+                    rpp.id,
+                    rpp.policy_name,
+                    case
+                        when rpp.policy_name like 'max_so_far%' then 'max_so_far'
+                        else rpp.model_group
+                    end as model_group,
+                    rpp.strategy_bucket,
+                    rpp.obs_delay_bucket,
+                    rpp.station,
+                    rpp.market_date,
+                    rpp.entry_price as policy_entry_price,
+                    rpp.entry_edge,
+                    pr.correct,
+                    pr.paper_pnl
+                from research_policy_positions rpp
+                join json_each(rpp.source_prediction_snapshot_ids) je
+                join prediction_results pr on pr.prediction_snapshot_id = je.value
+            ),
+            per_pos as (
+                select
+                    id,
+                    policy_name,
+                    model_group,
+                    strategy_bucket,
+                    obs_delay_bucket,
+                    station,
+                    market_date,
+                    policy_entry_price,
+                    entry_edge,
+                    max(correct) as correct,
+                    avg(paper_pnl) as paper_pnl
+                from joined
+                group by
+                    id,
+                    policy_name,
+                    model_group,
+                    strategy_bucket,
+                    obs_delay_bucket,
+                    station,
+                    market_date,
+                    policy_entry_price,
+                    entry_edge
+            )
+            select
+                policy_name,
+                model_group,
+                strategy_bucket,
+                obs_delay_bucket,
+                count(*) as resolved_positions,
+                count(distinct station || market_date) as station_days,
+                sum(case when correct = 1 then 1 else 0 end) as wins,
+                avg(correct) as hit_rate,
+                sum(paper_pnl) as total_pnl,
+                avg(policy_entry_price) as avg_entry,
+                avg(entry_edge) as avg_edge
+            from per_pos
+            group by policy_name, model_group, strategy_bucket, obs_delay_bucket
+            order by total_pnl desc, policy_name
             """
         ).fetchall()
         return [dict(row) for row in rows]
