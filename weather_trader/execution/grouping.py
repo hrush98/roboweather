@@ -158,8 +158,6 @@ class StationDateDecisionEngine:
                 elif strategy_bucket == StrategyBucket.TAIL:
                     action, fair, edge, book = _best_side(context, StrategyBucket.TAIL)
                 elif strategy_bucket == StrategyBucket.MAX_SO_FAR:
-                    fair = 1.0
-                    edge = fair - context.signal.yes_ask if context.signal.yes_ask is not None else None
                     apply_hrrr_veto = False
 
                 decision = self.decision_engine.candidate_for_strategy(
@@ -199,8 +197,8 @@ class StationDateDecisionEngine:
                     context.signal,
                     decision,
                     selected=decision.action != TradeAction.SKIP,
-                    fair_yes=fair if is_max_so_far_selected else None,
-                    edge_yes=edge if is_max_so_far_selected else None,
+                    fair_yes=fair if is_max_so_far_selected and fair != context.signal.fair_yes else None,
+                    edge_yes=edge if is_max_so_far_selected and edge != context.signal.edge_yes else None,
                 )
             )
 

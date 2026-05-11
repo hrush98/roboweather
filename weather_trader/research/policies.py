@@ -9,8 +9,20 @@ from weather_trader.execution.contracts import ResearchPolicyPosition, StrategyB
 from weather_trader.execution.store import ExecutionStore
 
 
-DYNAMIC_MODEL = "dynamic_bucket_obs_2022_2025"
-MVP_MODEL = "mvp_obs_corrected"
+LEGACY_DYNAMIC_MODEL = "dynamic_bucket_obs_2022_2025"
+LEGACY_MVP_MODEL = "mvp_obs_corrected"
+DYNAMIC_MODEL = "dynamic_bucket_pm_active_us12_obs_2022_2025"
+MVP_MODEL = "mvp_pm_active_us12_obs_2022_2025"
+MODEL_PAIRS = (
+    ("legacy_dynamic_mvp", LEGACY_DYNAMIC_MODEL, LEGACY_MVP_MODEL, "consensus_dynamic_mvp"),
+    ("pm_active_us12_dynamic_mvp", DYNAMIC_MODEL, MVP_MODEL, "consensus_pm_active_us12_dynamic_mvp"),
+)
+MODEL_PAIRS_BY_NAME = {pair_name: pair for pair_name, *pair in MODEL_PAIRS}
+MODEL_PAIRS_BY_MODEL = {
+    model_name: (pair_name, dynamic_model, mvp_model, consensus_name)
+    for pair_name, dynamic_model, mvp_model, consensus_name in MODEL_PAIRS
+    for model_name in (dynamic_model, mvp_model)
+}
 
 
 @dataclass(frozen=True)
@@ -19,24 +31,56 @@ class ResearchPolicySpec:
     source: str
     strategy_bucket: StrategyBucket | None = None
     model_name: str | None = None
+    model_group: str | None = None
     obs_delay_bucket: str | None = None
     scope_by_strategy: bool = False
 
 
 POLICIES: tuple[ResearchPolicySpec, ...] = (
-    ResearchPolicySpec("consensus_hc_first", "consensus", StrategyBucket.HIGH_CONVICTION),
-    ResearchPolicySpec("consensus_hc_10m_first", "consensus", StrategyBucket.HIGH_CONVICTION, obs_delay_bucket="10m"),
-    ResearchPolicySpec("consensus_hc_15m_first", "consensus", StrategyBucket.HIGH_CONVICTION, obs_delay_bucket="15m"),
-    ResearchPolicySpec("consensus_best_15m_first", "consensus", StrategyBucket.BEST_BUCKET, obs_delay_bucket="15m"),
-    ResearchPolicySpec("consensus_per_strategy_first", "consensus", scope_by_strategy=True),
-    ResearchPolicySpec("mvp_hc_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=MVP_MODEL),
-    ResearchPolicySpec("mvp_hc_10m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=MVP_MODEL, obs_delay_bucket="10m"),
-    ResearchPolicySpec("mvp_hc_15m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=MVP_MODEL, obs_delay_bucket="15m"),
-    ResearchPolicySpec("mvp_best_15m_first", "model", StrategyBucket.BEST_BUCKET, model_name=MVP_MODEL, obs_delay_bucket="15m"),
-    ResearchPolicySpec("dynamic_hc_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=DYNAMIC_MODEL),
-    ResearchPolicySpec("dynamic_hc_10m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=DYNAMIC_MODEL, obs_delay_bucket="10m"),
-    ResearchPolicySpec("dynamic_hc_15m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=DYNAMIC_MODEL, obs_delay_bucket="15m"),
-    ResearchPolicySpec("dynamic_best_15m_first", "model", StrategyBucket.BEST_BUCKET, model_name=DYNAMIC_MODEL, obs_delay_bucket="15m"),
+    ResearchPolicySpec("pm_us12_consensus_hc_first", "consensus", StrategyBucket.HIGH_CONVICTION, model_group="pm_active_us12_dynamic_mvp"),
+    ResearchPolicySpec(
+        "pm_us12_consensus_hc_10m_first",
+        "consensus",
+        StrategyBucket.HIGH_CONVICTION,
+        model_group="pm_active_us12_dynamic_mvp",
+        obs_delay_bucket="10m",
+    ),
+    ResearchPolicySpec(
+        "pm_us12_consensus_hc_15m_first",
+        "consensus",
+        StrategyBucket.HIGH_CONVICTION,
+        model_group="pm_active_us12_dynamic_mvp",
+        obs_delay_bucket="15m",
+    ),
+    ResearchPolicySpec(
+        "pm_us12_consensus_best_15m_first",
+        "consensus",
+        StrategyBucket.BEST_BUCKET,
+        model_group="pm_active_us12_dynamic_mvp",
+        obs_delay_bucket="15m",
+    ),
+    ResearchPolicySpec("pm_us12_consensus_per_strategy_first", "consensus", model_group="pm_active_us12_dynamic_mvp", scope_by_strategy=True),
+    ResearchPolicySpec("pm_us12_mvp_hc_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=MVP_MODEL),
+    ResearchPolicySpec("pm_us12_mvp_hc_10m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=MVP_MODEL, obs_delay_bucket="10m"),
+    ResearchPolicySpec("pm_us12_mvp_hc_15m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=MVP_MODEL, obs_delay_bucket="15m"),
+    ResearchPolicySpec("pm_us12_mvp_best_15m_first", "model", StrategyBucket.BEST_BUCKET, model_name=MVP_MODEL, obs_delay_bucket="15m"),
+    ResearchPolicySpec("pm_us12_dynamic_hc_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=DYNAMIC_MODEL),
+    ResearchPolicySpec("pm_us12_dynamic_hc_10m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=DYNAMIC_MODEL, obs_delay_bucket="10m"),
+    ResearchPolicySpec("pm_us12_dynamic_hc_15m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=DYNAMIC_MODEL, obs_delay_bucket="15m"),
+    ResearchPolicySpec("pm_us12_dynamic_best_15m_first", "model", StrategyBucket.BEST_BUCKET, model_name=DYNAMIC_MODEL, obs_delay_bucket="15m"),
+    ResearchPolicySpec("consensus_hc_first", "consensus", StrategyBucket.HIGH_CONVICTION, model_group="legacy_dynamic_mvp"),
+    ResearchPolicySpec("consensus_hc_10m_first", "consensus", StrategyBucket.HIGH_CONVICTION, model_group="legacy_dynamic_mvp", obs_delay_bucket="10m"),
+    ResearchPolicySpec("consensus_hc_15m_first", "consensus", StrategyBucket.HIGH_CONVICTION, model_group="legacy_dynamic_mvp", obs_delay_bucket="15m"),
+    ResearchPolicySpec("consensus_best_15m_first", "consensus", StrategyBucket.BEST_BUCKET, model_group="legacy_dynamic_mvp", obs_delay_bucket="15m"),
+    ResearchPolicySpec("consensus_per_strategy_first", "consensus", model_group="legacy_dynamic_mvp", scope_by_strategy=True),
+    ResearchPolicySpec("mvp_hc_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LEGACY_MVP_MODEL),
+    ResearchPolicySpec("mvp_hc_10m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LEGACY_MVP_MODEL, obs_delay_bucket="10m"),
+    ResearchPolicySpec("mvp_hc_15m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LEGACY_MVP_MODEL, obs_delay_bucket="15m"),
+    ResearchPolicySpec("mvp_best_15m_first", "model", StrategyBucket.BEST_BUCKET, model_name=LEGACY_MVP_MODEL, obs_delay_bucket="15m"),
+    ResearchPolicySpec("dynamic_hc_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LEGACY_DYNAMIC_MODEL),
+    ResearchPolicySpec("dynamic_hc_10m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LEGACY_DYNAMIC_MODEL, obs_delay_bucket="10m"),
+    ResearchPolicySpec("dynamic_hc_15m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LEGACY_DYNAMIC_MODEL, obs_delay_bucket="15m"),
+    ResearchPolicySpec("dynamic_best_15m_first", "model", StrategyBucket.BEST_BUCKET, model_name=LEGACY_DYNAMIC_MODEL, obs_delay_bucket="15m"),
     ResearchPolicySpec("max_so_far_first", "max_so_far", StrategyBucket.MAX_SO_FAR),
     ResearchPolicySpec("max_so_far_10m_first", "max_so_far", StrategyBucket.MAX_SO_FAR, obs_delay_bucket="10m"),
     ResearchPolicySpec("max_so_far_15m_first", "max_so_far", StrategyBucket.MAX_SO_FAR, obs_delay_bucket="15m"),
@@ -83,9 +127,11 @@ class ResearchPolicyEvaluator:
             if item.get("strategy_bucket") == str(StrategyBucket.MAX_SO_FAR):
                 continue
             model_name = str(item.get("model_name") or "")
-            if model_name not in {DYNAMIC_MODEL, MVP_MODEL}:
+            if model_name not in MODEL_PAIRS_BY_MODEL:
                 continue
+            pair_name, _, _, _ = MODEL_PAIRS_BY_MODEL[model_name]
             key = (
+                pair_name,
                 item.get("station"),
                 item.get("market_date"),
                 item.get("obs_delay_bucket"),
@@ -97,9 +143,11 @@ class ResearchPolicyEvaluator:
             by_key.setdefault(key, {})[model_name] = item
 
         rows: list[dict[str, Any]] = []
-        for pair in by_key.values():
-            dynamic = pair.get(DYNAMIC_MODEL)
-            mvp = pair.get(MVP_MODEL)
+        for key, pair in by_key.items():
+            pair_name = str(key[0])
+            dynamic_model, mvp_model, consensus_name = MODEL_PAIRS_BY_NAME[pair_name]
+            dynamic = pair.get(dynamic_model)
+            mvp = pair.get(mvp_model)
             if dynamic is None or mvp is None:
                 continue
             edge_values = [_float_or_none(dynamic.get("selected_edge")), _float_or_none(mvp.get("selected_edge"))]
@@ -109,7 +157,7 @@ class ResearchPolicyEvaluator:
                     **dynamic,
                     "id": min(int(dynamic["id"]), int(mvp["id"])),
                     "timestamp": max(str(dynamic.get("timestamp")), str(mvp.get("timestamp"))),
-                    "model_name": "consensus_dynamic_mvp",
+                    "model_name": consensus_name,
                     "selected_edge": _mean_present(edge_values),
                     "selected_fair": _mean_present(fair_values),
                     "source_prediction_snapshot_ids": [int(dynamic["id"]), int(mvp["id"])],
@@ -118,6 +166,7 @@ class ResearchPolicyEvaluator:
                         "mvp_snapshot_id": int(mvp["id"]),
                         "dynamic_edge": dynamic.get("selected_edge"),
                         "mvp_edge": mvp.get("selected_edge"),
+                        "model_group": pair_name,
                     },
                 }
             )
@@ -134,6 +183,10 @@ class ResearchPolicyEvaluator:
         for item in source_rows:
             if policy.source == "model" and item.get("model_name") != policy.model_name:
                 continue
+            if policy.source == "consensus" and policy.model_group is not None:
+                raw_policy = item.get("raw_policy") or {}
+                if raw_policy.get("model_group") != policy.model_group:
+                    continue
             if policy.source == "max_so_far" and item.get("strategy_bucket") != str(StrategyBucket.MAX_SO_FAR):
                 continue
             if policy.source != "max_so_far" and item.get("strategy_bucket") == str(StrategyBucket.MAX_SO_FAR):

@@ -56,6 +56,19 @@ def test_research_policy_registry_tracks_expected_policies() -> None:
     names = {policy.name for policy in POLICIES}
 
     assert {
+        "pm_us12_consensus_hc_first",
+        "pm_us12_consensus_hc_10m_first",
+        "pm_us12_consensus_hc_15m_first",
+        "pm_us12_consensus_best_15m_first",
+        "pm_us12_consensus_per_strategy_first",
+        "pm_us12_mvp_hc_first",
+        "pm_us12_mvp_hc_10m_first",
+        "pm_us12_mvp_hc_15m_first",
+        "pm_us12_mvp_best_15m_first",
+        "pm_us12_dynamic_hc_first",
+        "pm_us12_dynamic_hc_10m_first",
+        "pm_us12_dynamic_hc_15m_first",
+        "pm_us12_dynamic_best_15m_first",
         "consensus_hc_first",
         "consensus_hc_10m_first",
         "consensus_hc_15m_first",

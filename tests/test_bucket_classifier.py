@@ -9,10 +9,16 @@ import pandas as pd
 import pytest
 
 from weather_trader.models.bucket_classifier import (
+    BucketModelConfig,
     LadderConfig,
+    build_bucket_validation_predictions,
+    build_grouped_metrics,
     build_threshold_bucket_validation_predictions,
     build_synthetic_bucket_dataset,
     normalize_grouped_probabilities,
+    train_bucket_classifier,
+    train_catboost_bucket_classifier,
+    tune_bucket_model_configs,
 )
 from weather_trader.models.high_regressor import build_regression_bucket_validation_predictions
 
@@ -173,6 +179,75 @@ def test_train_bucket_model_cli_writes_artifact_and_reports(tmp_path) -> None:
     assert (report_dir / "ladder_predictions.csv").exists()
     assert (report_dir / "bucket_calibration.csv").exists()
     assert (report_dir / "heuristic_comparison.csv").exists()
+    assert (report_dir / "window_metrics.csv").exists()
+
+
+def test_tune_bucket_model_configs_returns_ranked_sigmoid_and_isotonic_rows() -> None:
+    dataset = pd.DataFrame(_sample_training_rows())
+
+    results = tune_bucket_model_configs(
+        dataset,
+        validation_year=2025,
+        configs=[
+            BucketModelConfig(name="tiny_sigmoid", max_iter=20, calibration_method="sigmoid"),
+            BucketModelConfig(name="tiny_isotonic", max_iter=20, calibration_method="isotonic"),
+        ],
+    )
+
+    assert set(results["calibration_method"]) == {"sigmoid", "isotonic"}
+    assert results["grouped_brier_score"].is_monotonic_increasing
+    assert {"grouped_log_loss", "top_bucket_accuracy"}.issubset(results.columns)
+
+
+def test_early_window_training_excludes_later_hours() -> None:
+    rows = _sample_training_rows()
+    rows.extend(_sample_training_rows(hour_local=10, day_offset=10))
+    dataset = pd.DataFrame(rows)
+
+    artifacts = train_bucket_classifier(dataset, validation_year=2025, hour_local_max=10)
+
+    early_snapshots = (
+        dataset.loc[dataset["hour_local"] <= 10]
+        .assign(local_date=lambda frame: pd.to_datetime(frame["local_date"]))
+        .loc[lambda frame: frame["local_date"].dt.year < 2025, ["station", "local_date", "snapshot_time_local"]]
+        .drop_duplicates()
+    )
+    assert artifacts.train_rows == len(early_snapshots) * 9
+
+
+def test_catboost_missing_dependency_has_clear_message(monkeypatch) -> None:
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "catboost":
+            raise ModuleNotFoundError("No module named 'catboost'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(ModuleNotFoundError, match="CatBoost is not installed"):
+        train_catboost_bucket_classifier(pd.DataFrame(_sample_training_rows()), validation_year=2025)
+
+
+def test_catboost_bucket_predictions_normalize_and_match_metric_schema() -> None:
+    pytest.importorskip("catboost")
+    dataset = pd.DataFrame(_sample_training_rows())
+
+    artifacts = train_catboost_bucket_classifier(dataset, validation_year=2025)
+    predictions = build_bucket_validation_predictions(
+        dataset=dataset,
+        model=artifacts.model,
+        feature_columns=artifacts.feature_columns,
+        validation_year=2025,
+        ladder_config=artifacts.ladder_config,
+    )
+    metrics = build_grouped_metrics(predictions)
+
+    grouped_sum = predictions.groupby(["station", "local_date", "snapshot_time_local", "synthetic_ladder_id"])["normalized_probability"].sum()
+    assert grouped_sum.tolist() == pytest.approx([1.0] * len(grouped_sum))
+    assert {"grouped_log_loss", "grouped_brier_score", "top_bucket_accuracy"}.issubset(metrics)
 
 
 class _ThresholdLookupModel:
@@ -202,7 +277,7 @@ def _candidate(station: str, local_date: str, ladder_id: str, raw_probability: f
     }
 
 
-def _sample_training_rows() -> list[dict[str, object]]:
+def _sample_training_rows(hour_local: int = 14, day_offset: int = 0) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     specs = [
         ("KAAA", "2024-07-01", 79.5, 78.0),
@@ -215,8 +290,9 @@ def _sample_training_rows() -> list[dict[str, object]]:
         ("KBBB", "2025-07-01", 73.5, 71.0),
     ]
     for station, local_date, final_high, current_temp in specs:
-        rows.append(_source_row(station, local_date, final_high, current_temp, threshold=final_high, target=1))
-        rows.append(_source_row(station, local_date, final_high, current_temp, threshold=final_high + 2.0, target=0))
+        shifted_date = (pd.Timestamp(local_date) + pd.Timedelta(days=day_offset)).strftime("%Y-%m-%d")
+        rows.append(_source_row(station, shifted_date, final_high, current_temp, threshold=final_high, target=1, hour_local=hour_local))
+        rows.append(_source_row(station, shifted_date, final_high, current_temp, threshold=final_high + 2.0, target=0, hour_local=hour_local))
     return rows
 
 
@@ -228,6 +304,7 @@ def _source_row(
     max_so_far: float | None = None,
     threshold: float | None = None,
     target: int = 1,
+    hour_local: int = 14,
 ) -> dict[str, object]:
     max_so_far = current_temp if max_so_far is None else max_so_far
     threshold = final_high if threshold is None else threshold
@@ -236,8 +313,8 @@ def _source_row(
         "city": station,
         "timezone": "America/New_York",
         "local_date": local_date,
-        "snapshot_time_local": f"{local_date} 14:00:00+00:00",
-        "hour_local": 14,
+        "snapshot_time_local": f"{local_date} {hour_local:02d}:00:00+00:00",
+        "hour_local": hour_local,
         "day_of_year": pd.Timestamp(local_date).dayofyear,
         "current_temp": current_temp,
         "max_temp_so_far": max_so_far,

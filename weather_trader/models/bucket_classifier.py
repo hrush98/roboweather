@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import joblib
 import numpy as np
@@ -60,12 +61,55 @@ class LadderConfig:
 
 @dataclass(frozen=True)
 class BucketTrainingArtifacts:
-    model: CalibratedClassifierCV
+    model: Any
     train_rows: int
     validation_rows: int
     metrics: dict[str, float]
     feature_columns: list[str]
     ladder_config: LadderConfig
+
+
+@dataclass(frozen=True)
+class BucketModelConfig:
+    name: str
+    learning_rate: float = 0.05
+    max_depth: int | None = 5
+    max_iter: int = 250
+    min_samples_leaf: int = 20
+    l2_regularization: float = 0.0
+    calibration_method: str = "sigmoid"
+
+
+DEFAULT_BUCKET_MODEL_CONFIG = BucketModelConfig(name="current_sigmoid")
+BUCKET_TUNING_CONFIGS = [
+    DEFAULT_BUCKET_MODEL_CONFIG,
+    BucketModelConfig(name="current_isotonic", calibration_method="isotonic"),
+    BucketModelConfig(name="shallow_leaf50_sigmoid", max_depth=4, min_samples_leaf=50),
+    BucketModelConfig(name="shallow_leaf50_isotonic", max_depth=4, min_samples_leaf=50, calibration_method="isotonic"),
+    BucketModelConfig(name="depth5_leaf50_sigmoid", min_samples_leaf=50),
+    BucketModelConfig(name="depth5_leaf50_isotonic", min_samples_leaf=50, calibration_method="isotonic"),
+    BucketModelConfig(name="slow_depth4_leaf50_sigmoid", learning_rate=0.03, max_depth=4, max_iter=500, min_samples_leaf=50, l2_regularization=0.05),
+    BucketModelConfig(
+        name="slow_depth4_leaf50_isotonic",
+        learning_rate=0.03,
+        max_depth=4,
+        max_iter=500,
+        min_samples_leaf=50,
+        l2_regularization=0.05,
+        calibration_method="isotonic",
+    ),
+    BucketModelConfig(name="slow_depth5_leaf30_sigmoid", learning_rate=0.03, max_iter=500, min_samples_leaf=30, l2_regularization=0.05),
+    BucketModelConfig(
+        name="slow_depth5_leaf30_isotonic",
+        learning_rate=0.03,
+        max_iter=500,
+        min_samples_leaf=30,
+        l2_regularization=0.05,
+        calibration_method="isotonic",
+    ),
+    BucketModelConfig(name="regularized_depth5_leaf50_isotonic", min_samples_leaf=50, l2_regularization=0.1, calibration_method="isotonic"),
+    BucketModelConfig(name="deeper_leaf50_isotonic", max_depth=6, min_samples_leaf=50, calibration_method="isotonic"),
+]
 
 
 def build_synthetic_bucket_dataset(
@@ -105,9 +149,12 @@ def train_bucket_classifier(
     dataset: pd.DataFrame,
     validation_year: int = 2025,
     ladder_config: LadderConfig | None = None,
+    model_config: BucketModelConfig = DEFAULT_BUCKET_MODEL_CONFIG,
+    hour_local_max: int | None = None,
 ) -> BucketTrainingArtifacts:
     config = ladder_config or LadderConfig()
-    candidates = build_synthetic_bucket_dataset(dataset, config)
+    filtered_dataset = _filter_source_dataset(dataset, hour_local_max=hour_local_max)
+    candidates = build_synthetic_bucket_dataset(filtered_dataset, config)
     candidates["local_date"] = pd.to_datetime(candidates["local_date"])
     train = candidates.loc[candidates["local_date"].dt.year < validation_year].copy()
     validation = candidates.loc[candidates["local_date"].dt.year == validation_year].copy()
@@ -140,20 +187,21 @@ def train_bucket_classifier(
             (
                 "classifier",
                 HistGradientBoostingClassifier(
-                    learning_rate=0.05,
-                    max_depth=5,
-                    max_iter=250,
-                    min_samples_leaf=20,
+                    learning_rate=model_config.learning_rate,
+                    max_depth=model_config.max_depth,
+                    max_iter=model_config.max_iter,
+                    min_samples_leaf=model_config.min_samples_leaf,
+                    l2_regularization=model_config.l2_regularization,
                     random_state=42,
                     categorical_features=categorical_features,
                 ),
             ),
         ]
     )
-    calibrated = CalibratedClassifierCV(estimator=base_model, method="sigmoid", cv=_calibration_folds(train["target"]))
+    calibrated = CalibratedClassifierCV(estimator=base_model, method=model_config.calibration_method, cv=_calibration_folds(train["target"]))
     calibrated.fit(train[feature_columns], train["target"].astype(int))
     predictions = build_bucket_validation_predictions(
-        dataset=dataset,
+        dataset=filtered_dataset,
         model=calibrated,
         feature_columns=feature_columns,
         validation_year=validation_year,
@@ -162,6 +210,93 @@ def train_bucket_classifier(
     metrics = build_grouped_metrics(predictions)
     return BucketTrainingArtifacts(
         model=calibrated,
+        train_rows=len(train),
+        validation_rows=len(validation),
+        metrics=metrics,
+        feature_columns=feature_columns,
+        ladder_config=config,
+    )
+
+
+def tune_bucket_model_configs(
+    dataset: pd.DataFrame,
+    validation_year: int = 2025,
+    ladder_config: LadderConfig | None = None,
+    configs: list[BucketModelConfig] | None = None,
+    hour_local_max: int | None = None,
+) -> pd.DataFrame:
+    rows = []
+    for config in configs or BUCKET_TUNING_CONFIGS:
+        artifacts = train_bucket_classifier(
+            dataset=dataset,
+            validation_year=validation_year,
+            ladder_config=ladder_config,
+            model_config=config,
+            hour_local_max=hour_local_max,
+        )
+        rows.append(
+            {
+                "config": config.name,
+                "learning_rate": config.learning_rate,
+                "max_depth": config.max_depth,
+                "max_iter": config.max_iter,
+                "min_samples_leaf": config.min_samples_leaf,
+                "l2_regularization": config.l2_regularization,
+                "calibration_method": config.calibration_method,
+                "train_rows": artifacts.train_rows,
+                "validation_rows": artifacts.validation_rows,
+                **artifacts.metrics,
+            }
+        )
+    return pd.DataFrame(rows).sort_values(["grouped_brier_score", "grouped_log_loss"], ascending=True).reset_index(drop=True)
+
+
+def train_catboost_bucket_classifier(
+    dataset: pd.DataFrame,
+    validation_year: int = 2025,
+    ladder_config: LadderConfig | None = None,
+    hour_local_max: int | None = None,
+) -> BucketTrainingArtifacts:
+    try:
+        from catboost import CatBoostClassifier
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError("CatBoost is not installed. Install catboost in the experiment environment before running train-catboost-bucket-model.") from exc
+
+    config = ladder_config or LadderConfig()
+    filtered_dataset = _filter_source_dataset(dataset, hour_local_max=hour_local_max)
+    candidates = build_synthetic_bucket_dataset(filtered_dataset, config)
+    candidates["local_date"] = pd.to_datetime(candidates["local_date"])
+    train = candidates.loc[candidates["local_date"].dt.year < validation_year].copy()
+    validation = candidates.loc[candidates["local_date"].dt.year == validation_year].copy()
+    if train.empty or validation.empty:
+        raise ValueError("Need non-empty train and validation sets under chronological split")
+
+    feature_columns = _select_active_feature_columns(train)
+    cat_columns = [column for column in CAT_COLUMNS if column in feature_columns]
+    for column in cat_columns:
+        train[column] = train[column].fillna("__missing__").astype(str)
+        validation[column] = validation[column].fillna("__missing__").astype(str)
+    model = CatBoostClassifier(
+        loss_function="Logloss",
+        iterations=300,
+        learning_rate=0.05,
+        depth=6,
+        l2_leaf_reg=3.0,
+        random_seed=42,
+        verbose=False,
+        allow_writing_files=False,
+    )
+    model.fit(train[feature_columns], train["target"].astype(int), cat_features=cat_columns)
+    predictions = build_bucket_validation_predictions(
+        dataset=filtered_dataset,
+        model=model,
+        feature_columns=feature_columns,
+        validation_year=validation_year,
+        ladder_config=config,
+    )
+    metrics = build_grouped_metrics(predictions)
+    return BucketTrainingArtifacts(
+        model=model,
         train_rows=len(train),
         validation_rows=len(validation),
         metrics=metrics,
@@ -186,6 +321,22 @@ def save_bucket_artifacts(artifacts: BucketTrainingArtifacts, output_path: Path)
     )
 
 
+def save_catboost_bucket_artifacts(artifacts: BucketTrainingArtifacts, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(
+        {
+            "model_type": "catboost_bucket",
+            "model": artifacts.model,
+            "train_rows": artifacts.train_rows,
+            "validation_rows": artifacts.validation_rows,
+            "metrics": artifacts.metrics,
+            "feature_columns": artifacts.feature_columns,
+            "ladder_config": asdict(artifacts.ladder_config),
+        },
+        output_path,
+    )
+
+
 def build_bucket_validation_predictions(
     dataset: pd.DataFrame,
     model,
@@ -198,6 +349,9 @@ def build_bucket_validation_predictions(
     validation = candidates.loc[candidates["local_date"].dt.year == validation_year].copy()
     if validation.empty:
         raise ValueError(f"No validation rows for {validation_year}")
+    for column in CAT_COLUMNS:
+        if column in feature_columns and column in validation:
+            validation[column] = validation[column].fillna("__missing__").astype(str)
     validation["raw_probability"] = model.predict_proba(validation[feature_columns])[:, 1]
     validation["normalized_probability"] = normalize_grouped_probabilities(validation, "raw_probability")
     validation["error"] = validation["normalized_probability"] - validation["target"]
@@ -518,6 +672,14 @@ def _select_active_feature_columns(frame: pd.DataFrame) -> list[str]:
         elif column in frame and frame[column].notna().any():
             active.append(column)
     return active
+
+
+def _filter_source_dataset(dataset: pd.DataFrame, hour_local_max: int | None = None) -> pd.DataFrame:
+    if hour_local_max is None:
+        return dataset
+    if "hour_local" not in dataset:
+        raise ValueError("hour_local_max requires an hour_local column")
+    return dataset.loc[pd.to_numeric(dataset["hour_local"], errors="coerce") <= hour_local_max].copy()
 
 
 def _calibration_folds(target: pd.Series) -> int:

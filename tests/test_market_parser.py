@@ -24,3 +24,37 @@ def test_market_parser_extracts_city_and_threshold() -> None:
     assert market.upper_f == 85.0
     assert market.yes_token_id == "yes-token"
     assert str(market.market_date) == "2026-05-05"
+
+
+def test_market_parser_maps_seattle_and_houston() -> None:
+    reader = PolymarketReader()
+
+    seattle = reader._parse_weather_market(
+        {
+            "id": "2",
+            "question": "Will the highest temperature in Seattle be between 66-67°F on May 6?",
+            "slug": "highest-temperature-in-seattle-on-may-6-2026-66-67f",
+            "bestBid": "0.31",
+            "bestAsk": "0.36",
+            "clobTokenIds": '["yes-token", "no-token"]',
+            "endDate": "2026-05-06T23:59:00Z",
+            "resolutionSource": "ASOS",
+        }
+    )
+    houston = reader._parse_weather_market(
+        {
+            "id": "3",
+            "question": "Will the highest temperature in Houston be 91°F or higher on May 6?",
+            "slug": "highest-temperature-in-houston-on-may-6-2026-91f-or-higher",
+            "bestBid": "0.22",
+            "bestAsk": "0.29",
+            "clobTokenIds": '["yes-token", "no-token"]',
+            "endDate": "2026-05-06T23:59:00Z",
+            "resolutionSource": "ASOS",
+        }
+    )
+
+    assert seattle is not None
+    assert seattle.station == "KSEA"
+    assert houston is not None
+    assert houston.station == "KHOU"

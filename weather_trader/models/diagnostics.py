@@ -158,12 +158,34 @@ def _check_duplicate_feature_conflicts(
     feature_hash = pd.util.hash_pandas_object(frame[feature_columns], index=False)
     grouped = frame.groupby(feature_hash, observed=True)["target"].nunique()
     conflicts = int((grouped > 1).sum())
-    if conflicts:
+    if not conflicts:
+        return
+
+    conflicting_rows = frame.loc[feature_hash.isin(grouped.loc[grouped > 1].index)].copy()
+    identity_columns = [
+        column
+        for column in ("station", "local_date", "snapshot_time_local", "prediction_date", "prediction_snapshot_time_local", "threshold")
+        if column in conflicting_rows.columns
+    ]
+    exact_conflicts = 0
+    if identity_columns:
+        exact_grouped = conflicting_rows.groupby(identity_columns, dropna=False, observed=True)["target"].nunique()
+        exact_conflicts = int((exact_grouped > 1).sum())
+    if exact_conflicts:
         issues.append(
             DiagnosticIssue(
                 "error",
                 "duplicate_feature_conflicts",
-                f"{conflicts} identical feature rows map to both target classes",
+                f"{exact_conflicts} duplicate station/date/snapshot feature rows map to both target classes",
+            )
+        )
+    alias_conflicts = conflicts - exact_conflicts
+    if alias_conflicts:
+        issues.append(
+            DiagnosticIssue(
+                "warning",
+                "feature_alias_conflicts",
+                f"{alias_conflicts} cross-date feature vectors map to both target classes",
             )
         )
 

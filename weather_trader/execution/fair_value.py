@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +29,8 @@ class FairValueEngine:
         self.model = bundle["model"]
         self.feature_columns = list(bundle["feature_columns"])
         self.model_type = str(bundle.get("model_type") or "threshold")
+        self.residuals = bundle.get("residuals")
+        self.residual_scope = str(bundle.get("residual_scope") or "window")
         self.model_name = model_path.stem
         self.model_features_hash = hashlib.sha256(json.dumps(self.feature_columns, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -52,6 +55,8 @@ class FairValueEngine:
         )
 
     def price_markets(self, markets: list[MarketSnapshot], weather: StationWeatherState) -> dict[str, FairValueResult]:
+        if self.model_type in {"high_regression_empirical_residual", "ngboost_normal_crps"}:
+            return self._price_distribution_markets(markets, weather)
         if self.model_type != "dynamic_bucket":
             return {market.market_id: self.price_market(market, weather) for market in markets}
 
@@ -213,6 +218,113 @@ class FairValueEngine:
             return 0.0
         return probability
 
+    def _price_distribution_markets(self, markets: list[MarketSnapshot], weather: StationWeatherState) -> dict[str, FairValueResult]:
+        if not markets:
+            return {}
+
+        reason_codes_by_market = {market.market_id: self._base_reason_codes(market, weather) for market in markets}
+        rows = [self._distribution_feature_row(weather) for _market in markets]
+        frame = pd.DataFrame([{column: row.get(column, np.nan) for column in self.feature_columns} for row in rows])
+
+        if self.model_type == "high_regression_empirical_residual":
+            raw_probabilities = self._empirical_distribution_probabilities(markets, weather, frame)
+        else:
+            raw_probabilities = self._normal_distribution_probabilities(markets, weather, frame)
+
+        adjusted = np.array(
+            [
+                self._dynamic_bucket_probability_override(market, weather, float(probability), reason_codes_by_market[market.market_id])
+                for market, probability in zip(markets, raw_probabilities)
+            ],
+            dtype=float,
+        )
+        adjusted = np.nan_to_num(adjusted, nan=0.0, posinf=0.0, neginf=0.0)
+        adjusted = np.clip(adjusted, 0.0, 1.0)
+        total = float(adjusted.sum())
+        if np.isfinite(total) and total > 0.0:
+            probabilities = adjusted / total
+        else:
+            probabilities = np.full(len(markets), 1.0 / len(markets))
+
+        return {
+            market.market_id: FairValueResult(
+                fair_yes=float(probability),
+                fair_no=1.0 - float(probability),
+                reason_codes=reason_codes_by_market[market.market_id],
+                model_name=self.model_name,
+                model_features_hash=self.model_features_hash,
+            )
+            for market, probability in zip(markets, probabilities)
+        }
+
+    def _distribution_feature_row(self, weather: StationWeatherState) -> dict[str, object]:
+        hrrr_remaining = weather.hrrr_remaining_max if weather.hrrr_remaining_max is not None else np.nan
+        hrrr_current = weather.hrrr_current_temp if weather.hrrr_current_temp is not None else np.nan
+        return {
+            "station": weather.station,
+            "hour_local": weather.hour_local,
+            "day_of_year": weather.day_of_year,
+            "current_temp": weather.current_temp,
+            "max_temp_so_far": weather.high_so_far,
+            "temp_change_1h": weather.temp_change_1h,
+            "temp_change_3h": weather.temp_change_3h,
+            "dewpoint": weather.dewpoint,
+            "wind_speed": weather.wind_speed,
+            "wind_dir_sin": weather.wind_dir_sin,
+            "wind_dir_cos": weather.wind_dir_cos,
+            "cloud_cover_code": weather.cloud_cover_code,
+            "hrrr_current_temp": hrrr_current,
+            "hrrr_remaining_max": hrrr_remaining,
+            "hrrr_current_temp_minus_current_temp": hrrr_current - weather.current_temp,
+        }
+
+    def _empirical_distribution_probabilities(
+        self,
+        markets: list[MarketSnapshot],
+        weather: StationWeatherState,
+        frame: pd.DataFrame,
+    ) -> np.ndarray:
+        if self.residuals is None:
+            return np.zeros(len(markets), dtype=float)
+        residual_frame = pd.DataFrame(self.residuals).copy()
+        if "window" not in residual_frame and "hour_local" in residual_frame:
+            residual_frame["window"] = residual_frame["hour_local"].map(_entry_window)
+        all_residuals = residual_frame["residual"].dropna().astype(float).to_numpy()
+        by_window = {
+            str(window): group["residual"].dropna().astype(float).to_numpy()
+            for window, group in residual_frame.groupby("window", observed=True)
+        } if "window" in residual_frame else {}
+        residuals = by_window.get(_entry_window(weather.hour_local), all_residuals) if self.residual_scope == "window" else all_residuals
+        if len(residuals) == 0:
+            return np.zeros(len(markets), dtype=float)
+
+        means = np.asarray(self.model.predict(frame), dtype=float)
+        probabilities = []
+        for offset, market in enumerate(markets):
+            mean = float(means[offset])
+            lower = -np.inf if market.lower_f is None else float(market.lower_f) - mean
+            upper = np.inf if market.upper_f is None else float(market.upper_f + 1.0) - mean
+            probabilities.append(float(((residuals >= lower) & (residuals < upper)).mean()))
+        return np.asarray(probabilities, dtype=float)
+
+    def _normal_distribution_probabilities(
+        self,
+        markets: list[MarketSnapshot],
+        _weather: StationWeatherState,
+        frame: pd.DataFrame,
+    ) -> np.ndarray:
+        preprocessor = self.model["preprocessor"]
+        ngboost = self.model["ngboost"]
+        dist = ngboost.pred_dist(preprocessor.transform(frame))
+        means = _broadcast_array(_dist_attr(dist, "loc", "mean"), len(markets))
+        scales = np.maximum(_broadcast_array(_dist_attr(dist, "scale", "std"), len(markets)), 1e-6)
+        probabilities = []
+        for offset, market in enumerate(markets):
+            lower_cdf = 0.0 if market.lower_f is None else _normal_cdf(float(market.lower_f), means[offset], scales[offset])
+            upper_cdf = 1.0 if market.upper_f is None else _normal_cdf(float(market.upper_f + 1.0), means[offset], scales[offset])
+            probabilities.append(max(float(upper_cdf - lower_cdf), 0.0))
+        return np.asarray(probabilities, dtype=float)
+
 
 def _hrrr_market_context_codes(market: MarketSnapshot, weather: StationWeatherState) -> list[str]:
     assert weather.hrrr_remaining_max is not None
@@ -234,3 +346,35 @@ def _hrrr_market_context_codes(market: MarketSnapshot, weather: StationWeatherSt
 
 def _exclusive_upper(upper_f: float | None) -> float | None:
     return upper_f + 1.0 if upper_f is not None else None
+
+
+def _entry_window(hour_local: float | int) -> str:
+    if pd.isna(hour_local):
+        return "unknown"
+    hour = int(hour_local)
+    if hour < 11:
+        return "early_09_10"
+    if hour < 13:
+        return "midday_11_12"
+    return "late_13_plus"
+
+
+def _dist_attr(dist: object, primary: str, fallback: str) -> object:
+    if hasattr(dist, primary):
+        return getattr(dist, primary)
+    attr = getattr(dist, fallback)
+    return attr() if callable(attr) else attr
+
+
+def _broadcast_array(values: object, length: int) -> np.ndarray:
+    array = np.asarray(values, dtype=float)
+    if array.size == length:
+        return array.reshape(length)
+    if array.size == 1:
+        return np.full(length, float(array.reshape(-1)[0]))
+    return np.resize(array.reshape(-1), length)
+
+
+def _normal_cdf(value: float, mean: float, scale: float) -> float:
+    z = (value - mean) / (scale * math.sqrt(2.0))
+    return 0.5 * (1.0 + math.erf(z))

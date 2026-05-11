@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 import numpy as np
+import pytest
 
 from weather_trader.execution.books import parse_book_snapshot
 from weather_trader.execution.contracts import (
@@ -210,6 +211,10 @@ def test_station_date_group_records_all_research_strategies() -> None:
     assert by_strategy[StrategyBucket.MAX_SO_FAR].selected_decision is not None
     assert by_strategy[StrategyBucket.MAX_SO_FAR].selected_decision.market_id == "m1"
     assert by_strategy[StrategyBucket.MAX_SO_FAR].selected_decision.target_usd == 0.0
+    assert by_strategy[StrategyBucket.MAX_SO_FAR].selected_decision.expected_value == pytest.approx(0.09)
+    max_so_far_candidate = next(candidate for candidate in by_strategy[StrategyBucket.MAX_SO_FAR].trace.candidates if candidate["selected"])
+    assert max_so_far_candidate["fair_yes"] == pytest.approx(0.14)
+    assert max_so_far_candidate["edge_yes"] == pytest.approx(0.09)
 
 
 def test_mark_position_uses_current_bid_for_unrealized_pnl() -> None:

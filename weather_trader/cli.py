@@ -31,6 +31,7 @@ from weather_trader.models.train_classifier import (
     tune_model_configs,
 )
 from weather_trader.models.bucket_classifier import (
+    BUCKET_TUNING_CONFIGS,
     build_bucket_calibration_report,
     build_bucket_heuristic_report,
     build_bucket_validation_predictions,
@@ -38,8 +39,11 @@ from weather_trader.models.bucket_classifier import (
     build_ladder_predictions,
     build_model_comparison_report,
     build_threshold_bucket_validation_predictions,
+    save_catboost_bucket_artifacts,
     save_bucket_artifacts,
+    train_catboost_bucket_classifier,
     train_bucket_classifier,
+    tune_bucket_model_configs,
 )
 from weather_trader.models.high_regressor import (
     build_ngboost_bucket_validation_predictions,
@@ -70,6 +74,22 @@ from weather_trader.stations.iem_asos_client import IEMASOSClient
 from weather_trader.stations.metadata import get_station
 
 
+PM_ACTIVE_US_STATIONS = (
+    "KATL",
+    "KBOS",
+    "KDCA",
+    "KLGA",
+    "KORD",
+    "KBKF",
+    "KDAL",
+    "KLAX",
+    "KMIA",
+    "KSFO",
+    "KSEA",
+    "KHOU",
+)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="roboweather CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -88,6 +108,10 @@ def main() -> None:
     build_dataset.add_argument("--start", required=True, help="YYYY-MM-DD")
     build_dataset.add_argument("--end", required=True, help="YYYY-MM-DD")
     build_dataset.add_argument("--all-stations", action="store_true")
+    build_dataset.add_argument(
+        "--stations",
+        help="Comma-separated station IDs to build, e.g. KATL,KBOS,KSEA. Cannot be combined with --all-stations.",
+    )
 
     train_model = subparsers.add_parser("train-model", help="Train calibrated classifier")
     train_model.add_argument("--dataset", required=True)
@@ -102,6 +126,16 @@ def main() -> None:
     train_bucket_model.add_argument("--validation-year", type=int, default=2025)
     train_bucket_model.add_argument("--report-dir", required=False)
     train_bucket_model.add_argument("--require-hrrr", action="store_true")
+    train_bucket_model.add_argument("--hour-local-max", type=int, default=None)
+    train_bucket_model.add_argument("--bucket-config", default="current_sigmoid")
+
+    train_catboost_bucket_model = subparsers.add_parser("train-catboost-bucket-model", help="Train CatBoost dynamic bucket classifier")
+    train_catboost_bucket_model.add_argument("--dataset", required=True)
+    train_catboost_bucket_model.add_argument("--output", required=True)
+    train_catboost_bucket_model.add_argument("--validation-year", type=int, default=2025)
+    train_catboost_bucket_model.add_argument("--report-dir", required=False)
+    train_catboost_bucket_model.add_argument("--require-hrrr", action="store_true")
+    train_catboost_bucket_model.add_argument("--hour-local-max", type=int, default=None)
 
     compare_bucket_models = subparsers.add_parser("compare-bucket-models", help="Compare dynamic and threshold-derived bucket probabilities")
     compare_bucket_models.add_argument("--dataset", required=True)
@@ -141,6 +175,13 @@ def main() -> None:
     tune_model.add_argument("--output", required=True)
     tune_model.add_argument("--validation-year", type=int, default=2025)
     tune_model.add_argument("--require-hrrr", action="store_true")
+
+    tune_bucket_model = subparsers.add_parser("tune-bucket-model", help="Compare dynamic bucket classifier configs on chronological validation")
+    tune_bucket_model.add_argument("--dataset", required=True)
+    tune_bucket_model.add_argument("--output", required=True)
+    tune_bucket_model.add_argument("--validation-year", type=int, default=2025)
+    tune_bucket_model.add_argument("--require-hrrr", action="store_true")
+    tune_bucket_model.add_argument("--hour-local-max", type=int, default=None)
 
     build_next_day = subparsers.add_parser("build-next-day-dataset", help="Build synthetic next-day threshold dataset from same-day rows")
     build_next_day.add_argument("--same-day-dataset", required=True)
@@ -193,6 +234,7 @@ def main() -> None:
     research_loop = subparsers.add_parser("research-loop", help="Run headless research snapshot collection and auto-resolution")
     research_loop.add_argument("--model", required=True)
     research_loop.add_argument("--threshold-model", default=None)
+    research_loop.add_argument("--extra-model", dest="extra_model_paths", action="append", default=[])
     research_loop.add_argument("--db", default=str(PAPER_DIR / "roboweather.sqlite"))
     research_loop.add_argument("--market-limit", type=int, default=50000)
     research_loop.add_argument("--bankroll", type=float, default=1000.0)
@@ -221,13 +263,24 @@ def main() -> None:
         build_features_command(args.station, args.start, args.end)
         return
     if args.command == "build-dataset":
-        build_dataset_command(args.start, args.end, args.all_stations)
+        build_dataset_command(args.start, args.end, args.all_stations, args.stations)
         return
     if args.command == "train-model":
         train_model_command(args.dataset, args.output, args.validation_year, args.report_dir, args.require_hrrr)
         return
     if args.command == "train-bucket-model":
-        train_bucket_model_command(args.dataset, args.output, args.validation_year, args.report_dir, args.require_hrrr)
+        train_bucket_model_command(
+            args.dataset,
+            args.output,
+            args.validation_year,
+            args.report_dir,
+            args.require_hrrr,
+            args.hour_local_max,
+            args.bucket_config,
+        )
+        return
+    if args.command == "train-catboost-bucket-model":
+        train_catboost_bucket_model_command(args.dataset, args.output, args.validation_year, args.report_dir, args.require_hrrr, args.hour_local_max)
         return
     if args.command == "compare-bucket-models":
         compare_bucket_models_command(
@@ -260,6 +313,9 @@ def main() -> None:
         return
     if args.command == "tune-model":
         tune_model_command(args.dataset, args.output, args.validation_year, args.require_hrrr)
+        return
+    if args.command == "tune-bucket-model":
+        tune_bucket_model_command(args.dataset, args.output, args.validation_year, args.require_hrrr, args.hour_local_max)
         return
     if args.command == "build-next-day-dataset":
         build_next_day_dataset_command(args.same_day_dataset, args.output)
@@ -312,6 +368,7 @@ def main() -> None:
         research_loop_command(
             model_path=args.model,
             threshold_model_path=args.threshold_model,
+            extra_model_paths=args.extra_model_paths,
             db_path=args.db,
             market_limit=args.market_limit,
             bankroll=args.bankroll,
@@ -358,15 +415,38 @@ def build_features_command(station: str, start: str, end: str) -> None:
     print(output)
 
 
-def build_dataset_command(start: str, end: str, all_stations: bool) -> None:
+def build_dataset_command(start: str, end: str, all_stations: bool, stations: str | None = None) -> None:
+    station_ids = _parse_station_ids(stations)
+    if station_ids is not None and all_stations:
+        raise ValueError("--stations cannot be combined with --all-stations")
     dataset = build_default_dataset(
         start=date.fromisoformat(start),
         end=date.fromisoformat(end),
         initial_only=not all_stations,
+        station_ids=station_ids,
     )
-    output = RAW_DIR / f"dataset_{start}_{end}_{'all' if all_stations else 'initial5'}.csv"
+    output = RAW_DIR / f"dataset_{start}_{end}_{_dataset_station_label(all_stations, station_ids)}.csv"
     dataset.to_csv(output, index=False)
     print(output)
+
+
+def _parse_station_ids(stations: str | None) -> list[str] | None:
+    if stations is None:
+        return None
+    station_ids = [station.strip().upper() for station in stations.split(",") if station.strip()]
+    if not station_ids:
+        raise ValueError("--stations must include at least one station ID")
+    for station_id in station_ids:
+        get_station(station_id)
+    return station_ids
+
+
+def _dataset_station_label(all_stations: bool, station_ids: list[str] | None) -> str:
+    if station_ids is None:
+        return "all" if all_stations else "initial5"
+    if tuple(station_ids) == PM_ACTIVE_US_STATIONS:
+        return "pm_active_us12"
+    return f"stations{len(station_ids)}"
 
 
 def train_model_command(
@@ -416,14 +496,19 @@ def train_bucket_model_command(
     validation_year: int,
     report_dir: str | None,
     require_hrrr: bool,
+    hour_local_max: int | None = None,
+    bucket_config_name: str = "current_sigmoid",
 ) -> None:
     dataset = pd.read_csv(dataset_path)
     if require_hrrr:
         dataset = dataset.loc[dataset["hrrr_remaining_max"].notna()].copy()
+    if hour_local_max is not None:
+        dataset = dataset.loc[pd.to_numeric(dataset["hour_local"], errors="coerce") <= hour_local_max].copy()
     diagnostics = validate_same_day_dataset(dataset, validation_year=validation_year)
     if diagnostics.has_errors:
         raise ValueError(_format_diagnostic_errors(diagnostics))
-    artifacts = train_bucket_classifier(dataset=dataset, validation_year=validation_year)
+    bucket_config = _bucket_model_config(bucket_config_name)
+    artifacts = train_bucket_classifier(dataset=dataset, validation_year=validation_year, model_config=bucket_config)
     save_bucket_artifacts(artifacts, Path(output_path))
     output = {
         "model_type": "dynamic_bucket",
@@ -432,6 +517,8 @@ def train_bucket_model_command(
         "feature_columns": artifacts.feature_columns,
         "ladder_config": artifacts.ladder_config.__dict__,
         "metrics": artifacts.metrics,
+        "hour_local_max": hour_local_max,
+        "bucket_config": bucket_config.name,
     }
     if report_dir:
         report_path = Path(report_dir)
@@ -443,10 +530,50 @@ def train_bucket_model_command(
             validation_year=validation_year,
             ladder_config=artifacts.ladder_config,
         )
-        predictions.to_csv(report_path / "candidate_validation_predictions.csv", index=False)
-        build_ladder_predictions(predictions).to_csv(report_path / "ladder_predictions.csv", index=False)
-        build_bucket_calibration_report(predictions).to_csv(report_path / "bucket_calibration.csv", index=False)
-        build_bucket_heuristic_report(predictions).to_csv(report_path / "heuristic_comparison.csv", index=False)
+        _write_bucket_prediction_reports(report_path, predictions)
+        _write_diagnostics(report_path, diagnostics)
+        output["report_dir"] = str(report_path)
+    print(json.dumps(output, indent=2))
+
+
+def train_catboost_bucket_model_command(
+    dataset_path: str,
+    output_path: str,
+    validation_year: int,
+    report_dir: str | None,
+    require_hrrr: bool,
+    hour_local_max: int | None = None,
+) -> None:
+    dataset = pd.read_csv(dataset_path)
+    if require_hrrr:
+        dataset = dataset.loc[dataset["hrrr_remaining_max"].notna()].copy()
+    if hour_local_max is not None:
+        dataset = dataset.loc[pd.to_numeric(dataset["hour_local"], errors="coerce") <= hour_local_max].copy()
+    diagnostics = validate_same_day_dataset(dataset, validation_year=validation_year)
+    if diagnostics.has_errors:
+        raise ValueError(_format_diagnostic_errors(diagnostics))
+    artifacts = train_catboost_bucket_classifier(dataset=dataset, validation_year=validation_year)
+    save_catboost_bucket_artifacts(artifacts, Path(output_path))
+    output = {
+        "model_type": "catboost_bucket",
+        "train_rows": artifacts.train_rows,
+        "validation_rows": artifacts.validation_rows,
+        "feature_columns": artifacts.feature_columns,
+        "ladder_config": artifacts.ladder_config.__dict__,
+        "metrics": artifacts.metrics,
+        "hour_local_max": hour_local_max,
+    }
+    if report_dir:
+        report_path = Path(report_dir)
+        report_path.mkdir(parents=True, exist_ok=True)
+        predictions = build_bucket_validation_predictions(
+            dataset=dataset,
+            model=artifacts.model,
+            feature_columns=artifacts.feature_columns,
+            validation_year=validation_year,
+            ladder_config=artifacts.ladder_config,
+        )
+        _write_bucket_prediction_reports(report_path, predictions)
         _write_diagnostics(report_path, diagnostics)
         output["report_dir"] = str(report_path)
     print(json.dumps(output, indent=2))
@@ -789,6 +916,35 @@ def tune_model_command(dataset_path: str, output_path: str, validation_year: int
     )
 
 
+def tune_bucket_model_command(
+    dataset_path: str,
+    output_path: str,
+    validation_year: int,
+    require_hrrr: bool,
+    hour_local_max: int | None = None,
+) -> None:
+    dataset = pd.read_csv(dataset_path)
+    if require_hrrr:
+        dataset = dataset.loc[dataset["hrrr_remaining_max"].notna()].copy()
+    if hour_local_max is not None:
+        dataset = dataset.loc[pd.to_numeric(dataset["hour_local"], errors="coerce") <= hour_local_max].copy()
+    results = tune_bucket_model_configs(dataset=dataset, validation_year=validation_year)
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    results.to_csv(output, index=False)
+    print(
+        json.dumps(
+            {
+                "output": str(output),
+                "best": results.iloc[0].to_dict() if not results.empty else None,
+                "rows": int(len(results)),
+                "hour_local_max": hour_local_max,
+            },
+            indent=2,
+        )
+    )
+
+
 def build_next_day_dataset_command(same_day_dataset_path: str, output_path: str) -> None:
     same_day_dataset = pd.read_csv(same_day_dataset_path)
     next_day = build_next_day_threshold_dataset(same_day_dataset)
@@ -850,6 +1006,25 @@ def _write_diagnostics(report_path: Path, diagnostics: DatasetDiagnostics) -> No
     diagnostics.column_report.to_csv(report_path / "data_diagnostic_columns.csv", index=False)
     diagnostics.split_report.to_csv(report_path / "data_diagnostic_splits.csv", index=False)
     diagnostics.policy_report.to_csv(report_path / "data_diagnostic_policies.csv", index=False)
+
+
+def _write_bucket_prediction_reports(report_path: Path, predictions: pd.DataFrame) -> None:
+    report_predictions = predictions.copy()
+    report_predictions["window"] = report_predictions["hour_local"].map(entry_window)
+    report_predictions.to_csv(report_path / "candidate_validation_predictions.csv", index=False)
+    build_ladder_predictions(report_predictions).to_csv(report_path / "ladder_predictions.csv", index=False)
+    build_bucket_calibration_report(report_predictions).to_csv(report_path / "bucket_calibration.csv", index=False)
+    build_bucket_heuristic_report(report_predictions).to_csv(report_path / "heuristic_comparison.csv", index=False)
+    build_regression_report(report_predictions).to_csv(report_path / "window_metrics.csv", index=False)
+
+
+def _bucket_model_config(name: str):
+    configs = {config.name: config for config in BUCKET_TUNING_CONFIGS}
+    try:
+        return configs[name]
+    except KeyError as exc:
+        valid = ", ".join(sorted(configs))
+        raise ValueError(f"Unknown bucket config {name!r}. Valid configs: {valid}") from exc
 
 
 def _format_diagnostic_errors(diagnostics: DatasetDiagnostics) -> str:
@@ -1056,6 +1231,7 @@ def paper_loop_command(
 def research_loop_command(
     model_path: str,
     threshold_model_path: str | None,
+    extra_model_paths: list[str] | None,
     db_path: str,
     market_limit: int,
     bankroll: float,
@@ -1084,6 +1260,7 @@ def research_loop_command(
         model_paths = [Path(model_path)]
         if threshold_model_path:
             model_paths.append(Path(threshold_model_path))
+        model_paths.extend(Path(path) for path in extra_model_paths or [])
         run_research_loop(
             store=store,
             model_paths=model_paths,

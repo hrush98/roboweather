@@ -6,7 +6,7 @@ from datetime import date
 import pandas as pd
 
 from weather_trader.stations.iem_asos_client import IEMASOSClient
-from weather_trader.stations.metadata import Station, list_stations
+from weather_trader.stations.metadata import Station, get_station, list_stations
 from weather_trader.features.build_same_day_features import build_synthetic_threshold_examples
 
 
@@ -29,7 +29,12 @@ class DatasetBuilder:
         return pd.concat(frames, ignore_index=True)
 
 
-def build_default_dataset(start: date, end: date, initial_only: bool = True) -> pd.DataFrame:
+def build_default_dataset(
+    start: date,
+    end: date,
+    initial_only: bool = True,
+    station_ids: list[str] | None = None,
+) -> pd.DataFrame:
     builder = DatasetBuilder(client=IEMASOSClient())
-    stations = list_stations(initial_only=initial_only)
+    stations = [get_station(station_id) for station_id in station_ids] if station_ids is not None else list_stations(initial_only=initial_only)
     return builder.build_for_stations(stations=stations, start=start, end=end)
