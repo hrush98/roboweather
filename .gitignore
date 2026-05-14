@@ -9,3 +9,21 @@ data/cache/*.sqlite-shm
 data/cache/*.sqlite-wal
 data/logs/
 data/paper/
+
+# Bulky/generated research artifacts. Keep curated docs and model artifacts in Git,
+# but leave raw generated datasets and validation dumps local unless requested.
+data/raw/dataset_2022-01-01_2025-12-31_pm_active_us12.csv
+data/reports/bucket_tuning_obs_2022_2025.csv
+data/reports/catboost_bucket_obs_2022_2025/
+data/reports/catboost_bucket_pm_active_us12_obs_2022_2025/
+data/reports/dynamic_bucket_early_obs_2022_2025/
+data/reports/dynamic_bucket_early_pm_active_us12_obs_2022_2025/
+data/reports/dynamic_bucket_pm_active_us12_obs_2022_2025/
+data/reports/dynamic_bucket_tuned_obs_2022_2025/
+data/reports/dynamic_bucket_tuned_pm_active_us12_obs_2022_2025/
+data/reports/high_regression_pm_active_us12_obs_2022_2025/
+data/reports/mvp_pm_active_us12_obs_2022_2025/
+data/reports/ngboost_normal_pm_active_us12_obs_2022_2025/
+data/reports/pm_active_us12_dataset_diagnostics/
+data/reports/pm_active_us12_station_validation_summary.csv
+scripts/status_report_formatted.py
