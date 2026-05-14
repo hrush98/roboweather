@@ -7,6 +7,9 @@ from zoneinfo import ZoneInfo
 
 from rich.text import Text
 
+from weather_trader.execution.contracts import TradeAction
+from weather_trader.execution.positions import effective_status_for_position
+
 _PRELIM_CUTOFF_LOCAL = time(19, 0)
 _STATION_TIMEZONES = {
     "KATL": "America/New_York",
@@ -185,13 +188,23 @@ def _weather_outcome(row: dict[str, Any], as_of_utc: datetime | None = None) -> 
     entry = _safe_float(row.get("entry_price"))
     final_high = row.get("final_high_tmpf")
     high_so_far = row.get("high_so_far")
+    side = TradeAction(str(row.get("selected_side", TradeAction.SKIP)))
+    lower_f, upper_f = _parse_bucket(_bucket_from_row(row))
     high = final_high
     if high is None and _prelim_ready(row, as_of):
         high = high_so_far
+    if high is None and high_so_far is not None:
+        effective = effective_status_for_position(
+            side=side,
+            lower_f=lower_f,
+            upper_f=upper_f,
+            high_so_far=_safe_float(high_so_far, default=None),
+        )
+        if str(effective) in {"EFFECTIVELY_WON", "EFFECTIVELY_LOST"}:
+            high = high_so_far
     if high is None:
         return {"weather_status": "LIVE", "weather_correct": None, "weather_pnl": None, "weather_high": high_so_far}
     yes_won = _in_bucket(_safe_float(high), _bucket_from_row(row))
-    side = str(row.get("selected_side", ""))
     correct = yes_won if side == "BUY_YES" else not yes_won
     prefix = "OFFICIAL" if final_high is not None else "PRELIM"
     return {

@@ -279,7 +279,7 @@ def test_live_policy_view_scores_prelim_weather_when_books_are_missing() -> None
         },
     ]
 
-    view = _build_live_policy_view(live_rows)
+    view = _build_live_policy_view(live_rows, as_of_utc=datetime(2026, 5, 12, 1, 0, tzinfo=timezone.utc))
 
     policy = view["policy_rows"][0]
     assert policy["book_status"] == "NO_BOOK_MARK"
@@ -298,6 +298,37 @@ def test_live_policy_view_scores_prelim_weather_when_books_are_missing() -> None
     assert kdal["weather_pnl"] == pytest.approx(-0.20)
 
 
+def test_live_policy_view_marks_prelim_loss_before_cutoff_when_high_has_cleared_bucket() -> None:
+    live_rows = [
+        {
+            "timestamp": "2026-05-11T18:11:00Z",
+            "policy_name": "pm_us12_mvp_hc_15m_first",
+            "model_group": "mvp_pm_active_us12_obs_2022_2025",
+            "strategy_bucket": "HIGH_CONVICTION",
+            "obs_delay_bucket": "15m",
+            "station": "KATL",
+            "market_date": "2026-05-11",
+            "selected_side": "BUY_YES",
+            "selected_bucket": "74-75F",
+            "entry_price": 0.60,
+            "current_bid": None,
+            "unrealized_pnl": None,
+            "high_so_far": 76.0,
+        }
+    ]
+
+    view = _build_live_policy_view(live_rows, as_of_utc=datetime(2026, 5, 11, 18, 30, tzinfo=timezone.utc))
+
+    policy = view["policy_rows"][0]
+    exposure = view["exposure_rows"][0]
+    assert policy["weather_status"] == "PRELIM_LOSS"
+    assert policy["weather_wins"] == 0
+    assert policy["weather_losses"] == 1
+    assert exposure["weather_status"] == "PRELIM_LOSS"
+    assert exposure["weather_pnl"] == pytest.approx(-0.60)
+    assert exposure["book_status"] == "NO_BOOK_MARK"
+
+
 def test_live_policy_view_keeps_same_day_weather_live_before_evening_cutoff() -> None:
     live_rows = [
         {
@@ -313,7 +344,7 @@ def test_live_policy_view_keeps_same_day_weather_live_before_evening_cutoff() ->
             "entry_price": 0.60,
             "current_bid": None,
             "unrealized_pnl": None,
-            "high_so_far": 79.0,
+            "high_so_far": 74.5,
         }
     ]
 
@@ -327,7 +358,7 @@ def test_live_policy_view_keeps_same_day_weather_live_before_evening_cutoff() ->
 
     exposure = view["exposure_rows"][0]
     assert exposure["weather_status"] == "LIVE"
-    assert exposure["weather_high"] == 79.0
+    assert exposure["weather_high"] == 74.5
     assert exposure["weather_pnl"] == 0.0
 
 
