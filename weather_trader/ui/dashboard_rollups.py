@@ -1,9 +1,26 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import date, datetime, time, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from rich.text import Text
+
+_PRELIM_CUTOFF_LOCAL = time(19, 0)
+_STATION_TIMEZONES = {
+    "KATL": "America/New_York",
+    "KBKF": "America/Denver",
+    "KDAL": "America/Chicago",
+    "KDEN": "America/Denver",
+    "KHOU": "America/Chicago",
+    "KLAX": "America/Los_Angeles",
+    "KLGA": "America/New_York",
+    "KMIA": "America/New_York",
+    "KORD": "America/Chicago",
+    "KSEA": "America/Los_Angeles",
+    "KSFO": "America/Los_Angeles",
+}
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -134,13 +151,39 @@ def _in_bucket(temp: float | None, bucket: str | None) -> bool:
     return low <= temp <= high
 
 
-def _weather_outcome(row: dict[str, Any]) -> dict[str, Any]:
+def _market_date(row: dict[str, Any]) -> date | None:
+    value = row.get("market_date")
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _prelim_ready(row: dict[str, Any], as_of_utc: datetime) -> bool:
+    market_date = _market_date(row)
+    timezone_name = _STATION_TIMEZONES.get(str(row.get("station", "")))
+    if market_date is None or timezone_name is None:
+        return False
+    local_now = as_of_utc.astimezone(ZoneInfo(timezone_name))
+    if local_now.date() > market_date:
+        return True
+    return local_now.date() == market_date and local_now.time() >= _PRELIM_CUTOFF_LOCAL
+
+
+def _weather_outcome(row: dict[str, Any], as_of_utc: datetime | None = None) -> dict[str, Any]:
+    as_of = as_of_utc or datetime.now(timezone.utc)
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=timezone.utc)
     entry = _safe_float(row.get("entry_price"))
     final_high = row.get("final_high_tmpf")
     high_so_far = row.get("high_so_far")
-    high = final_high if final_high is not None else high_so_far
+    high = final_high
+    if high is None and _prelim_ready(row, as_of):
+        high = high_so_far
     if high is None:
-        return {"weather_status": "LIVE", "weather_correct": None, "weather_pnl": None, "weather_high": None}
+        return {"weather_status": "LIVE", "weather_correct": None, "weather_pnl": None, "weather_high": high_so_far}
     yes_won = _in_bucket(_safe_float(high), _bucket_from_row(row))
     side = str(row.get("selected_side", ""))
     correct = yes_won if side == "BUY_YES" else not yes_won
@@ -368,7 +411,10 @@ def _build_policy_view(
     return {"rows": rows, "latest_time": latest_time[11:19] if len(latest_time) >= 19 else latest_time}
 
 
-def _build_live_policy_view(live_rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime | None = None) -> dict[str, Any]:
+    as_of = as_of_utc or datetime.now(timezone.utc)
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=timezone.utc)
     exposure_index: dict[tuple[str, str, str], dict[str, Any]] = {}
     station_raw: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
@@ -400,7 +446,7 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]]) -> dict[str, Any]:
     latest_position_time = ""
 
     for row in live_rows:
-        outcome = _weather_outcome(row)
+        outcome = _weather_outcome(row, as_of)
         raw_count += 1
         station = str(row.get("station", ""))
         side = str(row.get("selected_side", ""))
