@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from datetime import date
 from pathlib import Path
@@ -9,7 +10,7 @@ import json
 import numpy as np
 import pandas as pd
 
-from weather_trader.config import RAW_DIR, ensure_directories
+from weather_trader.config import CACHE_DIR, PROCESSED_DIR, RAW_DIR, ensure_directories
 from weather_trader.config import PAPER_DIR
 from weather_trader.execution.engine import PaperTradingEngine
 from weather_trader.execution.fair_value import FairValueEngine
@@ -201,6 +202,20 @@ def main() -> None:
     enrich_hrrr.add_argument("--forecast-stride-hours", type=int, default=3)
     enrich_hrrr.add_argument("--sample-strategy", choices=["head", "even"], default="head")
 
+    hrrr_v2_cache = subparsers.add_parser("hrrr-v2-cache", help="Build/export batched historical HRRR point cache")
+    hrrr_v2_cache.add_argument("--dataset", required=True)
+    hrrr_v2_cache.add_argument("--cache", default=str(CACHE_DIR / "hrrr_v2.sqlite"))
+    hrrr_v2_cache.add_argument("--output", default=str(PROCESSED_DIR / "dataset_hrrr_v2_enriched.csv"))
+    hrrr_v2_cache.add_argument("--mode", choices=["build-cache", "export", "build-and-export", "status"], default="build-and-export")
+    hrrr_v2_cache.add_argument("--stations", default="all", help="'all', 'dataset', or comma-separated station IDs")
+    hrrr_v2_cache.add_argument("--max-snapshots", type=int, default=None)
+    hrrr_v2_cache.add_argument("--max-snapshots-per-year", type=int, default=None)
+    hrrr_v2_cache.add_argument("--forecast-stride-hours", type=int, default=3)
+    hrrr_v2_cache.add_argument("--max-forecast-hour", type=int, default=18)
+    hrrr_v2_cache.add_argument("--sample-strategy", choices=["head", "even"], default="even")
+    hrrr_v2_cache.add_argument("--workers", type=int, default=4)
+    hrrr_v2_cache.add_argument("--progress-every", type=int, default=25)
+
     hrrr_probe = subparsers.add_parser("hrrr-probe", help="Fetch HRRR point forecast features for one station")
     hrrr_probe.add_argument("--station", required=True)
     hrrr_probe.add_argument("--as-of", required=False, help="ISO timestamp UTC")
@@ -331,6 +346,22 @@ def main() -> None:
             args.max_snapshots_per_year,
             args.forecast_stride_hours,
             args.sample_strategy,
+        )
+        return
+    if args.command == "hrrr-v2-cache":
+        hrrr_v2_cache_command(
+            dataset_path=args.dataset,
+            cache_path=args.cache,
+            output_path=args.output,
+            mode=args.mode,
+            stations_arg=args.stations,
+            max_snapshots=args.max_snapshots,
+            max_snapshots_per_year=args.max_snapshots_per_year,
+            forecast_stride_hours=args.forecast_stride_hours,
+            max_forecast_hour=args.max_forecast_hour,
+            sample_strategy=args.sample_strategy,
+            workers=args.workers,
+            progress_every=args.progress_every,
         )
         return
     if args.command == "hrrr-probe":
@@ -1059,6 +1090,83 @@ def enrich_hrrr_command(
         "rows": int(len(enriched)),
         "hrrr_rows": int(enriched["hrrr_remaining_max"].notna().sum()) if "hrrr_remaining_max" in enriched else 0,
         "hrrr_snapshots": int(enriched.loc[enriched["hrrr_remaining_max"].notna(), "snapshot_time_local"].nunique()) if "hrrr_remaining_max" in enriched else 0,
+    }
+    print(json.dumps(summary, indent=2))
+
+
+def hrrr_v2_cache_command(
+    dataset_path: str,
+    cache_path: str,
+    output_path: str,
+    mode: str,
+    stations_arg: str,
+    max_snapshots: int | None,
+    max_snapshots_per_year: int | None,
+    forecast_stride_hours: int,
+    max_forecast_hour: int,
+    sample_strategy: str,
+    workers: int,
+    progress_every: int,
+) -> None:
+    from weather_trader.forecasts.hrrr_v2 import HRRRV2Store, build_hrrr_v2_cache, materialize_hrrr_v2_features
+    from weather_trader.stations.metadata import list_stations
+
+    dataset = pd.read_csv(dataset_path)
+    cache = Path(cache_path)
+
+    if mode == "status":
+        store = HRRRV2Store(cache)
+        try:
+            print(json.dumps(store.status(), indent=2))
+        finally:
+            store.close()
+        return
+
+    if stations_arg == "all":
+        stations = list_stations(initial_only=False)
+    elif stations_arg == "dataset":
+        stations = [get_station(station) for station in sorted(dataset["station"].astype(str).str.upper().unique())]
+    else:
+        stations = [get_station(station.strip()) for station in stations_arg.split(",") if station.strip()]
+
+    if mode in {"build-cache", "build-and-export"}:
+        summary = build_hrrr_v2_cache(
+            dataset=dataset,
+            cache_path=cache,
+            stations=stations,
+            max_snapshots=max_snapshots,
+            max_snapshots_per_year=max_snapshots_per_year,
+            sample_strategy=sample_strategy,
+            forecast_stride_hours=forecast_stride_hours,
+            max_forecast_hour=max_forecast_hour,
+            workers=max(1, workers),
+            progress_every=progress_every,
+        )
+        print(json.dumps(summary, indent=2), file=sys.stderr)
+        if mode == "build-cache":
+            return
+
+    enriched = materialize_hrrr_v2_features(
+        dataset=dataset,
+        cache_path=cache,
+        max_snapshots=max_snapshots,
+        max_snapshots_per_year=max_snapshots_per_year,
+        sample_strategy=sample_strategy,
+        forecast_stride_hours=forecast_stride_hours,
+        max_forecast_hour=max_forecast_hour,
+        progress_every=progress_every,
+    )
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    enriched.to_csv(output, index=False)
+    summary = {
+        "mode": mode,
+        "cache": str(cache),
+        "output": str(output),
+        "input_rows": int(len(dataset)),
+        "output_rows": int(len(enriched)),
+        "hrrr_rows": int(enriched["hrrr_remaining_max"].notna().sum()) if "hrrr_remaining_max" in enriched else 0,
+        "stations_extracted_per_file": [station.station for station in stations],
     }
     print(json.dumps(summary, indent=2))
 
