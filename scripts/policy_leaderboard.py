@@ -2,9 +2,11 @@
 """Quant-style daily policy leaderboard scored from weather outcomes.
 
 This report is for research monitoring, not accounting. It scores each research
-policy position directly against station_date_outcomes.final_high_tmpf, so it is
-valid once the observed station high is known even if Polymarket has not fully
-settled. Positions without a station/date outcome are kept pending.
+policy position against station_date_outcomes.final_high_tmpf when available,
+then falls back to post-local-cutoff high_so_far snapshots. That makes the daily
+report useful once the observed station high is practically known even if
+Polymarket has not fully settled. Positions without an official or preliminary
+weather outcome are kept pending.
 """
 
 from __future__ import annotations
@@ -15,18 +17,26 @@ import math
 import os
 import sqlite3
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = Path(
-    os.environ.get(
-        "ROBOWEATHER_STATUS_DB",
-        os.environ.get("DB", str(REPO_ROOT / "data/paper/research_2026-05-08_multimodel.sqlite")),
-    )
-)
+
+
+def _default_db_path() -> Path:
+    explicit = os.environ.get("ROBOWEATHER_STATUS_DB") or os.environ.get("DB")
+    if explicit:
+        return Path(explicit).expanduser()
+    local_state = Path.home() / ".local/state/roboweather/research_2026-05-08_multimodel.sqlite"
+    if local_state.exists():
+        return local_state
+    return REPO_ROOT / "data/paper/research_2026-05-08_multimodel.sqlite"
+
+
+DB_PATH = _default_db_path()
 
 STATION_REGIME_LABELS = {
     "KBOS": "coastal",
@@ -45,6 +55,20 @@ STATION_REGIME_LABELS = {
     "KDAL": "manual",
 }
 LOW_N_STATION_THRESHOLD = 20
+PRELIM_CUTOFF_LOCAL = time(19, 0)
+STATION_TIMEZONES = {
+    "KATL": "America/New_York",
+    "KBKF": "America/Denver",
+    "KDAL": "America/Chicago",
+    "KDEN": "America/Denver",
+    "KHOU": "America/Chicago",
+    "KLAX": "America/Los_Angeles",
+    "KLGA": "America/New_York",
+    "KMIA": "America/New_York",
+    "KORD": "America/Chicago",
+    "KSEA": "America/Los_Angeles",
+    "KSFO": "America/Los_Angeles",
+}
 
 
 def is_active_policy(name: str) -> bool:
@@ -76,15 +100,32 @@ def bucket_won(final_high: float, bucket: str | None) -> bool:
     return float(low) <= final_high <= float(high)
 
 
-def score_position(row: sqlite3.Row) -> dict[str, Any]:
+def prelim_ready(row: sqlite3.Row, as_of_utc: datetime) -> bool:
+    timezone_name = STATION_TIMEZONES.get(row["station"])
+    if timezone_name is None:
+        return False
+    market_date = date.fromisoformat(row["market_date"])
+    local_now = as_of_utc.astimezone(ZoneInfo(timezone_name))
+    if local_now.date() > market_date:
+        return True
+    return local_now.date() == market_date and local_now.time() >= PRELIM_CUTOFF_LOCAL
+
+
+def score_position(row: sqlite3.Row, as_of_utc: datetime) -> dict[str, Any]:
     final_high = row["final_high_tmpf"]
-    if final_high is None:
-        return {"resolved": False, "correct": None, "ret": None}
-    yes_won = bucket_won(float(final_high), row["selected_bucket"])
+    high_so_far = row["high_so_far"]
+    high = final_high
+    source = "official" if final_high is not None else None
+    if high is None and high_so_far is not None and prelim_ready(row, as_of_utc):
+        high = high_so_far
+        source = "prelim_high_so_far"
+    if high is None:
+        return {"resolved": False, "correct": None, "ret": None, "high": None, "source": None}
+    yes_won = bucket_won(float(high), row["selected_bucket"])
     correct = yes_won if row["selected_side"] == "BUY_YES" else not yes_won
     entry = float(row["entry_price"])
     ret = (1.0 - entry) if correct else -entry
-    return {"resolved": True, "correct": bool(correct), "ret": ret}
+    return {"resolved": True, "correct": bool(correct), "ret": ret, "high": float(high), "source": source}
 
 
 def mean(values: list[float]) -> float | None:
@@ -212,6 +253,15 @@ def research_status(resolved: int, pending: int, rr: float | None, p_sharpe: flo
 def rows_for_range(db: sqlite3.Connection, start_date: str, end_date: str) -> list[sqlite3.Row]:
     return db.execute(
         """
+        with station_highs as (
+            select
+                station,
+                market_date,
+                max(high_so_far) as high_so_far,
+                max(timestamp) as latest_snapshot_at
+            from prediction_snapshots
+            group by station, market_date
+        )
         select
             rpp.id,
             rpp.timestamp,
@@ -227,11 +277,16 @@ def rows_for_range(db: sqlite3.Connection, start_date: str, end_date: str) -> li
             rpp.entry_fair,
             sdo.final_high_tmpf,
             sdo.source as outcome_source,
-            sdo.resolved_at
+            sdo.resolved_at,
+            highs.high_so_far,
+            highs.latest_snapshot_at
         from research_policy_positions rpp
         left join station_date_outcomes sdo
           on sdo.station = rpp.station
          and sdo.market_date = rpp.market_date
+        left join station_highs highs
+          on highs.station = rpp.station
+         and highs.market_date = rpp.market_date
         where rpp.market_date between ? and ?
         order by rpp.policy_name, rpp.station, rpp.id
         """,
@@ -248,7 +303,15 @@ def window_start(target_date: str, days: int) -> str:
     return fmt_date(end - timedelta(days=days - 1))
 
 
-def compute_leaderboard(target_date: str, active_only: bool = False, windows: tuple[int, ...] = (1,)) -> dict[str, Any]:
+def compute_leaderboard(
+    target_date: str,
+    active_only: bool = False,
+    windows: tuple[int, ...] = (1,),
+    as_of_utc: datetime | None = None,
+) -> dict[str, Any]:
+    as_of = as_of_utc or datetime.now(timezone.utc)
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=timezone.utc)
     db = sqlite3.connect(str(DB_PATH))
     db.row_factory = sqlite3.Row
     all_start = db.execute(
@@ -318,7 +381,7 @@ def compute_leaderboard(target_date: str, active_only: bool = False, windows: tu
     pending_stations = set()
     for row in filtered_rows:
         policy_name = row["policy_name"]
-        score = score_position(row)
+        score = score_position(row, as_of)
         entry = float(row["entry_price"])
         edge = row["entry_edge"]
         fair = fair_for_side(row)
@@ -393,7 +456,8 @@ def compute_leaderboard(target_date: str, active_only: bool = False, windows: tu
                 "bucket": row["selected_bucket"],
                 "entry": entry,
                 "edge": edge,
-                "final_high": row["final_high_tmpf"],
+                "final_high": score["high"],
+                "outcome_source": score["source"],
                 "correct": score["correct"],
             }
         )
@@ -610,7 +674,7 @@ def compute_leaderboard(target_date: str, active_only: bool = False, windows: tu
     return {
         "target_date": target_date,
         "db_path": str(DB_PATH),
-        "source": "station_date_outcomes.final_high_tmpf",
+        "source": "station_date_outcomes.final_high_tmpf plus post-7pm prediction_snapshots.high_so_far fallback",
         "total_positions": sum(row["total"] for row in leaderboard),
         "unique_opportunities": len(opportunity_counts),
         "duplicate_opportunities": max(0, len(filtered_rows) - len(opportunity_counts)),
@@ -780,7 +844,9 @@ def format_report(data: dict[str, Any], detail_limit: int = 8, rolling: list[dic
             lines.append(f"  {station}: " + " | ".join(by_station[station]))
 
     lines.append("")
-    lines.append("Legend: + won, - lost, ? pending. Pending means weather outcome is missing, not a loss.")
+    lines.append(
+        "Legend: + won, - lost, ? pending. Pending means neither official outcome nor post-cutoff preliminary high is available."
+    )
     lines.append(f"Generated: {datetime.now(timezone.utc).isoformat()}")
     return "\n".join(lines)
 

@@ -1,9 +1,15 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 from scripts import policy_leaderboard
-from weather_trader.execution.contracts import ResearchPolicyPosition, StationDateOutcome, StrategyBucket, TradeAction
+from weather_trader.execution.contracts import (
+    PredictionSnapshot,
+    ResearchPolicyPosition,
+    StationDateOutcome,
+    StrategyBucket,
+    TradeAction,
+)
 from weather_trader.execution.store import ExecutionStore
 
 
@@ -16,6 +22,38 @@ def test_daily_leaderboard_treats_missing_outcomes_as_pending(tmp_path, monkeypa
     assert data["resolved_positions"] == 0
     assert data["pending_positions"] == 1
     assert data["leaderboard"][0]["status"] == "PENDING"
+
+
+def test_daily_leaderboard_uses_prelim_high_after_local_cutoff(tmp_path, monkeypatch) -> None:
+    store = _store(tmp_path, monkeypatch)
+    store.insert_research_policy_position(_position(policy_name="pm_us12_consensus_hc_first"))
+    store.insert_prediction_snapshot(_snapshot(high_so_far=74.0))
+
+    data = policy_leaderboard.compute_leaderboard(
+        "2026-05-07",
+        as_of_utc=datetime(2026, 5, 8, 1, 0, tzinfo=timezone.utc),
+    )
+
+    assert data["resolved_positions"] == 1
+    assert data["pending_positions"] == 0
+    assert data["leaderboard"][0]["won"] == 1
+    assert data["leaderboard"][0]["bets"][0]["final_high"] == 74.0
+    assert data["leaderboard"][0]["bets"][0]["outcome_source"] == "prelim_high_so_far"
+
+
+def test_daily_leaderboard_keeps_prelim_high_pending_before_local_cutoff(tmp_path, monkeypatch) -> None:
+    store = _store(tmp_path, monkeypatch)
+    store.insert_research_policy_position(_position(policy_name="pm_us12_consensus_hc_first"))
+    store.insert_prediction_snapshot(_snapshot(high_so_far=74.0))
+
+    data = policy_leaderboard.compute_leaderboard(
+        "2026-05-07",
+        as_of_utc=datetime(2026, 5, 7, 22, 0, tzinfo=timezone.utc),
+    )
+
+    assert data["resolved_positions"] == 0
+    assert data["pending_positions"] == 1
+    assert data["leaderboard"][0]["bets"][0]["outcome_source"] is None
 
 
 def test_opportunity_totals_do_not_exceed_raw_positions(tmp_path, monkeypatch) -> None:
@@ -102,4 +140,35 @@ def _outcome(market_date: date = date(2026, 5, 7)) -> StationDateOutcome:
         final_high_tmpf=74.5,
         source="test",
         resolved_at=f"{market_date.isoformat()}T23:59:00+00:00",
+    )
+
+
+def _snapshot(*, high_so_far: float, market_date: date = date(2026, 5, 7)) -> PredictionSnapshot:
+    return PredictionSnapshot(
+        timestamp=f"{market_date.isoformat()}T20:00:00+00:00",
+        station="KATL",
+        market_date=market_date,
+        decision_time_utc=f"{market_date.isoformat()}T20:00:00+00:00",
+        decision_time_local=f"{market_date.isoformat()}T16:00:00-04:00",
+        latest_obs_time_utc=f"{market_date.isoformat()}T20:00:00+00:00",
+        latest_obs_time_local=f"{market_date.isoformat()}T16:00:00-04:00",
+        obs_age_minutes=0.0,
+        obs_delay_bucket="15m",
+        current_temp=high_so_far,
+        high_so_far=high_so_far,
+        hrrr_remaining_max=None,
+        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        selected_market_id="m1",
+        selected_bucket="74-75F",
+        selected_side=TradeAction.BUY_YES,
+        selected_edge=0.2,
+        selected_fair_yes=0.7,
+        selected_fair_no=0.3,
+        selected_yes_ask=0.4,
+        selected_no_ask=0.6,
+        model_name="test",
+        high_conviction=True,
+        skip_reason=None,
+        candidate_count=1,
+        candidate_distribution=[],
     )
