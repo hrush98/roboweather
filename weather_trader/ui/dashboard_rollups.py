@@ -72,13 +72,21 @@ def _live_status(mark_pct: float | None, live_rr: float | None, resolved: int | 
     return "WATCH"
 
 
+def _book_status(mark_pct: float | None) -> str:
+    if mark_pct is None:
+        return "NO_BOOK_MARK"
+    if mark_pct < 0.5:
+        return "NO_BOOK_MARK"
+    return "MARKED"
+
+
 def _status_text(value: Any) -> Text:
     text = str(value or "")
-    if text in {"DONE", "ITM", "LIVE_STRONG", "PROMISING"}:
+    if text in {"DONE", "ITM", "LIVE_STRONG", "PROMISING", "PRELIM_WIN", "OFFICIAL_WIN", "MARKED"}:
         return Text(text, style="green")
     if text in {"LIVE", "MIXED", "WATCH", "TOO_EARLY"}:
         return Text(text, style="yellow")
-    if text in {"BOOK_GAPS", "LIVE_STRESS", "WEAK"}:
+    if text in {"BOOK_GAPS", "NO_BOOK_MARK", "LIVE_STRESS", "WEAK", "PRELIM_LOSS", "OFFICIAL_LOSS"}:
         return Text(text, style="red")
     return Text(text)
 
@@ -98,6 +106,51 @@ def _bucket_from_row(row: dict[str, Any]) -> str:
     if bucket:
         return str(bucket)
     return _bucket_label(row.get("lower_f"), row.get("upper_f"))
+
+
+def _parse_bucket(bucket: str | None) -> tuple[float | None, float | None]:
+    if not bucket:
+        return None, None
+    value = bucket.replace("F", "")
+    try:
+        if value.startswith("<="):
+            return None, float(value[2:])
+        if value.startswith(">="):
+            return float(value[2:]), None
+        low, high = value.split("-")
+        return float(low), float(high)
+    except (TypeError, ValueError):
+        return None, None
+
+
+def _in_bucket(temp: float | None, bucket: str | None) -> bool:
+    if temp is None or not bucket:
+        return False
+    low, high = _parse_bucket(bucket)
+    if high is None:
+        return low is not None and temp >= low
+    if low is None:
+        return temp <= high
+    return low <= temp <= high
+
+
+def _weather_outcome(row: dict[str, Any]) -> dict[str, Any]:
+    entry = _safe_float(row.get("entry_price"))
+    final_high = row.get("final_high_tmpf")
+    high_so_far = row.get("high_so_far")
+    high = final_high if final_high is not None else high_so_far
+    if high is None:
+        return {"weather_status": "LIVE", "weather_correct": None, "weather_pnl": None, "weather_high": None}
+    yes_won = _in_bucket(_safe_float(high), _bucket_from_row(row))
+    side = str(row.get("selected_side", ""))
+    correct = yes_won if side == "BUY_YES" else not yes_won
+    prefix = "OFFICIAL" if final_high is not None else "PRELIM"
+    return {
+        "weather_status": f"{prefix}_{'WIN' if correct else 'LOSS'}",
+        "weather_correct": correct,
+        "weather_pnl": 1.0 - entry if correct else -entry,
+        "weather_high": _safe_float(high),
+    }
 
 
 def _normalized_policy_model_group(row: dict[str, Any]) -> str:
@@ -329,6 +382,11 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]]) -> dict[str, Any]:
             "risk": 0.0,
             "wins95": 0,
             "loss05": 0,
+            "weather_scored": 0,
+            "weather_wins": 0,
+            "weather_losses": 0,
+            "weather_pnl": 0.0,
+            "weather_risk": 0.0,
         }
     )
     station_unique: dict[str, dict[str, Any]] = defaultdict(lambda: {"unique_count": 0, "unique_mtm": 0.0, "done": 0})
@@ -342,6 +400,7 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]]) -> dict[str, Any]:
     latest_position_time = ""
 
     for row in live_rows:
+        outcome = _weather_outcome(row)
         raw_count += 1
         station = str(row.get("station", ""))
         side = str(row.get("selected_side", ""))
@@ -396,6 +455,15 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "pnl": 0.0,
                 "max_bid": float("-inf"),
                 "status": "",
+                "book_marked": 0,
+                "book_missing": 0,
+                "weather_scored": 0,
+                "weather_wins": 0,
+                "weather_losses": 0,
+                "weather_pnl": 0.0,
+                "weather_risk": 0.0,
+                "weather_status": "LIVE",
+                "weather_high": outcome["weather_high"],
             },
         )
         group["rows"] += 1
@@ -404,11 +472,36 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]]) -> dict[str, Any]:
         group["pnl"] += pnl
         if current_bid is not None:
             group["max_bid"] = max(group["max_bid"], _safe_float(current_bid))
+            group["book_marked"] += 1
+        else:
+            group["book_missing"] += 1
         status = str(row.get("state", "") or row.get("effective_status", "") or "")
         if not group["status"]:
             group["status"] = status
         elif status and group["status"] != status:
             group["status"] = "MIXED"
+        if outcome["weather_correct"] is not None:
+            group["weather_scored"] += 1
+            group["weather_risk"] += entry_price
+            group["weather_pnl"] += _safe_float(outcome["weather_pnl"])
+            group["weather_high"] = outcome["weather_high"]
+            if outcome["weather_correct"]:
+                group["weather_wins"] += 1
+            else:
+                group["weather_losses"] += 1
+            if group["weather_status"] == "LIVE":
+                group["weather_status"] = str(outcome["weather_status"])
+            elif group["weather_status"] != outcome["weather_status"]:
+                group["weather_status"] = "MIXED"
+
+        if outcome["weather_correct"] is not None:
+            station_raw[station]["weather_scored"] += 1
+            station_raw[station]["weather_risk"] += entry_price
+            station_raw[station]["weather_pnl"] += _safe_float(outcome["weather_pnl"])
+            if outcome["weather_correct"]:
+                station_raw[station]["weather_wins"] += 1
+            else:
+                station_raw[station]["weather_losses"] += 1
 
         policy = str(row.get("policy_name", ""))
         model_group = _normalized_policy_model_group(row)
@@ -431,6 +524,12 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "mtm": 0.0,
                 "wins95": 0,
                 "loss05": 0,
+                "weather_scored": 0,
+                "weather_wins": 0,
+                "weather_losses": 0,
+                "weather_pnl": 0.0,
+                "weather_risk": 0.0,
+                "weather_status": "LIVE",
             },
         )
         policy_group["open_positions"] += 1
@@ -447,19 +546,43 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]]) -> dict[str, Any]:
             policy_group["wins95"] += 1
         if current_bid is not None and _safe_float(current_bid) <= 0.05:
             policy_group["loss05"] += 1
+        if outcome["weather_correct"] is not None:
+            policy_group["weather_scored"] += 1
+            policy_group["weather_risk"] += entry_price
+            policy_group["weather_pnl"] += _safe_float(outcome["weather_pnl"])
+            if outcome["weather_correct"]:
+                policy_group["weather_wins"] += 1
+            else:
+                policy_group["weather_losses"] += 1
+            if policy_group["weather_status"] == "LIVE":
+                policy_group["weather_status"] = str(outcome["weather_status"])
+            elif policy_group["weather_status"] != outcome["weather_status"]:
+                policy_group["weather_status"] = "MIXED"
 
     exposure_rows: list[dict[str, Any]] = []
     for group in exposure_index.values():
         rows = group["rows"] or 1
         entry = group["entry"] / rows
-        mark = group["mark"] / rows
+        mark = group["mark"] / group["book_marked"] if group["book_marked"] else None
         pnl_pct = group["pnl"] / group["entry"] if group["entry"] else None
         status = group["status"] or "LIVE"
         if group["max_bid"] >= 0.95:
             status = "DONE"
         elif group["pnl"] > 0:
             status = "ITM"
-        exposure_rows.append({**group, "entry": entry, "mark": mark, "pnl_pct": pnl_pct, "status": status})
+        book_pct = _ratio(group["book_marked"], group["rows"])
+        exposure_rows.append(
+            {
+                **group,
+                "entry": entry,
+                "mark": mark,
+                "pnl_pct": pnl_pct,
+                "status": status,
+                "book_status": _book_status(book_pct),
+                "book_mark_pct": book_pct,
+                "weather_rr": _ratio(group["weather_pnl"], group["weather_risk"]),
+            }
+        )
         station_unique[group["station"]]["unique_count"] += 1
         station_unique[group["station"]]["unique_mtm"] += group["pnl"]
         if group["max_bid"] >= 0.95:
@@ -487,9 +610,16 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "mark_pct": _ratio(raw["marked"], raw["raw_count"]),
                 "wins95": raw["wins95"],
                 "loss05": raw["loss05"],
+                "weather_scored": raw["weather_scored"],
+                "weather_wins": raw["weather_wins"],
+                "weather_losses": raw["weather_losses"],
+                "weather_pnl": raw["weather_pnl"],
+                "weather_risk": raw["weather_risk"],
+                "weather_rr": _ratio(raw["weather_pnl"], raw["weather_risk"]),
             }
         )
         station_rows[-1]["status"] = _live_status(station_rows[-1]["mark_pct"], station_rows[-1]["live_rr"])
+        station_rows[-1]["book_status"] = _book_status(station_rows[-1]["mark_pct"])
     station_rows.sort(key=lambda row: (row["raw_mtm"], row["station"]), reverse=True)
 
     policy_station_index: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
@@ -554,6 +684,8 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]]) -> dict[str, Any]:
         row["mark_pct"] = _ratio(row["marked"], row["open_positions"])
         row["live_rr"] = _ratio(row["mtm"], row["risk"])
         row["status"] = _live_status(row["mark_pct"], row["live_rr"])
+        row["book_status"] = _book_status(row["mark_pct"])
+        row["weather_rr"] = _ratio(row["weather_pnl"], row["weather_risk"])
 
     return {
         "raw_count": raw_count,

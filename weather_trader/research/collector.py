@@ -73,6 +73,7 @@ class ResearchCollector:
 
         try:
             markets = same_day_markets(self.discovery.discover(limit=self.config.market_limit), now)
+            errors.extend(getattr(self.discovery, "last_warnings", []))
         except requests.RequestException as exc:
             errors.append(f"discovery: {exc}")
             engine_state = EngineState(

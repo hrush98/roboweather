@@ -36,6 +36,17 @@ class WeatherMarket:
     market_date: date | None = None
 
 
+@dataclass(frozen=True)
+class WeatherEventTarget:
+    city_slug: str
+    market_date: date
+
+    @property
+    def event_slug(self) -> str:
+        month = _MONTH_NAMES[self.market_date.month]
+        return f"highest-temperature-in-{self.city_slug}-on-{month}-{self.market_date.day}-{self.market_date.year}"
+
+
 class PolymarketReader:
     def __init__(self, timeout_seconds: int = 30, max_retries: int = 3, retry_backoff_seconds: float = 1.0) -> None:
         self.timeout_seconds = timeout_seconds
@@ -58,9 +69,15 @@ class PolymarketReader:
     def _fetch_gamma_markets(self, limit: int) -> list[dict]:
         all_markets: list[dict] = []
         offset = 0
-        page_size = min(limit, 500)
+        page_size = min(limit, 100)
         while len(all_markets) < limit:
-            response = self._get_gamma_markets_page(page_size=page_size, offset=offset)
+            try:
+                response = self._get_gamma_markets_page(page_size=page_size, offset=offset)
+            except requests.HTTPError as exc:
+                response = exc.response
+                if response is not None and response.status_code == 422 and offset > 0:
+                    break
+                raise
             payload = response.json()
             batch = payload if isinstance(payload, list) else payload.get("data") or payload.get("markets") or []
             if not batch:
@@ -89,6 +106,43 @@ class PolymarketReader:
                 time.sleep(self.retry_backoff_seconds * attempt)
         raise last_error or RuntimeError("gamma market request failed")
 
+    def _fetch_weather_event_markets(self, targets: list[WeatherEventTarget]) -> tuple[list[dict], list[str]]:
+        items: list[dict] = []
+        missing: list[str] = []
+        for target in targets:
+            try:
+                event = self._fetch_gamma_event_by_slug(target.event_slug)
+            except requests.HTTPError as exc:
+                response = exc.response
+                if response is not None and response.status_code == 404:
+                    missing.append(target.event_slug)
+                    continue
+                raise
+            markets = event.get("markets") or []
+            if not markets:
+                missing.append(target.event_slug)
+                continue
+            items.extend(item for item in markets if not item.get("closed"))
+        return items, missing
+
+    def _fetch_gamma_event_by_slug(self, slug: str) -> dict:
+        last_error: requests.RequestException | None = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                response = requests.get(
+                    f"{GAMMA_URL}/events/slug/{slug}",
+                    timeout=self.timeout_seconds,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload if isinstance(payload, dict) else {}
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt >= self.max_retries or not _retryable_request_error(exc):
+                    raise
+                time.sleep(self.retry_backoff_seconds * attempt)
+        raise last_error or RuntimeError("gamma event request failed")
+
     def _parse_weather_market(self, item: dict) -> WeatherMarket | None:
         question = item.get("question") or ""
         question_lower = question.lower()
@@ -107,7 +161,7 @@ class PolymarketReader:
         station_id = _parse_resolution_station(item) or self.city_map[city]
         best_bid = _to_float(item.get("bestBid"))
         best_ask = _to_float(item.get("bestAsk"))
-        if best_bid is None or best_ask is None:
+        if best_ask is None:
             return None
         return WeatherMarket(
             market_id=str(item.get("id")),
@@ -118,7 +172,7 @@ class PolymarketReader:
             threshold_f=float(threshold_f),
             lower_f=lower_f,
             upper_f=upper_f,
-            best_bid_yes=best_bid,
+            best_bid_yes=best_bid or 0.0,
             best_ask_yes=best_ask,
             best_bid_no=None,
             best_ask_no=None,
@@ -255,6 +309,9 @@ _MONTHS = {
     "november": 11,
     "december": 12,
 }
+
+
+_MONTH_NAMES = {value: key for key, value in _MONTHS.items()}
 
 
 def _best_bid(book: dict) -> float | None:

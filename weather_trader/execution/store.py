@@ -818,6 +818,15 @@ class ExecutionStore:
                     from book_snapshots
                     group by token_id
                 ) latest on latest.id = bs.id
+            ),
+            station_highs as (
+                select
+                    station,
+                    market_date,
+                    max(high_so_far) as high_so_far,
+                    max(hrrr_remaining_max) as hrrr_remaining_max
+                from prediction_snapshots
+                group by station, market_date
             )
             select
                 rpp.id,
@@ -846,6 +855,10 @@ class ExecutionStore:
                 end as selected_token_id,
                 lb.best_bid as current_bid,
                 lb.timestamp as current_book_time,
+                highs.high_so_far,
+                highs.hrrr_remaining_max,
+                outcomes.final_high_tmpf,
+                outcomes.resolved_at as outcome_resolved_at,
                 case
                     when lb.best_bid is null then null
                     else lb.best_bid - rpp.entry_price
@@ -856,6 +869,12 @@ class ExecutionStore:
                 when rpp.selected_side = 'BUY_YES' then m.yes_token_id
                 else m.no_token_id
             end
+            left join station_highs highs
+                on highs.station = rpp.station
+                and highs.market_date = rpp.market_date
+            left join station_date_outcomes outcomes
+                on outcomes.station = rpp.station
+                and outcomes.market_date = rpp.market_date
             {date_filter}
             order by rpp.timestamp desc, rpp.id desc
             limit ?
@@ -906,11 +925,27 @@ class ExecutionStore:
             """,
             (market_date_text,),
         ).fetchall()
+        markets = self.connection.execute(
+            """
+            select
+                station,
+                count(*) as markets,
+                sum(case when yes_token_id is not null and no_token_id is not null then 1 else 0 end) as tokenized,
+                min(lower_f) as min_low,
+                max(coalesce(upper_f, lower_f)) as max_bucket
+            from markets
+            where market_date = ?
+            group by station
+            order by station
+            """,
+            (market_date_text,),
+        ).fetchall()
         return {
             **(dict(coverage) if coverage is not None else {}),
             "market_date": market_date_text,
             "station_temps": [dict(row) for row in stations],
             "outcomes": [dict(row) for row in outcomes],
+            "market_stations": [dict(row) for row in markets],
         }
 
     def latest_insights(self, limit: int = 5, insight_type: str | None = None) -> list[dict[str, Any]]:

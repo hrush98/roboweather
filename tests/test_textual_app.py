@@ -229,6 +229,59 @@ def test_live_policy_view_uses_open_positions_and_policy_silos() -> None:
     assert [row["station"] for row in view["policy_station_rows"]] == ["KDAL", "KATL"]
 
 
+def test_live_policy_view_scores_prelim_weather_when_books_are_missing() -> None:
+    live_rows = [
+        {
+            "timestamp": "2026-05-11T23:11:00Z",
+            "policy_name": "pm_us12_mvp_hc_15m_first",
+            "model_group": "mvp_pm_active_us12_obs_2022_2025",
+            "strategy_bucket": "HIGH_CONVICTION",
+            "obs_delay_bucket": "15m",
+            "station": "KATL",
+            "market_date": "2026-05-11",
+            "selected_side": "BUY_NO",
+            "selected_bucket": "74-75F",
+            "entry_price": 0.60,
+            "current_bid": None,
+            "unrealized_pnl": None,
+            "high_so_far": 79.0,
+        },
+        {
+            "timestamp": "2026-05-11T23:12:00Z",
+            "policy_name": "pm_us12_mvp_hc_15m_first",
+            "model_group": "mvp_pm_active_us12_obs_2022_2025",
+            "strategy_bucket": "HIGH_CONVICTION",
+            "obs_delay_bucket": "15m",
+            "station": "KDAL",
+            "market_date": "2026-05-11",
+            "selected_side": "BUY_YES",
+            "selected_bucket": "80-81F",
+            "entry_price": 0.20,
+            "current_bid": None,
+            "unrealized_pnl": None,
+            "high_so_far": 79.0,
+        },
+    ]
+
+    view = _build_live_policy_view(live_rows)
+
+    policy = view["policy_rows"][0]
+    assert policy["book_status"] == "NO_BOOK_MARK"
+    assert policy["weather_status"] == "MIXED"
+    assert policy["weather_wins"] == 1
+    assert policy["weather_losses"] == 1
+    assert policy["weather_rr"] == pytest.approx(0.25)
+
+    atl = next(row for row in view["exposure_rows"] if row["station"] == "KATL")
+    assert atl["weather_status"] == "PRELIM_WIN"
+    assert atl["weather_pnl"] == pytest.approx(0.40)
+    assert atl["book_status"] == "NO_BOOK_MARK"
+
+    kdal = next(row for row in view["exposure_rows"] if row["station"] == "KDAL")
+    assert kdal["weather_status"] == "PRELIM_LOSS"
+    assert kdal["weather_pnl"] == pytest.approx(-0.20)
+
+
 def test_live_policy_view_handles_empty_input() -> None:
     view = _build_live_policy_view([])
 
@@ -327,6 +380,11 @@ def test_live_research_policy_positions_can_be_scoped_to_market_date(tmp_path) -
         assert rows[0]["policy_name"] == "pm_us12_policy_today"
         assert rows[0]["current_bid"] == pytest.approx(0.72)
         assert rows[0]["unrealized_pnl"] == pytest.approx(0.12)
+        overview = store.research_status_overview(date(2026, 5, 13))
+        assert overview["policy_positions_today"] == 1
+        assert overview["market_stations"] == [
+            {"station": "KATL", "markets": 1, "tokenized": 1, "min_low": 74.0, "max_bucket": 75.0}
+        ]
     finally:
         store.close()
 

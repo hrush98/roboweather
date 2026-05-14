@@ -15,14 +15,13 @@ from weather_trader.ui.dashboard_rollups import (
     _fmt,
     _fmt_money,
     _fmt_pct,
-    _live_status,
     _money_text,
     _pct_text,
     _status_text,
 )
 
 
-ALL_STATIONS = {"KATL", "KDAL", "KHOU", "KLAX", "KLGA", "KMIA", "KORD", "KSEA", "KSFO", "KBKF", "KPDX", "KDEN"}
+CONFIG_STATIONS = {"KATL", "KBKF", "KDAL", "KDEN", "KHOU", "KLAX", "KLGA", "KMIA", "KORD", "KSEA", "KSFO"}
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -54,12 +53,19 @@ def _policy_key(row: dict) -> tuple[str, str, str, str]:
 
 def _status_priority(status: str) -> int:
     return {
+        "PRELIM_LOSS": 0,
+        "OFFICIAL_LOSS": 0,
         "LIVE_STRESS": 0,
+        "NO_BOOK_MARK": 1,
         "BOOK_GAPS": 1,
         "TOO_EARLY": 2,
         "WATCH": 3,
+        "LIVE": 3,
         "LIVE_STRONG": 4,
+        "PRELIM_WIN": 5,
+        "OFFICIAL_WIN": 5,
         "PROMISING": 5,
+        "MARKED": 6,
     }.get(status, 9)
 
 
@@ -108,7 +114,7 @@ class RoboWeatherTUI(App):
     }
 
     #day-summary {
-        height: 8;
+        height: 10;
     }
 
     #station-summary {
@@ -266,39 +272,37 @@ class RoboWeatherTUI(App):
 
         station_summary = self.query_one("#station-summary", DataTable)
         station_summary.cursor_type = "row"
-        station_summary.add_columns("status", "station", "pos", "mark", "miss", "mark%", "live rr", "risk", "high", "hrrr", "bid95", "bid05")
+        station_summary.add_columns("station", "pm", "snaps", "high", "hrrr", "pos", "weather W-L", "weather R/R", "book", "mark%", "note")
 
         unique_exposures = self.query_one("#unique-exposures", DataTable)
         unique_exposures.cursor_type = "row"
         unique_exposures.add_columns(
             "station",
-            "date",
             "side",
             "bucket",
-            "rows",
+            "high",
             "entry",
-            "mark",
-            "pnl",
-            "pnl %",
-            "status",
+            "rows",
+            "weather",
+            "weather pnl",
+            "book bid",
+            "book",
         )
 
         policy_leaderboard = self.query_one("#policy-leaderboard", DataTable)
         policy_leaderboard.cursor_type = "row"
         policy_leaderboard.add_columns(
-            "status",
+            "weather",
+            "book",
             "policy",
             "pos",
-            "mark",
-            "miss",
+            "weather W-L",
+            "weather R/R",
             "mark%",
-            "live rr",
+            "book R/R",
             "risk",
-            "bid95",
-            "bid05",
             "res",
-            "wr",
-            "R/R",
+            "hist R/R",
             "pSharp",
         )
 
@@ -480,6 +484,7 @@ class RoboWeatherTUI(App):
         live_policy_view = _build_live_policy_view(live_policy_rows)
         research_by_key = {_policy_key(row): row for row in policy_research_rows}
         station_temps = {str(row.get("station")): row for row in overview.get("station_temps", [])}
+        market_stations = {str(row.get("station")): row for row in overview.get("market_stations", [])}
         policy_rows_sorted = []
         for row in live_policy_view["policy_rows"]:
             enriched = dict(row)
@@ -488,12 +493,11 @@ class RoboWeatherTUI(App):
             enriched["historical_hit_rate"] = research.get("hit_rate")
             enriched["historical_rr"] = research.get("return_on_risk")
             enriched["position_sharpe"] = research.get("position_sharpe")
-            enriched["status"] = _live_status(enriched.get("mark_pct"), enriched.get("live_rr"), enriched["resolved_positions"])
             policy_rows_sorted.append(enriched)
         policy_rows_sorted.sort(
             key=lambda row: (
-                _status_priority(str(row.get("status", ""))),
-                row.get("live_rr") if row.get("live_rr") is not None else -999.0,
+                _status_priority(str(row.get("weather_status", ""))),
+                row.get("weather_rr") if row.get("weather_rr") is not None else -999.0,
                 row.get("mtm", 0.0),
             )
         )
@@ -521,52 +525,70 @@ class RoboWeatherTUI(App):
         today_risk = sum(float(row.get("entry_price") or 0.0) for row in live_policy_rows)
         today_mtm = sum(float(row.get("unrealized_pnl") or 0.0) for row in live_policy_rows if row.get("current_bid") is not None)
         today_live_rr = today_mtm / today_risk if today_risk else None
-        missing_stations = sorted(ALL_STATIONS - set(station_temps))
+        weather_scored = sum(int(row.get("weather_scored") or 0) for row in live_policy_view["policy_rows"])
+        weather_wins = sum(int(row.get("weather_wins") or 0) for row in live_policy_view["policy_rows"])
+        weather_losses = sum(int(row.get("weather_losses") or 0) for row in live_policy_view["policy_rows"])
+        weather_risk = sum(float(row.get("weather_risk") or 0.0) for row in live_policy_view["policy_rows"])
+        weather_pnl = sum(float(row.get("weather_pnl") or 0.0) for row in live_policy_view["policy_rows"])
+        weather_rr = weather_pnl / weather_risk if weather_risk else None
+        no_snapshot = sorted(set(market_stations) - set(station_temps))
+        no_pm_market = sorted(CONFIG_STATIONS - set(market_stations))
         day_summary_rows = [
             ("date", self.target_date, "market_date filter"),
             ("book age", latest_book_text, str(overview.get("latest_book_ts") or "")),
             ("snapshots", str(overview.get("snapshots_today", 0)), f"{overview.get('snapshots', 0)} all-time"),
             ("policy positions", str(overview.get("policy_positions_today", 0)), f"{overview.get('policy_positions', 0)} all-time"),
+            ("pm station markets", str(len(market_stations)), f"no PM market {', '.join(no_pm_market) or 'none'}"),
+            ("snapshot stations", str(len(station_temps)), f"no snapshots {', '.join(no_snapshot) or 'none'}"),
+            ("prelim weather", f"{weather_wins}-{weather_losses}", f"{weather_scored} rows scored, R/R {_fmt_pct(weather_rr)}"),
             (
-                "marked",
+                "book marked",
                 f"{marked_today}/{len(live_policy_rows)}",
                 "live policy rows with selected-token bid",
             ),
-            ("live R/R", _fmt_pct(today_live_rr), f"risk at work ${today_risk:.2f}"),
-            ("stations", f"{len(station_temps)}/{len(ALL_STATIONS)}", f"missing {', '.join(missing_stations) or 'none'}"),
+            ("book R/R", _fmt_pct(today_live_rr), f"risk at work ${today_risk:.2f}"),
             ("unique exposures", str(live_policy_view["unique_count"]), "deduped by station/date/side/bucket"),
-            (
-                "buy yes/no",
-                f"{live_policy_view['buy_yes']} / {live_policy_view['buy_no']} ({(live_policy_view['buy_yes'] / live_policy_view['buy_no']):.2f}x)"
-                if live_policy_view["buy_no"]
-                else f"{live_policy_view['buy_yes']} / 0",
-                "size imbalance",
-            ),
         ]
         for metric, value, detail in day_summary_rows:
             day_summary_table.add_row(metric, value, detail)
 
         station_summary_table = self.query_one("#station-summary", DataTable)
         station_summary_table.clear()
+        station_rows_by_station = {str(row.get("station")): row for row in live_policy_view["station_rows"]}
+        station_names = sorted(set(market_stations) | set(station_temps) | set(station_rows_by_station) | CONFIG_STATIONS)
         station_rows_sorted = sorted(
-            live_policy_view["station_rows"],
-            key=lambda row: (_status_priority(str(row.get("status", ""))), row.get("live_rr") if row.get("live_rr") is not None else -999.0),
+            station_names,
+            key=lambda station: (
+                _status_priority(str(station_rows_by_station.get(station, {}).get("book_status", ""))),
+                station_rows_by_station.get(station, {}).get("weather_rr")
+                if station_rows_by_station.get(station, {}).get("weather_rr") is not None
+                else -999.0,
+                station,
+            ),
         )
-        for row in station_rows_sorted:
-            temps = station_temps.get(str(row["station"]), {})
+        for station in station_rows_sorted:
+            row = station_rows_by_station.get(station, {})
+            temps = station_temps.get(station, {})
+            market = market_stations.get(station, {})
+            note = "OK"
+            if not market:
+                note = "NO_PM_MARKET"
+            elif not temps:
+                note = "NO_SNAPSHOTS"
+            elif not row:
+                note = "NO_POLICY_POS"
             station_summary_table.add_row(
-                _status_text(row.get("status")),
-                str(row["station"]),
-                str(row["raw_count"]),
-                str(row.get("marked", 0)),
-                str(row.get("missing", 0)),
-                _fmt_pct(row.get("mark_pct")),
-                _fmt_pct(row.get("live_rr")),
-                _fmt_money(row.get("risk")),
+                station,
+                str(market.get("markets", 0)),
+                str(temps.get("snapshots", 0)),
                 _fmt(temps.get("high")),
                 _fmt(temps.get("hrrr")),
-                str(row.get("wins95", 0)),
-                str(row.get("loss05", 0)),
+                str(row.get("raw_count", 0)),
+                f"{row.get('weather_wins', 0)}-{row.get('weather_losses', 0)}",
+                _fmt_pct(row.get("weather_rr")),
+                _status_text(row.get("book_status", "")),
+                _fmt_pct(row.get("mark_pct")),
+                note,
             )
 
         unique_exposures_table = self.query_one("#unique-exposures", DataTable)
@@ -574,33 +596,31 @@ class RoboWeatherTUI(App):
         for row in live_policy_view["exposure_rows"]:
             unique_exposures_table.add_row(
                 str(row["station"]),
-                str(row["market_date"]),
                 str(row["side"]),
                 str(row["bucket"]),
-                str(row["rows"]),
+                _fmt(row.get("weather_high")),
                 _money_text(row["entry"]),
-                _money_text(row["mark"]),
-                _money_text(row["pnl"]),
-                _fmt_pct(row["pnl_pct"]),
-                _status_text(row["status"]),
+                str(row["rows"]),
+                _status_text(row.get("weather_status")),
+                _money_text(row.get("weather_pnl")),
+                _money_text(row["mark"]) if row.get("mark") is not None else "",
+                _status_text(row.get("book_status")),
             )
 
         policy_table = self.query_one("#policy-leaderboard", DataTable)
         policy_table.clear()
         for row in policy_rows_sorted:
             policy_table.add_row(
-                _status_text(row["status"]),
+                _status_text(row.get("weather_status")),
+                _status_text(row.get("book_status")),
                 str(row["policy"]),
                 str(row["open_positions"]),
-                str(row.get("marked", 0)),
-                str(row.get("missing", 0)),
+                f"{row.get('weather_wins', 0)}-{row.get('weather_losses', 0)}",
+                _fmt_pct(row.get("weather_rr")),
                 _fmt_pct(row.get("mark_pct")),
                 _fmt_pct(row.get("live_rr")),
                 _fmt_money(row.get("risk")),
-                str(row.get("wins95", 0)),
-                str(row.get("loss05", 0)),
                 str(row.get("resolved_positions", 0)),
-                _fmt_pct(row.get("historical_hit_rate")),
                 _fmt_pct(row.get("historical_rr")),
                 _fmt(row.get("position_sharpe")),
             )
@@ -832,12 +852,12 @@ class RoboWeatherTUI(App):
         summary.update(
             " | ".join(
                 [
-                    f"raw {live_policy_view['raw_count']} / unique {live_policy_view['unique_count']} / itm {live_policy_view['in_money']} / done {live_policy_view['done']}",
-                    f"mtm raw {_fmt_money(live_policy_view['raw_mtm'])} / unique {_fmt_money(live_policy_view['unique_mtm'])}",
+                    f"date {self.target_date}",
+                    f"weather {weather_wins}-{weather_losses} R/R {_fmt_pct(weather_rr)}",
+                    f"book marked {marked_today}/{len(live_policy_rows)} R/R {_fmt_pct(today_live_rr)}",
+                    f"pm stations {len(market_stations)} / snapshots {len(station_temps)}",
                     f"buy yes/no {live_policy_view['buy_yes']}/{live_policy_view['buy_no']}",
                     f"signals {len(signals)} / picks {len(groups)} / snapshots {len(snapshots)} / orders {order_summary.get('orders', 0)} / live policies {len(live_policy_view['policy_rows'])}",
-                    f"filled {order_summary.get('filled', 0)} / rejected {order_summary.get('rejected', 0)} / paper cost ${float(order_summary.get('total_cost') or 0.0):.2f}",
-                    f"policy rows {len(live_policy_rows)} / policies {len(policy_rows_sorted)} / settled silos {len(policy_performance_rows)} / latest live policy {live_policy_view['latest_position_time']}",
                     f"actionable_only={self.actionable_only}",
                 ]
             )
