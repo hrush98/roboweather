@@ -125,6 +125,10 @@ class RoboWeatherTUI(App):
         height: 1fr;
     }
 
+    #policy-positions {
+        height: 1fr;
+    }
+
     #policy-leaderboard {
         height: 13;
     }
@@ -213,6 +217,9 @@ class RoboWeatherTUI(App):
                         with Vertical(classes="stack"):
                             yield Static("Exposure Watch", classes="section-title")
                             yield DataTable(id="unique-exposures")
+                with TabPane("Positions", id="positions-tab"):
+                    yield Static("Policy Positions", classes="section-title")
+                    yield DataTable(id="policy-positions")
                 with TabPane("Daily Report", id="daily-report-tab"):
                     yield Static("Recent Reports", classes="section-title")
                     yield DataTable(id="daily-insights")
@@ -272,7 +279,7 @@ class RoboWeatherTUI(App):
 
         station_summary = self.query_one("#station-summary", DataTable)
         station_summary.cursor_type = "row"
-        station_summary.add_columns("station", "pm", "snaps", "high", "hrrr", "pos", "weather W-L", "weather R/R", "book", "mark%", "note")
+        station_summary.add_columns("station", "pm", "snaps", "high", "hrrr", "pos", "weather W-L", "weather R/R", "book", "quote%", "note")
 
         unique_exposures = self.query_one("#unique-exposures", DataTable)
         unique_exposures.cursor_type = "row"
@@ -281,11 +288,14 @@ class RoboWeatherTUI(App):
             "side",
             "bucket",
             "high",
-            "entry",
+            "px",
+            "fair",
+            "edge",
             "rows",
             "weather",
-            "weather pnl",
-            "book bid",
+            "bid",
+            "exp R/R",
+            "live R/R",
             "book",
         )
 
@@ -296,14 +306,37 @@ class RoboWeatherTUI(App):
             "book",
             "policy",
             "pos",
-            "weather W-L",
-            "weather R/R",
-            "mark%",
-            "book R/R",
+            "avgPx",
+            "avgFair",
+            "avgEdge",
+            "liveBid",
+            "quote%",
+            "exp R/R",
+            "live R/R",
+            "live-exp",
             "risk",
             "res",
             "hist R/R",
             "pSharp",
+        )
+
+        policy_positions = self.query_one("#policy-positions", DataTable)
+        policy_positions.cursor_type = "row"
+        policy_positions.add_columns(
+            "policy",
+            "station",
+            "side",
+            "bucket",
+            "px",
+            "fair",
+            "edge",
+            "bid",
+            "exp R/R",
+            "live R/R",
+            "live-exp",
+            "high",
+            "weather",
+            "book",
         )
 
         daily_insights = self.query_one("#daily-insights", DataTable)
@@ -497,8 +530,9 @@ class RoboWeatherTUI(App):
         policy_rows_sorted.sort(
             key=lambda row: (
                 _status_priority(str(row.get("weather_status", ""))),
-                row.get("weather_rr") if row.get("weather_rr") is not None else -999.0,
-                row.get("mtm", 0.0),
+                row.get("live_minus_exp") if row.get("live_minus_exp") is not None else 999.0,
+                row.get("live_rr") if row.get("live_rr") is not None else 999.0,
+                -row.get("risk", 0.0),
             )
         )
 
@@ -542,11 +576,11 @@ class RoboWeatherTUI(App):
             ("snapshot stations", str(len(station_temps)), f"no snapshots {', '.join(no_snapshot) or 'none'}"),
             ("prelim weather", f"{weather_wins}-{weather_losses}", f"{weather_scored} rows scored, R/R {_fmt_pct(weather_rr)}"),
             (
-                "book marked",
+                "quoted",
                 f"{marked_today}/{len(live_policy_rows)}",
                 "live policy rows with selected-token bid",
             ),
-            ("book R/R", _fmt_pct(today_live_rr), f"risk at work ${today_risk:.2f}"),
+            ("live R/R", _fmt_pct(today_live_rr), f"risk at work ${today_risk:.2f}"),
             ("unique exposures", str(live_policy_view["unique_count"]), "deduped by station/date/side/bucket"),
         ]
         for metric, value, detail in day_summary_rows:
@@ -599,11 +633,34 @@ class RoboWeatherTUI(App):
                 str(row["side"]),
                 str(row["bucket"]),
                 _fmt(row.get("weather_high")),
-                _money_text(row["entry"]),
+                _fmt(row.get("entry")),
+                _fmt(row.get("fair")),
+                _fmt(row.get("edge")),
                 str(row["rows"]),
                 _status_text(row.get("weather_status")),
-                _money_text(row.get("weather_pnl")),
-                _money_text(row["mark"]) if row.get("mark") is not None else "",
+                _fmt(row.get("mark")),
+                _fmt_pct(row.get("expected_rr")),
+                _fmt_pct(row.get("pnl_pct")),
+                _status_text(row.get("book_status")),
+            )
+
+        policy_positions_table = self.query_one("#policy-positions", DataTable)
+        policy_positions_table.clear()
+        for row in live_policy_view["position_rows"]:
+            policy_positions_table.add_row(
+                str(row.get("policy", "")),
+                str(row.get("station", "")),
+                str(row.get("side", "")),
+                str(row.get("bucket", "")),
+                _fmt(row.get("entry")),
+                _fmt(row.get("fair")),
+                _fmt(row.get("edge")),
+                _fmt(row.get("bid")),
+                _fmt_pct(row.get("exp_rr")),
+                _fmt_pct(row.get("live_rr")),
+                _fmt_pct(row.get("live_minus_exp")),
+                _fmt(row.get("high")),
+                _status_text(row.get("weather_status")),
                 _status_text(row.get("book_status")),
             )
 
@@ -615,10 +672,14 @@ class RoboWeatherTUI(App):
                 _status_text(row.get("book_status")),
                 str(row["policy"]),
                 str(row["open_positions"]),
-                f"{row.get('weather_wins', 0)}-{row.get('weather_losses', 0)}",
-                _fmt_pct(row.get("weather_rr")),
+                _fmt(row.get("avg_entry")),
+                _fmt(row.get("avg_fair")),
+                _fmt(row.get("avg_edge")),
+                _fmt(row.get("avg_bid")),
                 _fmt_pct(row.get("mark_pct")),
+                _fmt_pct(row.get("expected_rr")),
                 _fmt_pct(row.get("live_rr")),
+                _fmt_pct(row.get("live_minus_exp")),
                 _fmt_money(row.get("risk")),
                 str(row.get("resolved_positions", 0)),
                 _fmt_pct(row.get("historical_rr")),

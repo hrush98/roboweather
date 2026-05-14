@@ -193,6 +193,8 @@ def test_live_policy_view_uses_open_positions_and_policy_silos() -> None:
             "selected_side": "BUY_NO",
             "selected_bucket": "74-75F",
             "entry_price": 0.79,
+            "entry_fair": 0.88,
+            "entry_edge": 0.09,
             "current_bid": 0.95,
             "unrealized_pnl": 0.16,
         },
@@ -207,6 +209,8 @@ def test_live_policy_view_uses_open_positions_and_policy_silos() -> None:
             "selected_side": "BUY_YES",
             "selected_bucket": "80-81F",
             "entry_price": 0.10,
+            "entry_fair": 0.25,
+            "entry_edge": 0.15,
             "current_bid": 0.32,
             "unrealized_pnl": 0.22,
         },
@@ -224,8 +228,20 @@ def test_live_policy_view_uses_open_positions_and_policy_silos() -> None:
     assert view["done"] == 1
     assert view["policy_rows"][0]["open_positions"] == 1
     assert view["policy_rows"][0]["mtm"] == pytest.approx(0.22)
+    assert view["policy_rows"][0]["avg_entry"] == pytest.approx(0.10)
+    assert view["policy_rows"][0]["avg_fair"] == pytest.approx(0.25)
+    assert view["policy_rows"][0]["avg_edge"] == pytest.approx(0.15)
+    assert view["policy_rows"][0]["avg_bid"] == pytest.approx(0.32)
+    assert view["policy_rows"][0]["expected_rr"] == pytest.approx(1.5)
+    assert view["policy_rows"][0]["live_rr"] == pytest.approx(2.2)
+    assert view["policy_rows"][0]["live_minus_exp"] == pytest.approx(0.7)
     assert view["policy_rows"][1]["mtm"] == pytest.approx(0.16)
     assert view["rows"] == view["policy_rows"]
+    assert view["position_rows"][0]["policy"] == "pm_us12_mvp_hc_15m_first"
+    assert view["position_rows"][0]["live_minus_exp"] == pytest.approx((0.95 - 0.79) / 0.79 - (0.88 - 0.79) / 0.79)
+    assert view["exposure_rows"][0]["fair"] == pytest.approx(0.25)
+    assert view["exposure_rows"][0]["edge"] == pytest.approx(0.15)
+    assert view["exposure_rows"][0]["expected_rr"] == pytest.approx(1.5)
     assert [row["station"] for row in view["policy_station_rows"]] == ["KDAL", "KATL"]
 
 

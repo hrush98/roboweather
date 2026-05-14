@@ -77,6 +77,12 @@ def _ratio(numerator: float, denominator: float) -> float | None:
     return numerator / denominator
 
 
+def _price_rr(price: float | None, entry: float) -> float | None:
+    if price is None or entry == 0:
+        return None
+    return (price - entry) / entry
+
+
 def _live_status(mark_pct: float | None, live_rr: float | None, resolved: int | None = None) -> str:
     if resolved is not None and resolved < 10:
         return "TOO_EARLY"
@@ -437,6 +443,7 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
     )
     station_unique: dict[str, dict[str, Any]] = defaultdict(lambda: {"unique_count": 0, "unique_mtm": 0.0, "done": 0})
     rows_by_policy: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    position_rows: list[dict[str, Any]] = []
     raw_count = 0
     buy_yes = 0
     buy_no = 0
@@ -456,6 +463,13 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
         pnl = _safe_float(row.get("unrealized_pnl"))
         current_bid = row.get("current_bid")
         entry_price = _safe_float(row.get("entry_price"))
+        entry_fair = row.get("entry_fair")
+        entry_fair_float = _safe_float(entry_fair)
+        entry_edge = row.get("entry_edge")
+        entry_edge_float = _safe_float(entry_edge)
+        exp_rr = _price_rr(entry_fair_float, entry_price) if entry_fair is not None else None
+        live_rr = _price_rr(_safe_float(current_bid), entry_price) if current_bid is not None else None
+        live_minus_exp = live_rr - exp_rr if live_rr is not None and exp_rr is not None else None
         timestamp = str(row.get("timestamp", ""))
         if timestamp and timestamp > latest_position_time:
             latest_position_time = timestamp
@@ -497,8 +511,12 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
                 "bucket": bucket,
                 "rows": 0,
                 "entry": 0.0,
+                "fair": 0.0,
+                "edge": 0.0,
                 "mark": 0.0,
                 "pnl": 0.0,
+                "fair_count": 0,
+                "edge_count": 0,
                 "max_bid": float("-inf"),
                 "status": "",
                 "book_marked": 0,
@@ -514,6 +532,12 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
         )
         group["rows"] += 1
         group["entry"] += entry_price
+        if entry_fair is not None:
+            group["fair"] += entry_fair_float
+            group["fair_count"] += 1
+        if entry_edge is not None:
+            group["edge"] += entry_edge_float
+            group["edge_count"] += 1
         group["mark"] += _safe_float(current_bid)
         group["pnl"] += pnl
         if current_bid is not None:
@@ -568,6 +592,12 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
                 "missing": 0,
                 "risk": 0.0,
                 "mtm": 0.0,
+                "entry_sum": 0.0,
+                "fair_sum": 0.0,
+                "edge_sum": 0.0,
+                "bid_sum": 0.0,
+                "fair_count": 0,
+                "edge_count": 0,
                 "wins95": 0,
                 "loss05": 0,
                 "weather_scored": 0,
@@ -581,10 +611,18 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
         policy_group["open_positions"] += 1
         policy_group["risk"] += entry_price
         policy_group["mtm"] += pnl
+        policy_group["entry_sum"] += entry_price
+        if entry_fair is not None:
+            policy_group["fair_sum"] += entry_fair_float
+            policy_group["fair_count"] += 1
+        if entry_edge is not None:
+            policy_group["edge_sum"] += entry_edge_float
+            policy_group["edge_count"] += 1
         if current_bid is None:
             policy_group["missing"] += 1
         else:
             policy_group["marked"] += 1
+            policy_group["bid_sum"] += _safe_float(current_bid)
         if pnl > 0:
             policy_group["wins"] += 1
         if current_bid is not None and _safe_float(current_bid) >= 0.95:
@@ -605,11 +643,38 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
             elif policy_group["weather_status"] != outcome["weather_status"]:
                 policy_group["weather_status"] = "MIXED"
 
+        position_rows.append(
+            {
+                "time": timestamp[11:19] if len(timestamp) >= 19 else timestamp,
+                "policy": policy,
+                "model_group": model_group,
+                "strategy_bucket": strategy_bucket,
+                "obs_delay_bucket": obs_delay_bucket,
+                "station": station,
+                "market_date": market_date,
+                "side": side,
+                "bucket": bucket,
+                "entry": entry_price,
+                "fair": entry_fair_float if entry_fair is not None else None,
+                "edge": entry_edge_float if entry_edge is not None else None,
+                "bid": _safe_float(current_bid) if current_bid is not None else None,
+                "exp_rr": exp_rr,
+                "live_rr": live_rr,
+                "live_minus_exp": live_minus_exp,
+                "risk": entry_price,
+                "high": outcome["weather_high"],
+                "weather_status": outcome["weather_status"],
+                "book_status": _book_status(1.0 if current_bid is not None else None),
+            }
+        )
+
     exposure_rows: list[dict[str, Any]] = []
     for group in exposure_index.values():
         rows = group["rows"] or 1
         entry = group["entry"] / rows
         mark = group["mark"] / group["book_marked"] if group["book_marked"] else None
+        fair = group["fair"] / group["fair_count"] if group["fair_count"] else None
+        edge = group["edge"] / group["edge_count"] if group["edge_count"] else None
         pnl_pct = group["pnl"] / group["entry"] if group["entry"] else None
         status = group["status"] or "LIVE"
         if group["max_bid"] >= 0.95:
@@ -621,11 +686,15 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
             {
                 **group,
                 "entry": entry,
+                "fair": fair,
+                "edge": edge,
                 "mark": mark,
                 "pnl_pct": pnl_pct,
+                "expected_rr": _price_rr(fair, entry),
                 "status": status,
                 "book_status": _book_status(book_pct),
                 "book_mark_pct": book_pct,
+                "live_minus_exp": pnl_pct - _price_rr(fair, entry) if pnl_pct is not None and fair is not None else None,
                 "weather_rr": _ratio(group["weather_pnl"], group["weather_risk"]),
             }
         )
@@ -727,11 +796,31 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
     for row in policy_rows:
         row["win_rate"] = row["wins"] / row["open_positions"] if row["open_positions"] else 0.0
         row["avg_pnl"] = row["mtm"] / row["open_positions"] if row["open_positions"] else 0.0
+        row["avg_entry"] = row["entry_sum"] / row["open_positions"] if row["open_positions"] else None
+        row["avg_fair"] = row["fair_sum"] / row["fair_count"] if row["fair_count"] else None
+        row["avg_edge"] = row["edge_sum"] / row["edge_count"] if row["edge_count"] else None
+        row["avg_bid"] = row["bid_sum"] / row["marked"] if row["marked"] else None
         row["mark_pct"] = _ratio(row["marked"], row["open_positions"])
         row["live_rr"] = _ratio(row["mtm"], row["risk"])
+        row["expected_rr"] = _price_rr(row["avg_fair"], row["avg_entry"] or 0.0)
+        row["live_minus_exp"] = (
+            row["live_rr"] - row["expected_rr"]
+            if row["live_rr"] is not None and row["expected_rr"] is not None
+            else None
+        )
         row["status"] = _live_status(row["mark_pct"], row["live_rr"])
         row["book_status"] = _book_status(row["mark_pct"])
         row["weather_rr"] = _ratio(row["weather_pnl"], row["weather_risk"])
+
+    position_rows.sort(
+        key=lambda row: (
+            row["live_minus_exp"] if row["live_minus_exp"] is not None else 999.0,
+            -row["risk"],
+            row["policy"],
+            row["station"],
+            row["bucket"],
+        )
+    )
 
     return {
         "raw_count": raw_count,
@@ -748,5 +837,6 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
         "station_rows": station_rows,
         "policy_station_rows": policy_station_rows,
         "policy_rows": policy_rows,
+        "position_rows": position_rows,
         "rows": policy_rows,
     }
