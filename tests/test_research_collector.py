@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timezone
 
+import requests
+
 from weather_trader.execution.contracts import StationDateOutcome, TradeAction
+from weather_trader.execution.engine import PaperTradingEngine
+from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import StationWeatherState
-from weather_trader.research.collector import ResearchConfig, due_delay_buckets
+from weather_trader.research.collector import ResearchCollector, ResearchConfig, due_delay_buckets
 from weather_trader.research.resolver import score_snapshot
 
 
@@ -57,6 +61,47 @@ def test_score_snapshot_scores_selected_side_against_final_high() -> None:
     assert result.correct is True
     assert result.entry_price == 0.4
     assert result.paper_pnl == 0.6
+
+
+def test_research_collector_records_discovery_timeout_without_crashing(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+    collector = ResearchCollector(store=store, model_paths=[], discovery=_FailingDiscovery())
+
+    result = collector.run_once(datetime(2026, 5, 13, 0, 5, tzinfo=timezone.utc))
+
+    assert result.snapshots_written == 0
+    assert result.engine_state.discovered_markets == 0
+    assert result.engine_state.errors
+    assert result.engine_state.errors[0].startswith("discovery:")
+    row = store.connection.execute("select mode, discovered_markets, raw_json from engine_state").fetchone()
+    assert row["mode"] == "research"
+    assert row["discovered_markets"] == 0
+    assert "gamma stalled" in row["raw_json"]
+
+
+def test_paper_engine_records_discovery_timeout_without_crashing(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "paper.sqlite")
+    engine = PaperTradingEngine(
+        store=store,
+        fair_value_engine=object(),
+        discovery=_FailingDiscovery(),
+    )
+
+    result = engine.run_once(datetime(2026, 5, 13, 0, 5, tzinfo=timezone.utc))
+
+    assert result.signals == []
+    assert result.engine_state.discovered_markets == 0
+    assert result.engine_state.errors
+    assert result.engine_state.errors[0].startswith("discovery:")
+    row = store.connection.execute("select mode, discovered_markets, raw_json from engine_state").fetchone()
+    assert row["mode"] == "paper"
+    assert row["discovered_markets"] == 0
+    assert "gamma stalled" in row["raw_json"]
+
+
+class _FailingDiscovery:
+    def discover(self, limit: int = 50000, validate_stations: bool = True):
+        raise requests.ReadTimeout("gamma stalled")
 
 
 def _weather(latest_obs_time: str) -> StationWeatherState:

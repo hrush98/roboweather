@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 import json
 import re
+import time
 
 import requests
 
@@ -36,8 +37,10 @@ class WeatherMarket:
 
 
 class PolymarketReader:
-    def __init__(self, timeout_seconds: int = 30) -> None:
+    def __init__(self, timeout_seconds: int = 30, max_retries: int = 3, retry_backoff_seconds: float = 1.0) -> None:
         self.timeout_seconds = timeout_seconds
+        self.max_retries = max(1, max_retries)
+        self.retry_backoff_seconds = retry_backoff_seconds
         table = load_station_table()
         self.city_map = {row["city"].lower(): row["station"] for row in table.to_dict(orient="records")}
         self.city_map["nyc"] = "KLGA"
@@ -57,12 +60,7 @@ class PolymarketReader:
         offset = 0
         page_size = min(limit, 500)
         while len(all_markets) < limit:
-            response = requests.get(
-                f"{GAMMA_URL}/markets",
-                params={"limit": page_size, "offset": offset, "active": "true", "closed": "false"},
-                timeout=self.timeout_seconds,
-            )
-            response.raise_for_status()
+            response = self._get_gamma_markets_page(page_size=page_size, offset=offset)
             payload = response.json()
             batch = payload if isinstance(payload, list) else payload.get("data") or payload.get("markets") or []
             if not batch:
@@ -72,6 +70,24 @@ class PolymarketReader:
                 break
             offset += page_size
         return all_markets[:limit]
+
+    def _get_gamma_markets_page(self, page_size: int, offset: int) -> requests.Response:
+        last_error: requests.RequestException | None = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                response = requests.get(
+                    f"{GAMMA_URL}/markets",
+                    params={"limit": page_size, "offset": offset, "active": "true", "closed": "false"},
+                    timeout=self.timeout_seconds,
+                )
+                response.raise_for_status()
+                return response
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt >= self.max_retries or not _retryable_request_error(exc):
+                    raise
+                time.sleep(self.retry_backoff_seconds * attempt)
+        raise last_error or RuntimeError("gamma market request failed")
 
     def _parse_weather_market(self, item: dict) -> WeatherMarket | None:
         question = item.get("question") or ""
@@ -179,6 +195,15 @@ def _parse_list_field(value) -> list[str]:
         if isinstance(parsed, list):
             return [str(item) for item in parsed]
     return []
+
+
+def _retryable_request_error(exc: requests.RequestException) -> bool:
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return True
+    response = getattr(exc, "response", None)
+    if response is None:
+        return False
+    return response.status_code == 429 or 500 <= response.status_code < 600
 
 
 def _parse_temperature_bucket(question_lower: str) -> tuple[float | None, float | None]:

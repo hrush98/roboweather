@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import fields, is_dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,14 @@ from weather_trader.execution.contracts import (
     StationDateDecisionTrace,
     dataclass_to_jsonable,
 )
+
+
+def _date_text(value: date | str | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
 
 
 class ExecutionStore:
@@ -261,6 +270,18 @@ class ExecutionStore:
                 source_prediction_snapshot_ids text not null,
                 raw_json text not null,
                 unique(policy_name, station, market_date, scope_key)
+            );
+
+            create table if not exists hermes_insights (
+                id integer primary key autoincrement,
+                created_at text not null,
+                insight_type text not null,
+                target_date text,
+                severity text not null default 'info',
+                title text not null,
+                body text not null,
+                metrics_json text,
+                raw_json text not null
             );
             """
         )
@@ -772,9 +793,23 @@ class ExecutionStore:
             positions.append(payload)
         return positions
 
-    def live_research_policy_positions(self, limit: int = 1000) -> list[dict[str, Any]]:
-        rows = self.connection.execute(
+    def latest_research_market_date(self) -> str | None:
+        row = self.connection.execute(
             """
+            select max(market_date) as market_date
+            from research_policy_positions
+            """
+        ).fetchone()
+        if row is None:
+            return None
+        return row["market_date"]
+
+    def live_research_policy_positions(self, limit: int = 1000, market_date: date | str | None = None) -> list[dict[str, Any]]:
+        market_date_text = _date_text(market_date)
+        date_filter = "where rpp.market_date = ?" if market_date_text is not None else ""
+        params: tuple[Any, ...] = (market_date_text, limit) if market_date_text is not None else (limit,)
+        rows = self.connection.execute(
+            f"""
             with latest_books as (
                 select bs.token_id, bs.best_bid, bs.best_ask, bs.timestamp
                 from book_snapshots bs
@@ -821,12 +856,181 @@ class ExecutionStore:
                 when rpp.selected_side = 'BUY_YES' then m.yes_token_id
                 else m.no_token_id
             end
+            {date_filter}
             order by rpp.timestamp desc, rpp.id desc
             limit ?
             """,
-            (limit,),
+            params,
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def research_status_overview(self, market_date: date | str) -> dict[str, Any]:
+        market_date_text = _date_text(market_date)
+        coverage = self.connection.execute(
+            """
+            select
+                (select count(*) from prediction_snapshots) as snapshots,
+                (select count(*) from prediction_snapshots where market_date = ?) as snapshots_today,
+                (select count(*) from research_policy_positions) as policy_positions,
+                (select count(*) from research_policy_positions where market_date = ?) as policy_positions_today,
+                (select count(distinct policy_name) from research_policy_positions) as policies,
+                (select count(*) from book_snapshots) as book_snapshots,
+                (select max(timestamp) from book_snapshots) as latest_book_ts
+            """,
+            (market_date_text, market_date_text),
+        ).fetchone()
+        stations = self.connection.execute(
+            """
+            select
+                station,
+                count(*) as snapshots,
+                min(timestamp) as first_ts,
+                max(timestamp) as last_ts,
+                max(current_temp) as current_temp,
+                max(high_so_far) as high,
+                max(hrrr_remaining_max) as hrrr,
+                max(obs_age_minutes) as max_obs_age
+            from prediction_snapshots
+            where market_date = ?
+            group by station
+            order by station
+            """,
+            (market_date_text,),
+        ).fetchall()
+        outcomes = self.connection.execute(
+            """
+            select station, final_high_tmpf, source, resolved_at
+            from station_date_outcomes
+            where market_date = ?
+            order by station
+            """,
+            (market_date_text,),
+        ).fetchall()
+        return {
+            **(dict(coverage) if coverage is not None else {}),
+            "market_date": market_date_text,
+            "station_temps": [dict(row) for row in stations],
+            "outcomes": [dict(row) for row in outcomes],
+        }
+
+    def latest_insights(self, limit: int = 5, insight_type: str | None = None) -> list[dict[str, Any]]:
+        if insight_type is None:
+            rows = self.connection.execute(
+                """
+                select id, created_at, insight_type, target_date, severity, title, body, metrics_json, raw_json
+                from hermes_insights
+                order by id desc
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+        else:
+            rows = self.connection.execute(
+                """
+                select id, created_at, insight_type, target_date, severity, title, body, metrics_json, raw_json
+                from hermes_insights
+                where insight_type = ?
+                order by id desc
+                limit ?
+                """,
+                (insight_type, limit),
+            ).fetchall()
+        insights = []
+        for row in rows:
+            item = dict(row)
+            for key in ("metrics_json", "raw_json"):
+                raw_value = item.get(key)
+                if raw_value:
+                    try:
+                        item[key.replace("_json", "")] = json.loads(raw_value)
+                    except json.JSONDecodeError:
+                        item[key.replace("_json", "")] = None
+            insights.append(item)
+        return insights
+
+    def policy_research_status_summary(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            with joined as (
+                select
+                    rpp.id,
+                    rpp.policy_name,
+                    case
+                        when rpp.policy_name like 'max_so_far%' then 'max_so_far'
+                        else rpp.model_group
+                    end as model_group,
+                    rpp.strategy_bucket,
+                    rpp.obs_delay_bucket,
+                    rpp.station,
+                    rpp.market_date,
+                    rpp.entry_price as policy_entry_price,
+                    rpp.entry_edge,
+                    pr.correct,
+                    pr.paper_pnl
+                from research_policy_positions rpp
+                left join json_each(rpp.source_prediction_snapshot_ids) je
+                left join prediction_results pr on pr.prediction_snapshot_id = je.value
+            ),
+            per_pos as (
+                select
+                    id,
+                    policy_name,
+                    model_group,
+                    strategy_bucket,
+                    obs_delay_bucket,
+                    station,
+                    market_date,
+                    policy_entry_price,
+                    entry_edge,
+                    max(correct) as correct,
+                    avg(paper_pnl) as paper_pnl
+                from joined
+                group by
+                    id,
+                    policy_name,
+                    model_group,
+                    strategy_bucket,
+                    obs_delay_bucket,
+                    station,
+                    market_date,
+                    policy_entry_price,
+                    entry_edge
+            )
+            select
+                policy_name,
+                model_group,
+                strategy_bucket,
+                obs_delay_bucket,
+                count(*) as total_positions,
+                count(distinct station || market_date) as station_days,
+                sum(case when paper_pnl is not null then 1 else 0 end) as resolved_positions,
+                sum(case when correct = 1 then 1 else 0 end) as wins,
+                avg(case when correct is not null then correct else null end) as hit_rate,
+                sum(case when paper_pnl is not null then paper_pnl else 0 end) as total_pnl,
+                sum(case when paper_pnl is not null then policy_entry_price else 0 end) as resolved_risk,
+                avg(policy_entry_price) as avg_entry,
+                avg(entry_edge) as avg_edge,
+                group_concat(case when paper_pnl is not null then paper_pnl else null end) as resolved_pnls
+            from per_pos
+            group by policy_name, model_group, strategy_bucket, obs_delay_bucket
+            order by total_pnl desc, policy_name
+            """
+        ).fetchall()
+        summaries = []
+        for row in rows:
+            item = dict(row)
+            pnl_text = str(item.pop("resolved_pnls") or "")
+            pnls = [float(value) for value in pnl_text.split(",") if value]
+            if pnls:
+                mean_pnl = sum(pnls) / len(pnls)
+                variance = sum((pnl - mean_pnl) ** 2 for pnl in pnls) / len(pnls)
+                item["position_sharpe"] = None if variance == 0 else mean_pnl / (variance**0.5)
+            else:
+                item["position_sharpe"] = None
+            risk = float(item.get("resolved_risk") or 0.0)
+            item["return_on_risk"] = (float(item.get("total_pnl") or 0.0) / risk) if risk > 0 else None
+            summaries.append(item)
+        return summaries
 
     def recent_positions(self, state: str = "OPEN") -> list[dict[str, Any]]:
         rows = self.connection.execute("select raw_json from positions where state = ?", (state,)).fetchall()
@@ -1013,6 +1217,140 @@ class ExecutionStore:
             from per_pos
             group by policy_name, model_group, strategy_bucket, obs_delay_bucket
             order by total_pnl desc, policy_name
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def policy_station_performance_summary(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            with joined as (
+                select
+                    rpp.id,
+                    rpp.policy_name,
+                    case
+                        when rpp.policy_name like 'max_so_far%' then 'max_so_far'
+                        else rpp.model_group
+                    end as model_group,
+                    rpp.strategy_bucket,
+                    rpp.obs_delay_bucket,
+                    rpp.station,
+                    rpp.market_date,
+                    rpp.entry_price as policy_entry_price,
+                    rpp.entry_edge,
+                    pr.correct,
+                    pr.paper_pnl
+                from research_policy_positions rpp
+                join json_each(rpp.source_prediction_snapshot_ids) je
+                join prediction_results pr on pr.prediction_snapshot_id = je.value
+            ),
+            per_pos as (
+                select
+                    id,
+                    policy_name,
+                    model_group,
+                    strategy_bucket,
+                    obs_delay_bucket,
+                    station,
+                    market_date,
+                    policy_entry_price,
+                    entry_edge,
+                    max(correct) as correct,
+                    avg(paper_pnl) as paper_pnl
+                from joined
+                group by
+                    id,
+                    policy_name,
+                    model_group,
+                    strategy_bucket,
+                    obs_delay_bucket,
+                    station,
+                    market_date,
+                    policy_entry_price,
+                    entry_edge
+            )
+            select
+                policy_name,
+                model_group,
+                station,
+                strategy_bucket,
+                obs_delay_bucket,
+                count(*) as resolved_positions,
+                sum(case when correct = 1 then 1 else 0 end) as wins,
+                avg(correct) as hit_rate,
+                sum(paper_pnl) as total_pnl,
+                avg(policy_entry_price) as avg_entry,
+                avg(entry_edge) as avg_edge
+            from per_pos
+            group by policy_name, model_group, station, strategy_bucket, obs_delay_bucket
+            order by total_pnl desc, policy_name, station
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def policy_daily_summary(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            with joined as (
+                select
+                    rpp.id,
+                    rpp.market_date,
+                    rpp.policy_name,
+                    case
+                        when rpp.policy_name like 'max_so_far%' then 'max_so_far'
+                        else rpp.model_group
+                    end as model_group,
+                    rpp.strategy_bucket,
+                    rpp.obs_delay_bucket,
+                    rpp.station,
+                    rpp.entry_price as policy_entry_price,
+                    rpp.entry_edge,
+                    pr.correct,
+                    pr.paper_pnl
+                from research_policy_positions rpp
+                join json_each(rpp.source_prediction_snapshot_ids) je
+                join prediction_results pr on pr.prediction_snapshot_id = je.value
+            ),
+            per_pos as (
+                select
+                    id,
+                    market_date,
+                    policy_name,
+                    model_group,
+                    strategy_bucket,
+                    obs_delay_bucket,
+                    station,
+                    policy_entry_price,
+                    entry_edge,
+                    max(correct) as correct,
+                    avg(paper_pnl) as paper_pnl
+                from joined
+                group by
+                    id,
+                    market_date,
+                    policy_name,
+                    model_group,
+                    strategy_bucket,
+                    obs_delay_bucket,
+                    station,
+                    policy_entry_price,
+                    entry_edge
+            )
+            select
+                market_date,
+                policy_name,
+                model_group,
+                strategy_bucket,
+                obs_delay_bucket,
+                count(*) as resolved_positions,
+                sum(case when correct = 1 then 1 else 0 end) as wins,
+                avg(correct) as hit_rate,
+                sum(paper_pnl) as total_pnl,
+                avg(policy_entry_price) as avg_entry,
+                avg(entry_edge) as avg_edge
+            from per_pos
+            group by market_date, policy_name, model_group, strategy_bucket, obs_delay_bucket
+            order by market_date desc, total_pnl desc, policy_name
             """
         ).fetchall()
         return [dict(row) for row in rows]

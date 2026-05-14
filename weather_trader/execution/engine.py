@@ -4,6 +4,8 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
+import requests
+
 from weather_trader.execution.books import RestBookClient
 from weather_trader.execution.contracts import (
     BookSnapshot,
@@ -70,8 +72,22 @@ class PaperTradingEngine:
         actionable_decisions = 0
         skipped = 0
 
-        markets = self.discovery.discover(limit=market_limit)
-        markets = same_day_markets(markets, now)
+        try:
+            markets = self.discovery.discover(limit=market_limit)
+            markets = same_day_markets(markets, now)
+        except requests.RequestException as exc:
+            errors.append(f"discovery: {exc}")
+            engine_state = EngineState(
+                timestamp=utc_now_iso(),
+                mode="paper",
+                discovered_markets=0,
+                actionable_signals=0,
+                orders_submitted=0,
+                skipped=0,
+                errors=errors,
+            )
+            self.store.insert_engine_state(engine_state)
+            return PaperCycleResult(engine_state=engine_state, signals=[], orders_submitted=0)
         for market in markets:
             self.store.upsert_market(market)
 

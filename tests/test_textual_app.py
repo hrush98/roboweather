@@ -6,6 +6,9 @@ import pytest
 
 from weather_trader.ui.dashboard_rollups import _build_live_policy_view, _build_policy_view, _build_position_view, _bucket_label
 from weather_trader.execution.contracts import (
+    BookLevel,
+    BookSnapshot,
+    MarketSnapshot,
     PredictionResult,
     PredictionSnapshot,
     ResearchPolicyPosition,
@@ -223,6 +226,7 @@ def test_live_policy_view_uses_open_positions_and_policy_silos() -> None:
     assert view["policy_rows"][0]["mtm"] == pytest.approx(0.22)
     assert view["policy_rows"][1]["mtm"] == pytest.approx(0.16)
     assert view["rows"] == view["policy_rows"]
+    assert [row["station"] for row in view["policy_station_rows"]] == ["KDAL", "KATL"]
 
 
 def test_live_policy_view_handles_empty_input() -> None:
@@ -232,6 +236,129 @@ def test_live_policy_view_handles_empty_input() -> None:
     assert view["unique_count"] == 0
     assert view["policy_rows"] == []
     assert view["rows"] == []
+
+
+def test_live_research_policy_positions_can_be_scoped_to_market_date(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    try:
+        store.upsert_market(
+            MarketSnapshot(
+                market_id="m_today",
+                condition_id=None,
+                question="Today",
+                slug="today",
+                city="Atlanta",
+                station="KATL",
+                market_date=date(2026, 5, 13),
+                lower_f=74,
+                upper_f=75,
+                yes_token_id="yes_today",
+                no_token_id="no_today",
+                end_date="2026-05-14T00:00:00Z",
+                resolution_source="IEM",
+                discovered_at="2026-05-13T15:00:00Z",
+            )
+        )
+        store.upsert_market(
+            MarketSnapshot(
+                market_id="m_old",
+                condition_id=None,
+                question="Old",
+                slug="old",
+                city="Dallas",
+                station="KDAL",
+                market_date=date(2026, 5, 12),
+                lower_f=80,
+                upper_f=81,
+                yes_token_id="yes_old",
+                no_token_id="no_old",
+                end_date="2026-05-13T00:00:00Z",
+                resolution_source="IEM",
+                discovered_at="2026-05-12T15:00:00Z",
+            )
+        )
+        store.insert_book_snapshot(BookSnapshot(token_id="no_today", bids=[BookLevel(price=0.72, size=10)], asks=[], timestamp="2026-05-13T18:00:00Z"))
+        store.insert_book_snapshot(BookSnapshot(token_id="no_old", bids=[BookLevel(price=0.10, size=10)], asks=[], timestamp="2026-05-12T18:00:00Z"))
+        store.insert_research_policy_position(
+            ResearchPolicyPosition(
+                timestamp="2026-05-13T17:00:00Z",
+                policy_name="pm_us12_policy_today",
+                station="KATL",
+                market_date=date(2026, 5, 13),
+                scope_key="station_date",
+                model_group="model",
+                strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+                obs_delay_bucket="15m",
+                selected_market_id="m_today",
+                selected_side=TradeAction.BUY_NO,
+                selected_bucket="74-75F",
+                entry_price=0.60,
+                entry_edge=0.20,
+                entry_fair=0.80,
+                source_prediction_snapshot_ids=[],
+                raw_policy={"name": "pm_us12_policy_today"},
+            )
+        )
+        store.insert_research_policy_position(
+            ResearchPolicyPosition(
+                timestamp="2026-05-12T17:00:00Z",
+                policy_name="pm_us12_policy_old",
+                station="KDAL",
+                market_date=date(2026, 5, 12),
+                scope_key="station_date",
+                model_group="model",
+                strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+                obs_delay_bucket="15m",
+                selected_market_id="m_old",
+                selected_side=TradeAction.BUY_NO,
+                selected_bucket="80-81F",
+                entry_price=0.50,
+                entry_edge=0.10,
+                entry_fair=0.70,
+                source_prediction_snapshot_ids=[],
+                raw_policy={"name": "pm_us12_policy_old"},
+            )
+        )
+
+        rows = store.live_research_policy_positions(market_date=date(2026, 5, 13))
+
+        assert store.latest_research_market_date() == "2026-05-13"
+        assert len(rows) == 1
+        assert rows[0]["policy_name"] == "pm_us12_policy_today"
+        assert rows[0]["current_bid"] == pytest.approx(0.72)
+        assert rows[0]["unrealized_pnl"] == pytest.approx(0.12)
+    finally:
+        store.close()
+
+
+def test_latest_insights_returns_decoded_report_rows(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "insights.sqlite")
+    try:
+        store.connection.execute(
+            """
+            insert into hermes_insights (created_at, insight_type, target_date, severity, title, body, metrics_json, raw_json)
+            values (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "2026-05-14T02:15:50Z",
+                "policy_leaderboard",
+                "2026-05-13",
+                "info",
+                "Policy Leaderboard",
+                "body",
+                '{"top_policy": "policy_a"}',
+                '{"leaderboard": []}',
+            ),
+        )
+        store.connection.commit()
+
+        rows = store.latest_insights(limit=1)
+
+        assert rows[0]["title"] == "Policy Leaderboard"
+        assert rows[0]["metrics"]["top_policy"] == "policy_a"
+        assert rows[0]["raw"]["leaderboard"] == []
+    finally:
+        store.close()
 
 
 def test_bucket_label_handles_open_ended_buckets() -> None:
@@ -401,5 +528,14 @@ def test_policy_performance_summary_rolls_up_resolved_policy_silos(tmp_path) -> 
         assert row["total_pnl"] == pytest.approx(-0.2)
         assert row["avg_entry"] == pytest.approx(0.6)
         assert row["avg_edge"] == pytest.approx(0.15)
+
+        station_rows = store.policy_station_performance_summary()
+        assert len(station_rows) == 2
+        assert {row["station"] for row in station_rows} == {"KATL", "KDAL"}
+
+        daily_rows = store.policy_daily_summary()
+        assert len(daily_rows) == 1
+        assert daily_rows[0]["market_date"] == "2026-05-11"
+        assert daily_rows[0]["total_pnl"] == pytest.approx(-0.2)
     finally:
         store.close()

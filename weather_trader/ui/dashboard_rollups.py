@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+from rich.text import Text
+
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -32,6 +34,53 @@ def _fmt_pct(value) -> str:
         return f"{float(value) * 100:.1f}%"
     except (TypeError, ValueError, OverflowError):
         return ""
+
+
+def _money_text(value: Any) -> Text:
+    amount = _safe_float(value, 0.0)
+    if amount > 0:
+        return Text(f"${amount:.2f}", style="green")
+    if amount < 0:
+        return Text(f"${amount:.2f}", style="red")
+    return Text("$0.00", style="dim")
+
+
+def _pct_text(value: Any, positive_threshold: float = 0.5) -> Text:
+    try:
+        amount = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return Text("", style="dim")
+    style = "green" if amount >= positive_threshold else "red" if amount < positive_threshold else ""
+    return Text(f"{amount * 100:.1f}%", style=style)
+
+
+def _ratio(numerator: float, denominator: float) -> float | None:
+    if denominator == 0:
+        return None
+    return numerator / denominator
+
+
+def _live_status(mark_pct: float | None, live_rr: float | None, resolved: int | None = None) -> str:
+    if resolved is not None and resolved < 10:
+        return "TOO_EARLY"
+    if mark_pct is not None and mark_pct < 0.5:
+        return "BOOK_GAPS"
+    if live_rr is not None and live_rr < -0.4:
+        return "LIVE_STRESS"
+    if live_rr is not None and live_rr > 0.2:
+        return "LIVE_STRONG"
+    return "WATCH"
+
+
+def _status_text(value: Any) -> Text:
+    text = str(value or "")
+    if text in {"DONE", "ITM", "LIVE_STRONG", "PROMISING"}:
+        return Text(text, style="green")
+    if text in {"LIVE", "MIXED", "WATCH", "TOO_EARLY"}:
+        return Text(text, style="yellow")
+    if text in {"BOOK_GAPS", "LIVE_STRESS", "WEAK"}:
+        return Text(text, style="red")
+    return Text(text)
 
 
 def _bucket_label(lower_f, upper_f) -> str:
@@ -268,7 +317,20 @@ def _build_policy_view(
 
 def _build_live_policy_view(live_rows: list[dict[str, Any]]) -> dict[str, Any]:
     exposure_index: dict[tuple[str, str, str], dict[str, Any]] = {}
-    station_raw: dict[str, dict[str, Any]] = defaultdict(lambda: {"raw_count": 0, "buy_yes": 0, "buy_no": 0, "raw_mtm": 0.0, "done": 0})
+    station_raw: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "raw_count": 0,
+            "buy_yes": 0,
+            "buy_no": 0,
+            "raw_mtm": 0.0,
+            "done": 0,
+            "marked": 0,
+            "missing": 0,
+            "risk": 0.0,
+            "wins95": 0,
+            "loss05": 0,
+        }
+    )
     station_unique: dict[str, dict[str, Any]] = defaultdict(lambda: {"unique_count": 0, "unique_mtm": 0.0, "done": 0})
     rows_by_policy: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     raw_count = 0
@@ -305,6 +367,15 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]]) -> dict[str, Any]:
 
         station_raw[station]["raw_count"] += 1
         station_raw[station]["raw_mtm"] += pnl
+        station_raw[station]["risk"] += entry_price
+        if current_bid is None:
+            station_raw[station]["missing"] += 1
+        else:
+            station_raw[station]["marked"] += 1
+            if _safe_float(current_bid) >= 0.95:
+                station_raw[station]["wins95"] += 1
+            if _safe_float(current_bid) <= 0.05:
+                station_raw[station]["loss05"] += 1
         if side == "BUY_YES":
             station_raw[station]["buy_yes"] += 1
         elif side == "BUY_NO":
@@ -354,15 +425,28 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "open_positions": 0,
                 "wins": 0,
                 "done": 0,
+                "marked": 0,
+                "missing": 0,
+                "risk": 0.0,
                 "mtm": 0.0,
+                "wins95": 0,
+                "loss05": 0,
             },
         )
         policy_group["open_positions"] += 1
+        policy_group["risk"] += entry_price
         policy_group["mtm"] += pnl
+        if current_bid is None:
+            policy_group["missing"] += 1
+        else:
+            policy_group["marked"] += 1
         if pnl > 0:
             policy_group["wins"] += 1
         if current_bid is not None and _safe_float(current_bid) >= 0.95:
             policy_group["done"] += 1
+            policy_group["wins95"] += 1
+        if current_bid is not None and _safe_float(current_bid) <= 0.05:
+            policy_group["loss05"] += 1
 
     exposure_rows: list[dict[str, Any]] = []
     for group in exposure_index.values():
@@ -396,9 +480,60 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "raw_mtm": raw["raw_mtm"],
                 "unique_mtm": unique["unique_mtm"],
                 "done": raw["done"],
+                "marked": raw["marked"],
+                "missing": raw["missing"],
+                "risk": raw["risk"],
+                "live_rr": _ratio(raw["raw_mtm"], raw["risk"]),
+                "mark_pct": _ratio(raw["marked"], raw["raw_count"]),
+                "wins95": raw["wins95"],
+                "loss05": raw["loss05"],
             }
         )
+        station_rows[-1]["status"] = _live_status(station_rows[-1]["mark_pct"], station_rows[-1]["live_rr"])
     station_rows.sort(key=lambda row: (row["raw_mtm"], row["station"]), reverse=True)
+
+    policy_station_index: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+    for row in live_rows:
+        policy = str(row.get("policy_name", ""))
+        model_group = _normalized_policy_model_group(row)
+        strategy_bucket = str(row.get("strategy_bucket", ""))
+        obs_delay_bucket = str(row.get("obs_delay_bucket", ""))
+        station = str(row.get("station", ""))
+        key = (policy, model_group, strategy_bucket, obs_delay_bucket, station)
+        station_group = policy_station_index.setdefault(
+            key,
+            {
+                "policy": policy,
+                "model_group": model_group,
+                "strategy_bucket": strategy_bucket,
+                "obs_delay_bucket": obs_delay_bucket,
+                "station": station,
+                "open_positions": 0,
+                "wins": 0,
+                "done": 0,
+                "mtm": 0.0,
+            },
+        )
+        station_group["open_positions"] += 1
+        station_group["mtm"] += _safe_float(row.get("unrealized_pnl"))
+        if _safe_float(row.get("unrealized_pnl")) > 0:
+            station_group["wins"] += 1
+        if row.get("current_bid") is not None and _safe_float(row.get("current_bid")) >= 0.95:
+            station_group["done"] += 1
+
+    policy_station_rows = list(policy_station_index.values())
+    policy_station_rows.sort(
+        key=lambda row: (
+            row["mtm"],
+            row["wins"],
+            row["open_positions"],
+            row["policy"],
+            row["station"],
+        ),
+        reverse=True,
+    )
+    for row in policy_station_rows:
+        row["win_rate"] = row["wins"] / row["open_positions"] if row["open_positions"] else 0.0
 
     policy_rows = list(rows_by_policy.values())
     policy_rows.sort(
@@ -416,6 +551,9 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]]) -> dict[str, Any]:
     for row in policy_rows:
         row["win_rate"] = row["wins"] / row["open_positions"] if row["open_positions"] else 0.0
         row["avg_pnl"] = row["mtm"] / row["open_positions"] if row["open_positions"] else 0.0
+        row["mark_pct"] = _ratio(row["marked"], row["open_positions"])
+        row["live_rr"] = _ratio(row["mtm"], row["risk"])
+        row["status"] = _live_status(row["mark_pct"], row["live_rr"])
 
     return {
         "raw_count": raw_count,
@@ -430,6 +568,7 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]]) -> dict[str, Any]:
         "latest_position_time": latest_position_time[11:19] if len(latest_position_time) >= 19 else latest_position_time,
         "exposure_rows": exposure_rows,
         "station_rows": station_rows,
+        "policy_station_rows": policy_station_rows,
         "policy_rows": policy_rows,
         "rows": policy_rows,
     }

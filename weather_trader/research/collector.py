@@ -6,6 +6,8 @@ from datetime import date, datetime, time as day_time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import requests
+
 from weather_trader.execution.books import RestBookClient
 from weather_trader.execution.contracts import (
     BookSnapshot,
@@ -69,7 +71,21 @@ class ResearchCollector:
         snapshots_written = 0
         skipped = 0
 
-        markets = same_day_markets(self.discovery.discover(limit=self.config.market_limit), now)
+        try:
+            markets = same_day_markets(self.discovery.discover(limit=self.config.market_limit), now)
+        except requests.RequestException as exc:
+            errors.append(f"discovery: {exc}")
+            engine_state = EngineState(
+                timestamp=utc_now_iso(),
+                mode="research",
+                discovered_markets=0,
+                actionable_signals=0,
+                orders_submitted=0,
+                skipped=0,
+                errors=errors,
+            )
+            self.store.insert_engine_state(engine_state)
+            return ResearchCycleResult(engine_state=engine_state, snapshots_written=0)
         for market in markets:
             self.store.upsert_market(market)
 

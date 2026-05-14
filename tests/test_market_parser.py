@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import requests
+
 from weather_trader.markets.polymarket_reader import PolymarketReader
 
 
@@ -58,3 +60,29 @@ def test_market_parser_maps_seattle_and_houston() -> None:
     assert seattle.station == "KSEA"
     assert houston is not None
     assert houston.station == "KHOU"
+
+
+def test_gamma_market_fetch_retries_transient_timeout(monkeypatch) -> None:
+    calls = 0
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> list[dict]:
+            return []
+
+    def fake_get(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise requests.ReadTimeout("gamma stalled")
+        return FakeResponse()
+
+    monkeypatch.setattr("weather_trader.markets.polymarket_reader.requests.get", fake_get)
+    monkeypatch.setattr("weather_trader.markets.polymarket_reader.time.sleep", lambda seconds: None)
+
+    reader = PolymarketReader(max_retries=2, retry_backoff_seconds=0)
+
+    assert reader._fetch_gamma_markets(limit=10) == []
+    assert calls == 2

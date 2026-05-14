@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import DataTable, Footer, Header, Static, TabbedContent, TabPane
 
 from weather_trader.execution.store import ExecutionStore
@@ -13,7 +15,61 @@ from weather_trader.ui.dashboard_rollups import (
     _fmt,
     _fmt_money,
     _fmt_pct,
+    _live_status,
+    _money_text,
+    _pct_text,
+    _status_text,
 )
+
+
+ALL_STATIONS = {"KATL", "KDAL", "KHOU", "KLAX", "KLGA", "KMIA", "KORD", "KSEA", "KSFO", "KBKF", "KPDX", "KDEN"}
+
+
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _age_minutes(value: str | None) -> float | None:
+    dt = _parse_dt(value)
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds() / 60.0
+
+
+def _policy_key(row: dict) -> tuple[str, str, str, str]:
+    return (
+        str(row.get("policy") or row.get("policy_name") or ""),
+        str(row.get("model_group", "")),
+        str(row.get("strategy_bucket", "")),
+        str(row.get("obs_delay_bucket", "")),
+    )
+
+
+def _status_priority(status: str) -> int:
+    return {
+        "LIVE_STRESS": 0,
+        "BOOK_GAPS": 1,
+        "TOO_EARLY": 2,
+        "WATCH": 3,
+        "LIVE_STRONG": 4,
+        "PROMISING": 5,
+    }.get(status, 9)
+
+
+def _default_target_date(db_path: Path) -> str:
+    store = ExecutionStore(db_path)
+    try:
+        latest = store.latest_research_market_date()
+    finally:
+        store.close()
+    return latest or datetime.now(ZoneInfo("America/Los_Angeles")).date().isoformat()
 
 
 class RoboWeatherTUI(App):
@@ -56,7 +112,7 @@ class RoboWeatherTUI(App):
     }
 
     #station-summary {
-        height: 8;
+        height: 11;
     }
 
     #unique-exposures {
@@ -64,15 +120,37 @@ class RoboWeatherTUI(App):
     }
 
     #policy-leaderboard {
-        height: 12;
+        height: 13;
+    }
+
+    #daily-insights {
+        height: 7;
+    }
+
+    #daily-report-body {
+        padding: 1 2;
+        background: #15191d;
+        color: #ece7dc;
     }
 
     #live-policy-performance {
         height: 10;
     }
 
+    #live-policy-station-performance {
+        height: 12;
+    }
+
     #policy-performance {
         height: 1fr;
+    }
+
+    #policy-station-performance {
+        height: 10;
+    }
+
+    #policy-daily-performance {
+        height: 8;
     }
 
     #positions {
@@ -110,6 +188,7 @@ class RoboWeatherTUI(App):
         super().__init__()
         self.db_path = db_path
         self.actionable_only = False
+        self.target_date = _default_target_date(db_path)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -117,19 +196,23 @@ class RoboWeatherTUI(App):
             yield Static("roboweather paper harness", id="summary")
             with TabbedContent():
                 with TabPane("Overview", id="overview-tab"):
+                    yield Static("Operational Health", classes="section-title")
+                    yield DataTable(id="day-summary")
+                    yield Static("Policy Watch", classes="section-title")
+                    yield DataTable(id="policy-leaderboard")
                     with Horizontal(classes="split"):
                         with Vertical(classes="stack"):
-                            yield Static("Day Summary", classes="section-title")
-                            yield DataTable(id="day-summary")
-                        with Vertical(classes="stack"):
-                            yield Static("Station Summary", classes="section-title")
+                            yield Static("Station Watch", classes="section-title")
                             yield DataTable(id="station-summary")
-                    yield Static("Unique Exposures", classes="section-title")
-                    yield DataTable(id="unique-exposures")
-                    yield Static("Current Policy Positions", classes="section-title")
-                    yield DataTable(id="policy-leaderboard")
-                    yield Static("Live Policy MTM", classes="section-title")
-                    yield DataTable(id="live-policy-performance")
+                        with Vertical(classes="stack"):
+                            yield Static("Exposure Watch", classes="section-title")
+                            yield DataTable(id="unique-exposures")
+                with TabPane("Daily Report", id="daily-report-tab"):
+                    yield Static("Recent Reports", classes="section-title")
+                    yield DataTable(id="daily-insights")
+                    yield Static("Latest Report", classes="section-title")
+                    with VerticalScroll():
+                        yield Static("", id="daily-report-body")
                 with TabPane("Execution", id="execution-tab"):
                     yield Static("Open Positions / MTM", classes="section-title")
                     yield DataTable(id="positions")
@@ -141,8 +224,16 @@ class RoboWeatherTUI(App):
                     yield Static("Station / Date Candidate Detail", classes="section-title")
                     yield DataTable(id="candidates")
                 with TabPane("Research", id="research-tab"):
+                    yield Static("Live Policy MTM", classes="section-title")
+                    yield DataTable(id="live-policy-performance")
+                    yield Static("Live Policy by Station", classes="section-title")
+                    yield DataTable(id="live-policy-station-performance")
                     yield Static("Settled Policy Performance", classes="section-title")
                     yield DataTable(id="policy-performance")
+                    yield Static("Settled Policy by Station", classes="section-title")
+                    yield DataTable(id="policy-station-performance")
+                    yield Static("Recent Daily Performance", classes="section-title")
+                    yield DataTable(id="policy-daily-performance")
                     yield Static("Prediction Snapshots", classes="section-title")
                     yield DataTable(id="snapshots")
                     yield Static("Resolved Results By Delay Bucket", classes="section-title")
@@ -175,7 +266,7 @@ class RoboWeatherTUI(App):
 
         station_summary = self.query_one("#station-summary", DataTable)
         station_summary.cursor_type = "row"
-        station_summary.add_columns("station", "rows", "uniq", "yes", "no", "mtm", "uniq mtm", "done")
+        station_summary.add_columns("status", "station", "pos", "mark", "miss", "mark%", "live rr", "risk", "high", "hrrr", "bid95", "bid05")
 
         unique_exposures = self.query_one("#unique-exposures", DataTable)
         unique_exposures.cursor_type = "row"
@@ -194,11 +285,34 @@ class RoboWeatherTUI(App):
 
         policy_leaderboard = self.query_one("#policy-leaderboard", DataTable)
         policy_leaderboard.cursor_type = "row"
-        policy_leaderboard.add_columns("policy", "model", "strategy", "delay", "rows", "wins", "done", "win rate", "mtm", "avg pnl")
+        policy_leaderboard.add_columns(
+            "status",
+            "policy",
+            "pos",
+            "mark",
+            "miss",
+            "mark%",
+            "live rr",
+            "risk",
+            "bid95",
+            "bid05",
+            "res",
+            "wr",
+            "R/R",
+            "pSharp",
+        )
+
+        daily_insights = self.query_one("#daily-insights", DataTable)
+        daily_insights.cursor_type = "row"
+        daily_insights.add_columns("created", "type", "target", "severity", "title")
 
         live_policy_performance = self.query_one("#live-policy-performance", DataTable)
         live_policy_performance.cursor_type = "row"
         live_policy_performance.add_columns("policy", "model", "strategy", "delay", "open", "wins", "done", "win rate", "mtm", "avg pnl")
+
+        live_policy_station_performance = self.query_one("#live-policy-station-performance", DataTable)
+        live_policy_station_performance.cursor_type = "row"
+        live_policy_station_performance.add_columns("policy", "station", "model", "strategy", "delay", "open", "wins", "done", "win rate", "mtm")
 
         policy_performance = self.query_one("#policy-performance", DataTable)
         policy_performance.cursor_type = "row"
@@ -215,6 +329,14 @@ class RoboWeatherTUI(App):
             "avg entry",
             "avg edge",
         )
+
+        policy_station_performance = self.query_one("#policy-station-performance", DataTable)
+        policy_station_performance.cursor_type = "row"
+        policy_station_performance.add_columns("policy", "station", "model", "strategy", "delay", "resolved", "wins", "hit rate", "pnl")
+
+        policy_daily_performance = self.query_one("#policy-daily-performance", DataTable)
+        policy_daily_performance.cursor_type = "row"
+        policy_daily_performance.add_columns("date", "policy", "model", "strategy", "delay", "resolved", "wins", "hit rate", "pnl")
 
         candidates = self.query_one("#candidates", DataTable)
         candidates.cursor_type = "row"
@@ -343,15 +465,38 @@ class RoboWeatherTUI(App):
             snapshots = store.recent_prediction_snapshots(limit=100)
             result_summary = store.prediction_result_summary()
             policy_performance_rows = store.policy_performance_summary()
+            policy_station_rows = store.policy_station_performance_summary()
+            policy_daily_rows = store.policy_daily_summary()
+            policy_research_rows = store.policy_research_status_summary()
             order_summary = store.paper_order_summary()
-            live_policy_rows = store.live_research_policy_positions(limit=1000)
+            live_policy_rows = store.live_research_policy_positions(limit=1000, market_date=self.target_date)
+            overview = store.research_status_overview(self.target_date)
+            insights = store.latest_insights(limit=8)
         finally:
             store.close()
         if self.actionable_only:
             signals = [signal for signal in signals if signal.get("signal_side") != "SKIP"]
 
         live_policy_view = _build_live_policy_view(live_policy_rows)
-        policy_rows_sorted = live_policy_view["policy_rows"]
+        research_by_key = {_policy_key(row): row for row in policy_research_rows}
+        station_temps = {str(row.get("station")): row for row in overview.get("station_temps", [])}
+        policy_rows_sorted = []
+        for row in live_policy_view["policy_rows"]:
+            enriched = dict(row)
+            research = research_by_key.get(_policy_key(row), {})
+            enriched["resolved_positions"] = int(research.get("resolved_positions") or 0)
+            enriched["historical_hit_rate"] = research.get("hit_rate")
+            enriched["historical_rr"] = research.get("return_on_risk")
+            enriched["position_sharpe"] = research.get("position_sharpe")
+            enriched["status"] = _live_status(enriched.get("mark_pct"), enriched.get("live_rr"), enriched["resolved_positions"])
+            policy_rows_sorted.append(enriched)
+        policy_rows_sorted.sort(
+            key=lambda row: (
+                _status_priority(str(row.get("status", ""))),
+                row.get("live_rr") if row.get("live_rr") is not None else -999.0,
+                row.get("mtm", 0.0),
+            )
+        )
 
         orders_table = self.query_one("#orders", DataTable)
         orders_table.clear()
@@ -370,11 +515,26 @@ class RoboWeatherTUI(App):
 
         day_summary_table = self.query_one("#day-summary", DataTable)
         day_summary_table.clear()
+        latest_book_age = _age_minutes(overview.get("latest_book_ts"))
+        latest_book_text = "n/a" if latest_book_age is None else f"{latest_book_age:.1f}m"
+        marked_today = sum(1 for row in live_policy_rows if row.get("current_bid") is not None)
+        today_risk = sum(float(row.get("entry_price") or 0.0) for row in live_policy_rows)
+        today_mtm = sum(float(row.get("unrealized_pnl") or 0.0) for row in live_policy_rows if row.get("current_bid") is not None)
+        today_live_rr = today_mtm / today_risk if today_risk else None
+        missing_stations = sorted(ALL_STATIONS - set(station_temps))
         day_summary_rows = [
-            ("positions", str(live_policy_view["raw_count"]), "policy rows"),
+            ("date", self.target_date, "market_date filter"),
+            ("book age", latest_book_text, str(overview.get("latest_book_ts") or "")),
+            ("snapshots", str(overview.get("snapshots_today", 0)), f"{overview.get('snapshots', 0)} all-time"),
+            ("policy positions", str(overview.get("policy_positions_today", 0)), f"{overview.get('policy_positions', 0)} all-time"),
+            (
+                "marked",
+                f"{marked_today}/{len(live_policy_rows)}",
+                "live policy rows with selected-token bid",
+            ),
+            ("live R/R", _fmt_pct(today_live_rr), f"risk at work ${today_risk:.2f}"),
+            ("stations", f"{len(station_temps)}/{len(ALL_STATIONS)}", f"missing {', '.join(missing_stations) or 'none'}"),
             ("unique exposures", str(live_policy_view["unique_count"]), "deduped by station/date/side/bucket"),
-            ("buy yes", str(live_policy_view["buy_yes"]), ""),
-            ("buy no", str(live_policy_view["buy_no"]), ""),
             (
                 "buy yes/no",
                 f"{live_policy_view['buy_yes']} / {live_policy_view['buy_no']} ({(live_policy_view['buy_yes'] / live_policy_view['buy_no']):.2f}x)"
@@ -382,27 +542,31 @@ class RoboWeatherTUI(App):
                 else f"{live_policy_view['buy_yes']} / 0",
                 "size imbalance",
             ),
-            ("in money", str(live_policy_view["in_money"]), "raw positions with pnl > 0"),
-            ("done95", str(live_policy_view["done"]), "selected bid at or above 0.95"),
-            ("raw mtm", _fmt_money(live_policy_view["raw_mtm"]), "sum of all live policy rows"),
-            ("unique mtm", _fmt_money(live_policy_view["unique_mtm"]), "sum of deduped exposures"),
-            ("stations", str(live_policy_view["stations"]), "distinct stations in book"),
         ]
         for metric, value, detail in day_summary_rows:
             day_summary_table.add_row(metric, value, detail)
 
         station_summary_table = self.query_one("#station-summary", DataTable)
         station_summary_table.clear()
-        for row in live_policy_view["station_rows"]:
+        station_rows_sorted = sorted(
+            live_policy_view["station_rows"],
+            key=lambda row: (_status_priority(str(row.get("status", ""))), row.get("live_rr") if row.get("live_rr") is not None else -999.0),
+        )
+        for row in station_rows_sorted:
+            temps = station_temps.get(str(row["station"]), {})
             station_summary_table.add_row(
+                _status_text(row.get("status")),
                 str(row["station"]),
                 str(row["raw_count"]),
-                str(row["unique_count"]),
-                str(row["buy_yes"]),
-                str(row["buy_no"]),
-                _fmt_money(row["raw_mtm"]),
-                _fmt_money(row["unique_mtm"]),
-                str(row["done"]),
+                str(row.get("marked", 0)),
+                str(row.get("missing", 0)),
+                _fmt_pct(row.get("mark_pct")),
+                _fmt_pct(row.get("live_rr")),
+                _fmt_money(row.get("risk")),
+                _fmt(temps.get("high")),
+                _fmt(temps.get("hrrr")),
+                str(row.get("wins95", 0)),
+                str(row.get("loss05", 0)),
             )
 
         unique_exposures_table = self.query_one("#unique-exposures", DataTable)
@@ -414,28 +578,58 @@ class RoboWeatherTUI(App):
                 str(row["side"]),
                 str(row["bucket"]),
                 str(row["rows"]),
-                _fmt(row["entry"]),
-                _fmt(row["mark"]),
-                _fmt_money(row["pnl"]),
+                _money_text(row["entry"]),
+                _money_text(row["mark"]),
+                _money_text(row["pnl"]),
                 _fmt_pct(row["pnl_pct"]),
-                str(row["status"]),
+                _status_text(row["status"]),
             )
 
         policy_table = self.query_one("#policy-leaderboard", DataTable)
         policy_table.clear()
         for row in policy_rows_sorted:
             policy_table.add_row(
+                _status_text(row["status"]),
                 str(row["policy"]),
-                str(row["model_group"]),
-                str(row["strategy_bucket"]),
-                str(row["obs_delay_bucket"]),
                 str(row["open_positions"]),
-                str(row["wins"]),
-                str(row["done"]),
-                _fmt_pct(row["win_rate"]),
-                _fmt_money(row["mtm"]),
-                _fmt_money(row["avg_pnl"]),
+                str(row.get("marked", 0)),
+                str(row.get("missing", 0)),
+                _fmt_pct(row.get("mark_pct")),
+                _fmt_pct(row.get("live_rr")),
+                _fmt_money(row.get("risk")),
+                str(row.get("wins95", 0)),
+                str(row.get("loss05", 0)),
+                str(row.get("resolved_positions", 0)),
+                _fmt_pct(row.get("historical_hit_rate")),
+                _fmt_pct(row.get("historical_rr")),
+                _fmt(row.get("position_sharpe")),
             )
+
+        daily_insights_table = self.query_one("#daily-insights", DataTable)
+        daily_insights_table.clear()
+        for insight in insights:
+            daily_insights_table.add_row(
+                str(insight.get("created_at", ""))[:19],
+                str(insight.get("insight_type", "")),
+                str(insight.get("target_date", "")),
+                str(insight.get("severity", "")),
+                str(insight.get("title", ""))[:100],
+            )
+        report_body = self.query_one("#daily-report-body", Static)
+        if insights:
+            latest = insights[0]
+            report_body.update(
+                "\n".join(
+                    [
+                        str(latest.get("title", "")),
+                        f"created={latest.get('created_at', '')} target={latest.get('target_date', '')} type={latest.get('insight_type', '')}",
+                        "",
+                        str(latest.get("body", "")),
+                    ]
+                )
+            )
+        else:
+            report_body.update("No hermes_insights reports found.")
 
         live_policy_table = self.query_one("#live-policy-performance", DataTable)
         live_policy_table.clear()
@@ -448,9 +642,25 @@ class RoboWeatherTUI(App):
                 str(row["open_positions"]),
                 str(row["wins"]),
                 str(row["done"]),
-                _fmt_pct(row["win_rate"]),
-                _fmt_money(row["mtm"]),
-                _fmt_money(row["avg_pnl"]),
+                _pct_text(row["win_rate"]),
+                _money_text(row["mtm"]),
+                _money_text(row["avg_pnl"]),
+            )
+
+        live_policy_station_table = self.query_one("#live-policy-station-performance", DataTable)
+        live_policy_station_table.clear()
+        for row in live_policy_view["policy_station_rows"]:
+            live_policy_station_table.add_row(
+                str(row["policy"]),
+                str(row["station"]),
+                str(row["model_group"]),
+                str(row["strategy_bucket"]),
+                str(row["obs_delay_bucket"]),
+                str(row["open_positions"]),
+                str(row["wins"]),
+                str(row["done"]),
+                _pct_text(row["win_rate"]),
+                _money_text(row["mtm"]),
             )
 
         policy_performance_table = self.query_one("#policy-performance", DataTable)
@@ -464,10 +674,40 @@ class RoboWeatherTUI(App):
                 str(row.get("resolved_positions", "")),
                 str(row.get("station_days", "")),
                 str(row.get("wins", "")),
-                _fmt_pct(row.get("hit_rate")),
-                _fmt_money(row.get("total_pnl")),
-                _fmt_money(row.get("avg_entry")),
+                _pct_text(row.get("hit_rate")),
+                _money_text(row.get("total_pnl")),
+                _money_text(row.get("avg_entry")),
                 _fmt(row.get("avg_edge")),
+            )
+
+        policy_station_performance_table = self.query_one("#policy-station-performance", DataTable)
+        policy_station_performance_table.clear()
+        for row in policy_station_rows:
+            policy_station_performance_table.add_row(
+                str(row.get("policy_name", "")),
+                str(row.get("station", "")),
+                str(row.get("model_group", "")),
+                str(row.get("strategy_bucket", "")),
+                str(row.get("obs_delay_bucket", "")),
+                str(row.get("resolved_positions", "")),
+                str(row.get("wins", "")),
+                _pct_text(row.get("hit_rate")),
+                _money_text(row.get("total_pnl")),
+            )
+
+        policy_daily_performance_table = self.query_one("#policy-daily-performance", DataTable)
+        policy_daily_performance_table.clear()
+        for row in policy_daily_rows[:30]:
+            policy_daily_performance_table.add_row(
+                str(row.get("market_date", "")),
+                str(row.get("policy_name", "")),
+                str(row.get("model_group", "")),
+                str(row.get("strategy_bucket", "")),
+                str(row.get("obs_delay_bucket", "")),
+                str(row.get("resolved_positions", "")),
+                str(row.get("wins", "")),
+                _pct_text(row.get("hit_rate")),
+                _money_text(row.get("total_pnl")),
             )
 
         candidates_table = self.query_one("#candidates", DataTable)
@@ -499,13 +739,13 @@ class RoboWeatherTUI(App):
                 str(mark.get("station", "")),
                 _bucket_label(mark.get("lower_f"), mark.get("upper_f")),
                 str(mark.get("side", "")),
-                _fmt(mark.get("avg_entry_price")),
-                _fmt(mark.get("current_bid")),
-                _fmt_money(mark.get("cost")),
-                _fmt_money(mark.get("mark_value")),
-                _fmt_money(mark.get("unrealized_pnl")),
+                _money_text(mark.get("avg_entry_price")),
+                _money_text(mark.get("current_bid")),
+                _money_text(mark.get("cost")),
+                _money_text(mark.get("mark_value")),
+                _money_text(mark.get("unrealized_pnl")),
                 _fmt_pct(mark.get("unrealized_pnl_pct")),
-                str(mark.get("effective_status", "")),
+                _status_text(mark.get("effective_status", "")),
             )
 
         engine_table = self.query_one("#engine", DataTable)
