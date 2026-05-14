@@ -16,6 +16,7 @@ Environment overrides:
   THRESHOLD_MODEL=data/models/mvp_pm_active_us12_obs_2022_2025.joblib
   EXTRA_MODELS="data/models/dynamic_bucket_pm_active_us12_obs_2022_2025.joblib data/models/high_regression_pm_active_us12_obs_2022_2025.joblib data/models/ngboost_normal_pm_active_us12_obs_2022_2025.joblib data/models/catboost_bucket_pm_active_us12_obs_2022_2025.joblib"
   DB=data/paper/research_2026-05-08_multimodel.sqlite
+  ALLOW_SYNCED_SQLITE=0
   MARKET_LIMIT=50000
   BANKROLL=1000
   INTERVAL_SECONDS=360
@@ -29,6 +30,7 @@ Environment overrides:
 
 Examples:
   ./scripts/run_research.sh
+  DB="$HOME/.local/state/roboweather/research_2026-05-08_multimodel.sqlite" ./scripts/run_research.sh
   MAX_CYCLES=10 ./scripts/run_research.sh loop
   ./scripts/run_research.sh resolve
   ./scripts/run_research.sh tui
@@ -88,6 +90,47 @@ if [[ -n "${EXTRA_MODELS}" && "${mode}" == "loop" ]]; then
 fi
 
 mkdir -p "$(dirname "${DB}")" data/logs
+
+db_dir="$(dirname "${DB}")"
+find_syncthing_root() {
+  local path="$1"
+  while [[ "${path}" != "/" && -n "${path}" ]]; do
+    if [[ -e "${path}/.stfolder" ]]; then
+      printf '%s\n' "${path}"
+      return 0
+    fi
+    path="$(dirname "${path}")"
+  done
+  return 1
+}
+
+if [[ ! -w "${db_dir}" ]]; then
+  echo "DB directory is not writable by $(id -un): ${db_dir}" >&2
+  ls -ld "${db_dir}" >&2 || true
+  exit 1
+fi
+if [[ -e "${DB}" && ! -w "${DB}" ]]; then
+  echo "DB file is not writable by $(id -un): ${DB}" >&2
+  ls -ld "${db_dir}" "${DB}" >&2 || true
+  echo "Fix ownership/permissions or set DB=/path/to/a writable sqlite file." >&2
+  exit 1
+fi
+db_dir_real="$(cd "${db_dir}" && pwd -P)"
+if syncthing_root="$(find_syncthing_root "${db_dir_real}")"; then
+  if [[ "${ALLOW_SYNCED_SQLITE:-0}" != "1" ]]; then
+    echo "Refusing to run live SQLite DB inside a Syncthing folder:" >&2
+    echo "  DB=${DB}" >&2
+    echo "  Syncthing root=${syncthing_root}" >&2
+    echo "" >&2
+    echo "SQLite needs stable local ownership and journal files during the loop." >&2
+    echo "Use a non-synced DB path, for example:" >&2
+    echo "  mkdir -p \"\$HOME/.local/state/roboweather\"" >&2
+    echo "  DB=\"\$HOME/.local/state/roboweather/$(basename "${DB}")\" ./scripts/run_research.sh ${mode}" >&2
+    echo "" >&2
+    echo "To bypass this guard intentionally, set ALLOW_SYNCED_SQLITE=1." >&2
+    exit 1
+  fi
+fi
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 log_path="data/logs/research_${mode}_${timestamp}.log"
