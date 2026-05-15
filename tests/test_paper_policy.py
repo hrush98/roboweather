@@ -258,6 +258,62 @@ def test_paper_policy_trader_blocks_duplicate_bucket_side_inside_same_policy(tmp
     assert "duplicate exposure blocked" in events
 
 
+def test_paper_policy_trader_promotes_by_bucket_policy_rows_independently(tmp_path) -> None:
+    store = _store_with_market(tmp_path)
+    policy_name = "pm_us12_consensus_hc_15m_entry_25_75_by_bucket_side_delay_first"
+    store.upsert_market(_market(market_id="m2", yes_token_id="yes2", no_token_id="no2"))
+    store.insert_research_policy_position(
+        _policy_position(
+            policy_name,
+            selected_side=TradeAction.BUY_NO,
+            scope_key="station_date_bucket_side_obs_delay:74-75F:BUY_NO:15m",
+            selected_bucket="74-75F",
+            selected_market_id="m1",
+        )
+    )
+    store.insert_research_policy_position(
+        _policy_position(
+            policy_name,
+            selected_side=TradeAction.BUY_NO,
+            scope_key="station_date_bucket_side_obs_delay:76-77F:BUY_NO:15m",
+            selected_bucket="76-77F",
+            selected_market_id="m2",
+        )
+    )
+    store.insert_research_policy_position(
+        _policy_position(
+            policy_name,
+            selected_side=TradeAction.BUY_NO,
+            scope_key="station_date_bucket_side_obs_delay:74-75F:BUY_NO:10m",
+            selected_bucket="74-75F",
+            selected_market_id="m1",
+        )
+    )
+
+    result = PaperPolicyTrader(
+        store=store,
+        config=PaperPolicyExecutionConfig(promoted_policies=(policy_name,)),
+        book_client=FakeBookClient(
+            {
+                "no": _book("no", asks=[(0.5, 100)], bids=[(0.45, 100)]),
+                "no2": _book("no2", asks=[(0.5, 100)], bids=[(0.45, 100)]),
+            }
+        ),
+    ).run_once()
+
+    assert result.candidates == 3
+    assert result.filled == 2
+    positions = store.connection.execute(
+        "select selected_bucket, selected_side from paper_policy_positions order by id"
+    ).fetchall()
+    assert [(row["selected_bucket"], row["selected_side"]) for row in positions] == [
+        ("74-75F", "BUY_NO"),
+        ("76-77F", "BUY_NO"),
+    ]
+    events = [row["message"] for row in store.connection.execute("select message from paper_policy_trade_events").fetchall()]
+    assert "duplicate exposure blocked" in events
+
+
 def test_paper_policy_trader_records_stale_book_and_unknown_attempt(tmp_path) -> None:
     store = _store_with_market(tmp_path)
     store.insert_research_policy_position(_policy_position(DEFAULT_PROMOTED_POLICIES[0], selected_side=TradeAction.BUY_NO))
@@ -417,6 +473,7 @@ def _policy_position(
     scope_key: str | None = None,
     market_date: date = date(2026, 5, 7),
     selected_market_id: str = "m1",
+    selected_bucket: str = "74-75F",
 ) -> ResearchPolicyPosition:
     return ResearchPolicyPosition(
         timestamp=utc_now_iso(),
@@ -429,7 +486,7 @@ def _policy_position(
         obs_delay_bucket="15m",
         selected_market_id=selected_market_id,
         selected_side=selected_side,
-        selected_bucket="74-75F",
+        selected_bucket=selected_bucket,
         entry_price=0.5 if selected_side == TradeAction.BUY_NO else 0.6,
         entry_edge=0.2,
         entry_fair=0.8,

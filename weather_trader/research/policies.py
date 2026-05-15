@@ -87,8 +87,32 @@ def _entry_band_policy_specs(
     )
 
 
+def _by_bucket_side_delay_policy_spec(
+    *,
+    name: str,
+    obs_delay_bucket: str | None = None,
+    entry_price_min: float | None = None,
+    entry_price_max: float | None = None,
+    local_decision_start: str | None = None,
+    local_decision_end: str | None = None,
+) -> ResearchPolicySpec:
+    return ResearchPolicySpec(
+        name,
+        "consensus",
+        StrategyBucket.HIGH_CONVICTION,
+        model_group="pm_active_us12_dynamic_mvp",
+        obs_delay_bucket=obs_delay_bucket,
+        entry_price_min=entry_price_min,
+        entry_price_max=entry_price_max,
+        local_decision_start=local_decision_start,
+        local_decision_end=local_decision_end,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+    )
+
+
 POLICIES: tuple[ResearchPolicySpec, ...] = (
     ResearchPolicySpec("pm_us12_consensus_hc_first", "consensus", StrategyBucket.HIGH_CONVICTION, model_group="pm_active_us12_dynamic_mvp"),
+    _by_bucket_side_delay_policy_spec(name="pm_us12_consensus_hc_by_bucket_side_delay_first"),
     ResearchPolicySpec(
         "pm_us12_consensus_hc_10m_first",
         "consensus",
@@ -101,6 +125,10 @@ POLICIES: tuple[ResearchPolicySpec, ...] = (
         "consensus",
         StrategyBucket.HIGH_CONVICTION,
         model_group="pm_active_us12_dynamic_mvp",
+        obs_delay_bucket="15m",
+    ),
+    _by_bucket_side_delay_policy_spec(
+        name="pm_us12_consensus_hc_15m_by_bucket_side_delay_first",
         obs_delay_bucket="15m",
     ),
     *_entry_band_policy_specs(
@@ -119,6 +147,18 @@ POLICIES: tuple[ResearchPolicySpec, ...] = (
         entry_price_min=0.25,
         entry_price_max=0.75,
     ),
+    _by_bucket_side_delay_policy_spec(
+        name="pm_us12_consensus_hc_15m_entry_25_75_by_bucket_side_delay_first",
+        obs_delay_bucket="15m",
+        entry_price_min=0.25,
+        entry_price_max=0.75,
+    ),
+    _by_bucket_side_delay_policy_spec(
+        name="pm_us12_consensus_hc_15m_entry_50_75_by_bucket_side_delay_first",
+        obs_delay_bucket="15m",
+        entry_price_min=0.50,
+        entry_price_max=0.75,
+    ),
     ResearchPolicySpec(
         "pm_us12_consensus_hc_15m_no_tiny_first",
         "consensus",
@@ -135,11 +175,23 @@ POLICIES: tuple[ResearchPolicySpec, ...] = (
         local_decision_start="12:00",
         local_decision_end="15:00",
     ),
+    _by_bucket_side_delay_policy_spec(
+        name="pm_us12_consensus_hc_late_by_bucket_side_delay_first",
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+    ),
     *_entry_band_policy_specs(
         name_prefix="pm_us12_consensus_hc_late",
         source="consensus",
         strategy_bucket=StrategyBucket.HIGH_CONVICTION,
         model_group="pm_active_us12_dynamic_mvp",
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+    ),
+    _by_bucket_side_delay_policy_spec(
+        name="pm_us12_consensus_hc_late_entry_50_75_by_bucket_side_delay_first",
+        entry_price_min=0.50,
+        entry_price_max=0.75,
         local_decision_start="12:00",
         local_decision_end="15:00",
     ),

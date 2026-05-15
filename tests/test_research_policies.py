@@ -57,20 +57,26 @@ def test_research_policy_registry_tracks_expected_policies() -> None:
 
     assert {
         "pm_us12_consensus_hc_first",
+        "pm_us12_consensus_hc_by_bucket_side_delay_first",
         "pm_us12_consensus_hc_10m_first",
         "pm_us12_consensus_hc_15m_first",
+        "pm_us12_consensus_hc_15m_by_bucket_side_delay_first",
         "pm_us12_consensus_hc_15m_entry_00_10_first",
         "pm_us12_consensus_hc_15m_entry_10_25_first",
         "pm_us12_consensus_hc_15m_entry_25_50_first",
         "pm_us12_consensus_hc_15m_entry_50_75_first",
         "pm_us12_consensus_hc_15m_entry_75_100_first",
         "pm_us12_consensus_hc_15m_entry_25_75_first",
+        "pm_us12_consensus_hc_15m_entry_25_75_by_bucket_side_delay_first",
+        "pm_us12_consensus_hc_15m_entry_50_75_by_bucket_side_delay_first",
         "pm_us12_consensus_hc_15m_no_tiny_first",
         "pm_us12_consensus_hc_late_first",
+        "pm_us12_consensus_hc_late_by_bucket_side_delay_first",
         "pm_us12_consensus_hc_late_entry_00_10_first",
         "pm_us12_consensus_hc_late_entry_10_25_first",
         "pm_us12_consensus_hc_late_entry_25_50_first",
         "pm_us12_consensus_hc_late_entry_50_75_first",
+        "pm_us12_consensus_hc_late_entry_50_75_by_bucket_side_delay_first",
         "pm_us12_consensus_hc_late_entry_75_100_first",
         "pm_us12_consensus_hc_early_first",
         "pm_us12_consensus_best_15m_first",
@@ -241,6 +247,113 @@ def test_uniqueness_key_suppresses_duplicate_bucket_side_exposure(tmp_path) -> N
 
     positions = store.recent_research_policy_positions(limit=10)
     assert {position["selected_bucket"] for position in positions} == {"74-75F", "76-77F"}
+
+
+def test_consensus_by_bucket_side_delay_allows_distinct_trade_ideas(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+    store.upsert_market(_market())
+    rows = [
+        ("74-75F", TradeAction.BUY_NO, "2026-05-07T15:40:00+00:00"),
+        ("76-77F", TradeAction.BUY_NO, "2026-05-07T15:41:00+00:00"),
+        ("74-75F", TradeAction.BUY_YES, "2026-05-07T15:42:00+00:00"),
+    ]
+    for idx, (bucket, side, latest_obs) in enumerate(rows):
+        for model_name in ["dynamic_bucket_pm_active_us12_obs_2022_2025", MVP_MODEL]:
+            store.insert_prediction_snapshot(
+                _snapshot(
+                    model_name=model_name,
+                    strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+                    selected_side=side,
+                    selected_bucket=bucket,
+                    selected_edge=0.2 + idx,
+                    selected_fair_no=0.85,
+                    selected_no_ask=0.6,
+                    timestamp=f"2026-05-07T16:0{idx}:00+00:00",
+                    latest_obs_time_utc=latest_obs,
+                )
+            )
+    policy = ResearchPolicySpec(
+        "consensus_by_bucket_side_delay",
+        "consensus",
+        StrategyBucket.HIGH_CONVICTION,
+        model_group="pm_active_us12_dynamic_mvp",
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+    )
+
+    assert ResearchPolicyEvaluator(store, (policy,)).evaluate() == 3
+
+    positions = store.recent_research_policy_positions(limit=10)
+    assert {(position["selected_bucket"], position["selected_side"]) for position in positions} == {
+        ("74-75F", "BUY_NO"),
+        ("76-77F", "BUY_NO"),
+        ("74-75F", "BUY_YES"),
+    }
+    assert all(position["scope_key"].endswith(":15m") for position in positions)
+
+
+def test_consensus_by_bucket_side_delay_dedupes_repeated_loop_snapshots(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+    store.upsert_market(_market())
+    for idx, latest_obs in enumerate(["2026-05-07T15:40:00+00:00", "2026-05-07T15:43:00+00:00"]):
+        for model_name in ["dynamic_bucket_pm_active_us12_obs_2022_2025", MVP_MODEL]:
+            store.insert_prediction_snapshot(
+                _snapshot(
+                    model_name=model_name,
+                    strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+                    selected_side=TradeAction.BUY_NO,
+                    selected_bucket="74-75F",
+                    selected_edge=0.2 + idx,
+                    selected_fair_no=0.85,
+                    selected_no_ask=0.6,
+                    timestamp=f"2026-05-07T16:0{idx}:00+00:00",
+                    latest_obs_time_utc=latest_obs,
+                )
+            )
+    policy = ResearchPolicySpec(
+        "consensus_by_bucket_side_delay",
+        "consensus",
+        StrategyBucket.HIGH_CONVICTION,
+        model_group="pm_active_us12_dynamic_mvp",
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+    )
+
+    assert ResearchPolicyEvaluator(store, (policy,)).evaluate() == 1
+
+    positions = store.recent_research_policy_positions(limit=10)
+    assert positions[0]["selected_bucket"] == "74-75F"
+    assert positions[0]["selected_side"] == "BUY_NO"
+
+
+def test_consensus_station_date_first_still_keeps_one_row_per_station_date(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+    store.upsert_market(_market())
+    for idx, bucket in enumerate(["74-75F", "76-77F"]):
+        for model_name in ["dynamic_bucket_pm_active_us12_obs_2022_2025", MVP_MODEL]:
+            store.insert_prediction_snapshot(
+                _snapshot(
+                    model_name=model_name,
+                    strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+                    selected_side=TradeAction.BUY_NO,
+                    selected_bucket=bucket,
+                    selected_edge=0.2 + idx,
+                    selected_fair_no=0.85,
+                    selected_no_ask=0.6,
+                    timestamp=f"2026-05-07T16:0{idx}:00+00:00",
+                    latest_obs_time_utc=f"2026-05-07T15:4{idx}:00+00:00",
+                )
+            )
+    policy = ResearchPolicySpec(
+        "consensus_station_date_first",
+        "consensus",
+        StrategyBucket.HIGH_CONVICTION,
+        model_group="pm_active_us12_dynamic_mvp",
+    )
+
+    assert ResearchPolicyEvaluator(store, (policy,)).evaluate() == 1
+
+    positions = store.recent_research_policy_positions(limit=10)
+    assert positions[0]["scope_key"] == "station_date"
+    assert positions[0]["selected_bucket"] == "74-75F"
 
 
 def test_local_decision_time_filters_split_early_and_late(tmp_path) -> None:
