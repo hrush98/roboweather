@@ -216,6 +216,16 @@ class ExecutionStore:
                 selected_fair_no real,
                 selected_yes_ask real,
                 selected_no_ask real,
+                selected_best_bid real,
+                selected_best_ask real,
+                selected_spread real,
+                selected_depth_at_ask real,
+                selected_depth_ask_plus_0_01 real,
+                selected_depth_ask_plus_0_03 real,
+                selected_depth_ask_plus_0_05 real,
+                selected_book_timestamp text,
+                selected_book_age_seconds real,
+                selected_liquidity_json text,
                 high_conviction integer not null,
                 skip_reason text,
                 candidate_count integer not null,
@@ -272,6 +282,16 @@ class ExecutionStore:
                 entry_price real not null,
                 entry_edge real,
                 entry_fair real,
+                selected_best_bid real,
+                selected_best_ask real,
+                selected_spread real,
+                selected_depth_at_ask real,
+                selected_depth_ask_plus_0_01 real,
+                selected_depth_ask_plus_0_03 real,
+                selected_depth_ask_plus_0_05 real,
+                selected_book_timestamp text,
+                selected_book_age_seconds real,
+                selected_liquidity_json text,
                 source_prediction_snapshot_ids text not null,
                 raw_json text not null,
                 unique(policy_name, station, market_date, scope_key)
@@ -360,7 +380,47 @@ class ExecutionStore:
             """
         )
         self._migrate_prediction_snapshots_schema()
+        self._add_nullable_columns(
+            "prediction_snapshots",
+            {
+                "selected_best_bid": "real",
+                "selected_best_ask": "real",
+                "selected_spread": "real",
+                "selected_depth_at_ask": "real",
+                "selected_depth_ask_plus_0_01": "real",
+                "selected_depth_ask_plus_0_03": "real",
+                "selected_depth_ask_plus_0_05": "real",
+                "selected_book_timestamp": "text",
+                "selected_book_age_seconds": "real",
+                "selected_liquidity_json": "text",
+            },
+        )
+        self._add_nullable_columns(
+            "research_policy_positions",
+            {
+                "selected_best_bid": "real",
+                "selected_best_ask": "real",
+                "selected_spread": "real",
+                "selected_depth_at_ask": "real",
+                "selected_depth_ask_plus_0_01": "real",
+                "selected_depth_ask_plus_0_03": "real",
+                "selected_depth_ask_plus_0_05": "real",
+                "selected_book_timestamp": "text",
+                "selected_book_age_seconds": "real",
+                "selected_liquidity_json": "text",
+            },
+        )
         self.connection.commit()
+
+    def _add_nullable_columns(self, table: str, columns: dict[str, str]) -> None:
+        existing = {
+            str(item["name"])
+            for item in self.connection.execute(f"pragma table_info({table})").fetchall()
+        }
+        for name, column_type in columns.items():
+            if name in existing:
+                continue
+            self.connection.execute(f"alter table {table} add column {name} {column_type}")
 
     def _migrate_prediction_snapshots_schema(self) -> None:
         row = self.connection.execute(
@@ -709,9 +769,13 @@ class ExecutionStore:
                 obs_delay_bucket, current_temp, high_so_far, hrrr_remaining_max,
                 strategy_bucket, selected_market_id, selected_bucket, selected_side, selected_edge,
                 selected_fair_yes, selected_fair_no, selected_yes_ask, selected_no_ask,
+                selected_best_bid, selected_best_ask, selected_spread, selected_depth_at_ask,
+                selected_depth_ask_plus_0_01, selected_depth_ask_plus_0_03,
+                selected_depth_ask_plus_0_05, selected_book_timestamp, selected_book_age_seconds,
+                selected_liquidity_json,
                 high_conviction, skip_reason, candidate_count, model_name, raw_json
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 snapshot.timestamp,
@@ -735,6 +799,16 @@ class ExecutionStore:
                 snapshot.selected_fair_no,
                 snapshot.selected_yes_ask,
                 snapshot.selected_no_ask,
+                snapshot.selected_best_bid,
+                snapshot.selected_best_ask,
+                snapshot.selected_spread,
+                snapshot.selected_depth_at_ask,
+                snapshot.selected_depth_ask_plus_0_01,
+                snapshot.selected_depth_ask_plus_0_03,
+                snapshot.selected_depth_ask_plus_0_05,
+                snapshot.selected_book_timestamp,
+                snapshot.selected_book_age_seconds,
+                json.dumps(snapshot.selected_liquidity, sort_keys=True) if snapshot.selected_liquidity is not None else None,
                 int(snapshot.high_conviction),
                 snapshot.skip_reason,
                 snapshot.candidate_count,
@@ -827,9 +901,13 @@ class ExecutionStore:
                 timestamp, policy_name, station, market_date, scope_key, model_group,
                 strategy_bucket, obs_delay_bucket, selected_market_id, selected_side,
                 selected_bucket, entry_price, entry_edge, entry_fair,
+                selected_best_bid, selected_best_ask, selected_spread, selected_depth_at_ask,
+                selected_depth_ask_plus_0_01, selected_depth_ask_plus_0_03,
+                selected_depth_ask_plus_0_05, selected_book_timestamp, selected_book_age_seconds,
+                selected_liquidity_json,
                 source_prediction_snapshot_ids, raw_json
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 position.timestamp,
@@ -846,6 +924,16 @@ class ExecutionStore:
                 position.entry_price,
                 position.entry_edge,
                 position.entry_fair,
+                position.selected_best_bid,
+                position.selected_best_ask,
+                position.selected_spread,
+                position.selected_depth_at_ask,
+                position.selected_depth_ask_plus_0_01,
+                position.selected_depth_ask_plus_0_03,
+                position.selected_depth_ask_plus_0_05,
+                position.selected_book_timestamp,
+                position.selected_book_age_seconds,
+                json.dumps(position.selected_liquidity, sort_keys=True) if position.selected_liquidity is not None else None,
                 json.dumps(position.source_prediction_snapshot_ids),
                 json.dumps(data, sort_keys=True),
             ),

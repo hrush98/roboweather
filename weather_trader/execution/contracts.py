@@ -305,6 +305,16 @@ class PredictionSnapshot:
     skip_reason: str | None
     candidate_count: int
     candidate_distribution: list[dict[str, Any]]
+    selected_best_bid: float | None = None
+    selected_best_ask: float | None = None
+    selected_spread: float | None = None
+    selected_depth_at_ask: float | None = None
+    selected_depth_ask_plus_0_01: float | None = None
+    selected_depth_ask_plus_0_03: float | None = None
+    selected_depth_ask_plus_0_05: float | None = None
+    selected_book_timestamp: str | None = None
+    selected_book_age_seconds: float | None = None
+    selected_liquidity: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -356,6 +366,16 @@ class ResearchPolicyPosition:
     entry_fair: float | None
     source_prediction_snapshot_ids: list[int]
     raw_policy: dict[str, Any]
+    selected_best_bid: float | None = None
+    selected_best_ask: float | None = None
+    selected_spread: float | None = None
+    selected_depth_at_ask: float | None = None
+    selected_depth_ask_plus_0_01: float | None = None
+    selected_depth_ask_plus_0_03: float | None = None
+    selected_depth_ask_plus_0_05: float | None = None
+    selected_book_timestamp: str | None = None
+    selected_book_age_seconds: float | None = None
+    selected_liquidity: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

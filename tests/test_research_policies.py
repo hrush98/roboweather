@@ -52,6 +52,54 @@ def test_research_policy_evaluator_records_consensus_and_dedupes(tmp_path) -> No
     assert sorted(consensus["source_prediction_snapshot_ids"]) == [1, 2]
 
 
+def test_research_policy_positions_carry_snapshot_liquidity(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+    store.upsert_market(_market())
+    store.insert_prediction_snapshot(
+        _snapshot(
+            model_name="dynamic_bucket_obs_2022_2025",
+            strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+            selected_side=TradeAction.BUY_NO,
+            selected_bucket="74-75F",
+            selected_edge=0.2,
+            selected_fair_no=0.85,
+            selected_no_ask=0.6,
+            selected_best_ask=0.6,
+            selected_depth_at_ask=60,
+            selected_book_timestamp="2026-05-07T16:00:01+00:00",
+            selected_liquidity={"source": "dynamic"},
+        )
+    )
+    store.insert_prediction_snapshot(
+        _snapshot(
+            model_name="mvp_obs_corrected",
+            strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+            selected_side=TradeAction.BUY_NO,
+            selected_bucket="74-75F",
+            selected_edge=0.3,
+            selected_fair_no=0.9,
+            selected_no_ask=0.6,
+            timestamp="2026-05-07T16:00:02+00:00",
+            selected_best_ask=0.61,
+            selected_depth_at_ask=122,
+            selected_book_timestamp="2026-05-07T16:00:02+00:00",
+            selected_liquidity={"source": "mvp"},
+        )
+    )
+
+    ResearchPolicyEvaluator(store).evaluate()
+
+    by_policy = {position["policy_name"]: position for position in store.recent_research_policy_positions(limit=20)}
+    model_position = by_policy["mvp_hc_first"]
+    consensus = by_policy["consensus_hc_first"]
+    assert model_position["selected_best_ask"] == 0.61
+    assert model_position["selected_depth_at_ask"] == 122
+    assert model_position["selected_liquidity"] == {"source": "mvp"}
+    assert consensus["selected_best_ask"] == 0.61
+    assert consensus["selected_depth_at_ask"] == 122
+    assert consensus["selected_liquidity"] == {"source": "mvp"}
+
+
 def test_research_policy_registry_tracks_expected_policies() -> None:
     names = {policy.name for policy in POLICIES}
 
@@ -433,6 +481,10 @@ def _snapshot(
     selected_edge: float,
     selected_fair_no: float,
     selected_no_ask: float,
+    selected_best_ask: float | None = None,
+    selected_depth_at_ask: float | None = None,
+    selected_book_timestamp: str | None = None,
+    selected_liquidity: dict | None = None,
     station: str = "KATL",
     timestamp: str = "2026-05-07T16:00:01+00:00",
     decision_time_local: str = "2026-05-07T12:00:00-04:00",
@@ -465,4 +517,8 @@ def _snapshot(
         skip_reason=None,
         candidate_count=1,
         candidate_distribution=[],
+        selected_best_ask=selected_best_ask,
+        selected_depth_at_ask=selected_depth_at_ask,
+        selected_book_timestamp=selected_book_timestamp,
+        selected_liquidity=selected_liquidity,
     )

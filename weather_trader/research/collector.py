@@ -23,6 +23,7 @@ from weather_trader.execution.decision import DecisionEngine
 from weather_trader.execution.discovery import MarketDiscoveryService, same_day_markets
 from weather_trader.execution.fair_value import FairValueEngine
 from weather_trader.execution.grouping import GroupMarketContext, StationDateDecisionEngine, group_key
+from weather_trader.execution.liquidity import selected_side_liquidity
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import StationWeatherState, WeatherFeatureService
 from weather_trader.stations.metadata import get_station
@@ -299,6 +300,13 @@ def build_prediction_snapshot(
     if latest_obs_utc.tzinfo is None:
         latest_obs_utc = latest_obs_utc.replace(tzinfo=timezone.utc)
     selected_side = selection.selected_decision.action if selection.selected_decision else TradeAction.SKIP
+    selected_book = None
+    if selected_context is not None:
+        if selected_side == TradeAction.BUY_YES:
+            selected_book = selected_context.yes_book
+        elif selected_side == TradeAction.BUY_NO:
+            selected_book = selected_context.no_book
+    liquidity = selected_side_liquidity(selected_book, as_of_utc=as_of_utc)
     return PredictionSnapshot(
         timestamp=utc_now_iso(),
         station=weather.station,
@@ -326,6 +334,16 @@ def build_prediction_snapshot(
         skip_reason=selection.trace.skip_reason,
         candidate_count=selection.trace.candidate_count,
         candidate_distribution=selection.trace.candidates,
+        selected_best_bid=liquidity["best_bid"],
+        selected_best_ask=liquidity["best_ask"],
+        selected_spread=liquidity["spread"],
+        selected_depth_at_ask=liquidity["depth_at_ask"],
+        selected_depth_ask_plus_0_01=liquidity["depth_ask_plus_0_01"],
+        selected_depth_ask_plus_0_03=liquidity["depth_ask_plus_0_03"],
+        selected_depth_ask_plus_0_05=liquidity["depth_ask_plus_0_05"],
+        selected_book_timestamp=liquidity["book_timestamp"],
+        selected_book_age_seconds=liquidity["book_age_seconds"],
+        selected_liquidity=liquidity["summary"],
     )
 
 

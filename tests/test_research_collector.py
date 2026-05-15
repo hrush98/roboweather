@@ -4,11 +4,22 @@ from datetime import date, datetime, time, timezone
 
 import requests
 
-from weather_trader.execution.contracts import StationDateOutcome, TradeAction
+from weather_trader.execution.contracts import (
+    BookLevel,
+    BookSnapshot,
+    Decision,
+    MarketSnapshot,
+    Signal,
+    StationDateDecisionTrace,
+    StationDateOutcome,
+    StrategyBucket,
+    TradeAction,
+)
 from weather_trader.execution.engine import PaperTradingEngine
+from weather_trader.execution.grouping import GroupMarketContext, GroupSelection
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import StationWeatherState
-from weather_trader.research.collector import ResearchCollector, ResearchConfig, due_delay_buckets
+from weather_trader.research.collector import ResearchCollector, ResearchConfig, build_prediction_snapshot, due_delay_buckets
 from weather_trader.research.resolver import score_snapshot
 
 
@@ -99,9 +110,158 @@ def test_paper_engine_records_discovery_timeout_without_crashing(tmp_path) -> No
     assert "gamma stalled" in row["raw_json"]
 
 
+def test_build_prediction_snapshot_persists_buy_no_liquidity(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+
+    snapshot = build_prediction_snapshot(
+        selection=_selection(TradeAction.BUY_NO),
+        contexts=[_context()],
+        weather=_weather("2026-05-06T16:00:00+00:00"),
+        market_date=date(2026, 5, 6),
+        as_of_utc=datetime(2026, 5, 6, 16, 5, tzinfo=timezone.utc),
+        obs_delay_bucket="5m",
+        model_name="model",
+    )
+    snapshot_id = store.insert_prediction_snapshot(snapshot)
+
+    row = store.connection.execute(
+        "select selected_best_ask, selected_depth_at_ask, selected_book_age_seconds, selected_liquidity_json, raw_json from prediction_snapshots where id = ?",
+        (snapshot_id,),
+    ).fetchone()
+    assert row["selected_best_ask"] == 0.6
+    assert row["selected_depth_at_ask"] == 60
+    assert row["selected_book_age_seconds"] == 300
+    assert '"ask_plus_0_05"' in row["selected_liquidity_json"]
+    assert '"selected_liquidity"' in row["raw_json"]
+
+
+def test_build_prediction_snapshot_persists_buy_yes_liquidity(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+
+    snapshot = build_prediction_snapshot(
+        selection=_selection(TradeAction.BUY_YES),
+        contexts=[_context()],
+        weather=_weather("2026-05-06T16:00:00+00:00"),
+        market_date=date(2026, 5, 6),
+        as_of_utc=datetime(2026, 5, 6, 16, 1, tzinfo=timezone.utc),
+        obs_delay_bucket="instant",
+        model_name="model",
+    )
+    snapshot_id = store.insert_prediction_snapshot(snapshot)
+
+    row = store.connection.execute(
+        "select selected_best_bid, selected_best_ask, selected_spread, selected_depth_ask_plus_0_05 from prediction_snapshots where id = ?",
+        (snapshot_id,),
+    ).fetchone()
+    assert row["selected_best_bid"] == 0.44
+    assert row["selected_best_ask"] == 0.5
+    assert row["selected_spread"] == 0.06
+    assert row["selected_depth_ask_plus_0_05"] == 160
+
+
 class _FailingDiscovery:
     def discover(self, limit: int = 50000, validate_stations: bool = True):
         raise requests.ReadTimeout("gamma stalled")
+
+
+def _selection(side: TradeAction) -> GroupSelection:
+    decision = Decision(
+        timestamp="2026-05-06T16:00:00+00:00",
+        market_id="m1",
+        token_id="yes" if side == TradeAction.BUY_YES else "no",
+        action=side,
+        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        max_price=0.5 if side == TradeAction.BUY_YES else 0.6,
+        target_usd=10,
+        expected_value=0.1,
+        skip_reasons=[],
+        reason_codes=[],
+    )
+    trace = StationDateDecisionTrace(
+        timestamp="2026-05-06T16:00:00+00:00",
+        station="KATL",
+        market_date=date(2026, 5, 6),
+        candidate_count=1,
+        selected_market_id="m1",
+        selected_action=side,
+        selected_strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        selected_edge=0.1,
+        selected_score=0.1,
+        skip_reason=None,
+        distribution=[],
+        candidates=[
+            {
+                "market_id": "m1",
+                "bucket": "75-76F",
+                "fair_yes": 0.7,
+                "fair_no": 0.3,
+                "selected": True,
+            }
+        ],
+    )
+    return GroupSelection(decisions={"m1": decision}, selected_decision=decision, trace=trace)
+
+
+def _context() -> GroupMarketContext:
+    market = MarketSnapshot(
+        market_id="m1",
+        condition_id=None,
+        question="Will Atlanta hit 75-76F?",
+        slug="slug",
+        city="Atlanta",
+        station="KATL",
+        market_date=date(2026, 5, 6),
+        lower_f=75,
+        upper_f=76,
+        yes_token_id="yes",
+        no_token_id="no",
+        end_date="2026-05-06",
+        resolution_source="test",
+        discovered_at="2026-05-06T15:00:00+00:00",
+    )
+    signal = Signal(
+        timestamp="2026-05-06T16:00:00+00:00",
+        market_id="m1",
+        question=market.question,
+        station="KATL",
+        market_date=date(2026, 5, 6),
+        lower_f=75,
+        upper_f=76,
+        current_temp=74,
+        high_so_far=74,
+        latest_obs_time="2026-05-06T16:00:00+00:00",
+        hrrr_remaining_max=None,
+        fair_yes=0.7,
+        fair_no=0.3,
+        yes_bid=0.44,
+        yes_ask=0.5,
+        yes_depth_usd=50,
+        no_bid=0.54,
+        no_ask=0.6,
+        no_depth_usd=60,
+        edge_yes=0.2,
+        edge_no=-0.3,
+        signal_side=TradeAction.BUY_YES,
+        reason_codes=[],
+        model_name="model",
+        model_features_hash="hash",
+    )
+    return GroupMarketContext(
+        market=market,
+        signal=signal,
+        yes_book=BookSnapshot(
+            token_id="yes",
+            bids=[BookLevel(0.44, 100)],
+            asks=[BookLevel(0.5, 100), BookLevel(0.55, 200)],
+            timestamp="2026-05-06T16:00:00+00:00",
+        ),
+        no_book=BookSnapshot(
+            token_id="no",
+            bids=[BookLevel(0.54, 100)],
+            asks=[BookLevel(0.6, 100), BookLevel(0.65, 200)],
+            timestamp="2026-05-06T16:00:00+00:00",
+        ),
+    )
 
 
 def _weather(latest_obs_time: str) -> StationWeatherState:

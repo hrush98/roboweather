@@ -21,6 +21,7 @@ from weather_trader.execution.contracts import (
     TradeAction,
     utc_now_iso,
 )
+from weather_trader.execution.liquidity import quantize_price, quantize_usdc, walk_ask_ladder
 from weather_trader.execution.positions import winning_side_for_bucket
 from weather_trader.execution.store import ExecutionStore
 
@@ -674,49 +675,47 @@ def simulate_ladder_fill(
     target_notional_usd = quantize_usdc(target_notional_usd)
     if not book.asks:
         return LadderFill(PaperPolicyFinalState.REJECTED, "MISSING_ASKS", 0.0, None, 0.0, [], execution_price_cap, 0.0)
-    target_shares = quantize_shares(target_notional_usd / limit_price)
-    if force_partial:
-        target_shares = quantize_shares(target_shares / 2.0)
-    remaining = target_shares
-    shares = 0.0
-    cost = 0.0
-    consumed: list[dict[str, float]] = []
-    for level in book.asks:
-        price = quantize_price(level.price)
-        if price > 1.0:
-            break
-        take = min(remaining, quantize_shares(level.size))
-        budget_remaining = quantize_usdc(target_notional_usd - cost)
-        if budget_remaining <= 0:
-            break
-        take = min(take, quantize_shares(budget_remaining / price))
-        if take <= 0:
-            continue
-        projected_cost = cost + take * price
-        projected_shares = shares + take
-        projected_vwap = projected_cost / projected_shares if projected_shares > 0 else float("inf")
-        if projected_vwap > execution_price_cap:
-            if price <= execution_price_cap or shares <= 0:
-                break
-            max_take = ((execution_price_cap * shares) - cost) / (price - execution_price_cap)
-            take = min(take, quantize_shares(max_take))
-            if take <= 0:
-                break
-        level_cost = quantize_usdc(take * price)
-        shares = quantize_shares(shares + take)
-        cost = quantize_usdc(cost + level_cost)
-        consumed.append({"price": price, "shares": take, "cost": level_cost})
-        remaining = quantize_shares(remaining - take)
-        if remaining <= 0:
-            break
+    walk = walk_ask_ladder(
+        book=book,
+        limit_price=limit_price,
+        target_notional_usd=target_notional_usd,
+        execution_price_cap=execution_price_cap,
+        force_half_target=force_partial,
+    )
 
-    if shares <= 0 or cost < min_fill_usd:
-        return LadderFill(PaperPolicyFinalState.REJECTED, "INSUFFICIENT_DEPTH", 0.0, None, 0.0, consumed, execution_price_cap, cost)
-    if order_mode == PaperPolicyOrderMode.FOK and remaining > 0:
-        return LadderFill(PaperPolicyFinalState.FOK_NOT_FILLED, "FOK_NOT_FILLED", 0.0, None, 0.0, consumed, execution_price_cap, cost)
-    avg = quantize_price(cost / shares)
-    state = PaperPolicyFinalState.FILLED if remaining <= 0 else PaperPolicyFinalState.PARTIAL
-    return LadderFill(state, str(state), shares, avg, cost, consumed, execution_price_cap, cost)
+    if walk.filled_shares <= 0 or walk.cost_usd < min_fill_usd:
+        return LadderFill(
+            PaperPolicyFinalState.REJECTED,
+            "INSUFFICIENT_DEPTH",
+            0.0,
+            None,
+            0.0,
+            walk.levels_consumed,
+            execution_price_cap,
+            walk.cost_usd,
+        )
+    if order_mode == PaperPolicyOrderMode.FOK and walk.remaining_shares > 0:
+        return LadderFill(
+            PaperPolicyFinalState.FOK_NOT_FILLED,
+            "FOK_NOT_FILLED",
+            0.0,
+            None,
+            0.0,
+            walk.levels_consumed,
+            execution_price_cap,
+            walk.cost_usd,
+        )
+    state = PaperPolicyFinalState.FILLED if walk.remaining_shares <= 0 else PaperPolicyFinalState.PARTIAL
+    return LadderFill(
+        state,
+        str(state),
+        walk.filled_shares,
+        walk.avg_price,
+        walk.cost_usd,
+        walk.levels_consumed,
+        execution_price_cap,
+        walk.cost_usd,
+    )
 
 
 def execution_price_cap_for_row(
@@ -738,18 +737,6 @@ def _post_slippage_edge(row: dict[str, Any], avg_price: float | None) -> float |
     if avg_price is None or row.get("entry_fair") is None:
         return None
     return round(float(row["entry_fair"]) - avg_price + 1e-12, 4)
-
-
-def quantize_price(value: float) -> float:
-    return round(max(0.0, min(1.0, value)) + 1e-12, 4)
-
-
-def quantize_usdc(value: float) -> float:
-    return round(max(0.0, value) + 1e-12, 2)
-
-
-def quantize_shares(value: float) -> float:
-    return round(max(0.0, value) + 1e-12, 6)
 
 
 def adversity_profile(name: str) -> PaperPolicyExecutionConfig:
