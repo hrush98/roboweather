@@ -43,6 +43,8 @@ Run one cycle:
 python -m weather_trader.cli paper-policy-cycle
 ```
 
+By default, the paper loop promotes only the latest market date present in `research_policy_positions`. Use `--market-date YYYY-MM-DD` to run a specific day.
+
 Run continuously:
 
 ```bash

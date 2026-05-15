@@ -125,6 +125,8 @@ class PaperPolicyTrader:
 
     def run_once(self, market_date: str | None = None) -> PaperPolicyCycleResult:
         self.reconcile_open_positions()
+        if market_date is None:
+            market_date = self.store.latest_research_market_date()
         candidates = self.store.promotable_research_policy_positions(
             set(self.config.promoted_policies),
             market_date=market_date,

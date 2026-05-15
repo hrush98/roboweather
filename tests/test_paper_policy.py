@@ -113,6 +113,34 @@ def test_paper_policy_trader_promotes_allowlisted_policy_only(tmp_path) -> None:
     assert [(row["research_policy_position_id"], row["state"]) for row in rows] == [(promoted_id, "FILLED")]
 
 
+def test_paper_policy_trader_defaults_to_latest_research_market_date(tmp_path) -> None:
+    store = _store_with_market(tmp_path)
+    store.upsert_market(_market(market_id="m2", yes_token_id="yes2", no_token_id="no2", market_date=date(2026, 5, 8)))
+    old_id = store.insert_research_policy_position(
+        _policy_position(DEFAULT_PROMOTED_POLICIES[0], selected_side=TradeAction.BUY_NO, scope_key="old")
+    )
+    latest_id = store.insert_research_policy_position(
+        _policy_position(
+            DEFAULT_PROMOTED_POLICIES[0],
+            selected_side=TradeAction.BUY_NO,
+            scope_key="latest",
+            market_date=date(2026, 5, 8),
+            selected_market_id="m2",
+        )
+    )
+    assert old_id is not None and latest_id is not None
+
+    result = PaperPolicyTrader(
+        store=store,
+        config=PaperPolicyExecutionConfig(),
+        book_client=FakeBookClient({"no2": _book("no2", asks=[(0.5, 100)], bids=[(0.45, 100)])}),
+    ).run_once()
+
+    assert result.candidates == 1
+    rows = store.connection.execute("select research_policy_position_id from paper_policy_positions").fetchall()
+    assert [row["research_policy_position_id"] for row in rows] == [latest_id]
+
+
 def test_paper_policy_trader_keeps_promoted_policy_books_independent(tmp_path) -> None:
     store = _store_with_market(tmp_path)
     store.insert_research_policy_position(_policy_position(DEFAULT_PROMOTED_POLICIES[0], selected_side=TradeAction.BUY_NO))
@@ -211,38 +239,51 @@ def test_paper_policy_settles_from_station_outcome(tmp_path) -> None:
 
 def _store_with_market(tmp_path) -> ExecutionStore:
     store = ExecutionStore(tmp_path / "paper.sqlite")
-    store.upsert_market(
-        MarketSnapshot(
-            market_id="m1",
-            condition_id="c1",
-            question="Will temp be between 74-75F?",
-            slug="slug",
-            city="Atlanta",
-            station="KATL",
-            market_date=date(2026, 5, 7),
-            lower_f=74,
-            upper_f=75,
-            yes_token_id="yes",
-            no_token_id="no",
-            end_date="",
-            resolution_source="",
-            discovered_at=utc_now_iso(),
-        )
-    )
+    store.upsert_market(_market())
     return store
 
 
-def _policy_position(policy_name: str, selected_side: TradeAction, scope_key: str | None = None) -> ResearchPolicyPosition:
+def _market(
+    market_id: str = "m1",
+    yes_token_id: str = "yes",
+    no_token_id: str = "no",
+    market_date: date = date(2026, 5, 7),
+) -> MarketSnapshot:
+    return MarketSnapshot(
+        market_id=market_id,
+        condition_id=f"c-{market_id}",
+        question="Will temp be between 74-75F?",
+        slug=f"slug-{market_id}",
+        city="Atlanta",
+        station="KATL",
+        market_date=market_date,
+        lower_f=74,
+        upper_f=75,
+        yes_token_id=yes_token_id,
+        no_token_id=no_token_id,
+        end_date="",
+        resolution_source="",
+        discovered_at=utc_now_iso(),
+    )
+
+
+def _policy_position(
+    policy_name: str,
+    selected_side: TradeAction,
+    scope_key: str | None = None,
+    market_date: date = date(2026, 5, 7),
+    selected_market_id: str = "m1",
+) -> ResearchPolicyPosition:
     return ResearchPolicyPosition(
         timestamp=utc_now_iso(),
         policy_name=policy_name,
         station="KATL",
-        market_date=date(2026, 5, 7),
+        market_date=market_date,
         scope_key=scope_key or f"scope:{policy_name}",
         model_group="consensus_pm_active_us12_dynamic_mvp",
         strategy_bucket=StrategyBucket.HIGH_CONVICTION,
         obs_delay_bucket="15m",
-        selected_market_id="m1",
+        selected_market_id=selected_market_id,
         selected_side=selected_side,
         selected_bucket="74-75F",
         entry_price=0.5 if selected_side == TradeAction.BUY_NO else 0.6,

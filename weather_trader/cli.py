@@ -276,6 +276,7 @@ def main() -> None:
 
     paper_policy_cycle = subparsers.add_parser("paper-policy-cycle", help="Promote allowlisted research policies into paper execution")
     paper_policy_cycle.add_argument("--db", default=DEFAULT_RESEARCH_DB)
+    paper_policy_cycle.add_argument("--market-date", default=None, help="YYYY-MM-DD. Defaults to latest research policy market date.")
     paper_policy_cycle.add_argument("--promoted-policy", action="append", default=[])
     paper_policy_cycle.add_argument("--adversity-profile", choices=["off", "mild", "stress"], default="off")
     paper_policy_cycle.add_argument("--bankroll", type=float, default=1000.0)
@@ -287,6 +288,7 @@ def main() -> None:
 
     paper_policy_loop = subparsers.add_parser("paper-policy-loop", help="Run repeated paper-policy promotion cycles")
     paper_policy_loop.add_argument("--db", default=DEFAULT_RESEARCH_DB)
+    paper_policy_loop.add_argument("--market-date", default=None, help="YYYY-MM-DD. Defaults to latest research policy market date each cycle.")
     paper_policy_loop.add_argument("--promoted-policy", action="append", default=[])
     paper_policy_loop.add_argument("--adversity-profile", choices=["off", "mild", "stress"], default="off")
     paper_policy_loop.add_argument("--bankroll", type=float, default=1000.0)
@@ -451,6 +453,7 @@ def main() -> None:
     if args.command == "paper-policy-cycle":
         paper_policy_cycle_command(
             db_path=args.db,
+            market_date=args.market_date,
             promoted_policies=args.promoted_policy,
             adversity_profile_name=args.adversity_profile,
             bankroll=args.bankroll,
@@ -464,6 +467,7 @@ def main() -> None:
     if args.command == "paper-policy-loop":
         paper_policy_loop_command(
             db_path=args.db,
+            market_date=args.market_date,
             promoted_policies=args.promoted_policy,
             adversity_profile_name=args.adversity_profile,
             bankroll=args.bankroll,
@@ -1458,6 +1462,7 @@ def resolve_research_command(db_path: str, resolve_after_local_hour: int) -> Non
 
 def paper_policy_cycle_command(
     db_path: str,
+    market_date: str | None,
     promoted_policies: list[str],
     adversity_profile_name: str,
     bankroll: float,
@@ -1481,7 +1486,7 @@ def paper_policy_cycle_command(
                 max_total_open_risk=max_total_open_risk,
                 allow_duplicate_bucket_side=allow_duplicate_bucket_side,
             ),
-        ).run_once()
+        ).run_once(market_date=market_date)
         print(json.dumps(result.__dict__, indent=2))
     finally:
         store.close()
@@ -1489,6 +1494,7 @@ def paper_policy_cycle_command(
 
 def paper_policy_loop_command(
     db_path: str,
+    market_date: str | None,
     promoted_policies: list[str],
     adversity_profile_name: str,
     bankroll: float,
@@ -1519,7 +1525,7 @@ def paper_policy_loop_command(
         while True:
             cycle += 1
             started = time.time()
-            result = trader.run_once()
+            result = trader.run_once(market_date=market_date)
             print({"cycle": cycle, **result.__dict__}, flush=True)
             if max_cycles is not None and cycle >= max_cycles:
                 break
