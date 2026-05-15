@@ -9,7 +9,7 @@ RoboWeather now has two separate live loops:
 - `research-loop`: continues to collect markets, books, weather snapshots, model predictions, research policy positions, and resolved outcomes.
 - `paper-policy-loop`: promotes only allowlisted research policy positions into a separate paper execution ledger.
 
-Restarting the existing `research-loop` does not start paper execution and does not change data collection behavior. The paper layer only runs when explicitly invoked with `paper-policy-cycle`, `paper-policy-loop`, or `scripts/run_policy_paper.sh`.
+Restarting the existing `research-loop` does not start paper execution unless `--enable-paper-policy-promotion` is passed. The paper layer normally runs when explicitly invoked with `paper-policy-cycle`, `paper-policy-loop`, or `scripts/run_policy_paper.sh`.
 
 The research ledger remains the source of all policy hypotheses. Paper trading records link back to `research_policy_positions.id` and are stored in separate tables. Each promoted policy is treated as its own paper book for sizing and duplicate-exposure control; the default three policies are not traded as one aggregate portfolio.
 
@@ -45,6 +45,12 @@ python -m weather_trader.cli paper-policy-cycle
 
 By default, the paper loop promotes only the latest market date present in `research_policy_positions`. Use `--market-date YYYY-MM-DD` to run a specific day.
 
+Default single-leg execution is VWAP-capped FAK. Use strict FOK explicitly:
+
+```bash
+python -m weather_trader.cli paper-policy-cycle --order-mode FOK
+```
+
 Run continuously:
 
 ```bash
@@ -61,6 +67,12 @@ To point at another database:
 
 ```bash
 DB=/path/to/research.sqlite scripts/run_policy_paper.sh
+```
+
+The wrapper passes through execution flags unchanged:
+
+```bash
+scripts/run_policy_paper.sh --order-mode FOK --max-slippage-cents 0.03
 ```
 
 ## Data Model
@@ -99,8 +111,10 @@ The design follows these principles:
 - Every meaningful lifecycle transition is appended to the event tape.
 - Live orderbooks are refetched immediately before simulated submit.
 - Stale or missing books are rejected instead of silently using old data.
-- Fills walk the ask ladder up to the limit price. The simulator records each consumed level.
-- FOK is the default. FAK-compatible partial fill simulation exists, but default paper behavior is stricter.
+- Fills walk the ask ladder under a VWAP execution cap. The simulator records each consumed level.
+- FAK is the default. Valid partial fills are accepted when cost is at least `--min-fill-usd`.
+- FOK is available as explicit strict mode with `--order-mode FOK`.
+- Insufficient-depth entries remain retryable until `--entry-intent-ttl-seconds` or `--max-attempts` is exhausted.
 - Unknown, delayed, stale, and phantom-style failures are first-class states, not exceptions hidden in logs.
 - Settlement is based on resolved station highs, not intraday marks.
 
@@ -111,12 +125,13 @@ This is closer to a paper execution harness than a backtest. The goal is auditab
 Paper attempts can end in:
 
 - `FILLED`: target shares fully filled.
-- `PARTIAL`: partial fill under FAK-compatible simulation.
+- `PARTIAL`: partial fill under FAK simulation.
 - `REJECTED`: generic rejection, including missing book or insufficient depth.
 - `DELAYED`: simulated delayed exchange/client response.
 - `UNKNOWN`: simulated unknown order ID or phantom attempt.
 - `STALE_BOOK`: book was too old or failed stale-book adversity.
-- `FOK_NOT_FILLED`: FOK order could not fully fill at the limit.
+- `FOK_NOT_FILLED`: FOK order could not fully fill at or below the execution cap.
+- `EXPIRED_NO_LIQUIDITY`: retryable entry intent exhausted TTL or attempt budget.
 
 Positions can also become:
 
@@ -137,6 +152,25 @@ Events are append-only and intended for audit/debug review:
 - `RESOLVED`
 
 The event tape should be treated as the operational narrative. Position rows summarize current state; attempt rows summarize submit outcomes; event rows explain what happened and when.
+
+## Execution Price Cap
+
+For each promoted row, the simulator computes the maximum acceptable execution VWAP:
+
+```text
+edge_price_cap = entry_fair - min_post_slippage_edge
+slippage_price_cap = entry_price + max_slippage_cents
+execution_price_cap = min(edge_price_cap, slippage_price_cap, 1.0)
+```
+
+If `entry_fair` is missing, only the slippage cap is used. Defaults are:
+
+- `--order-mode FAK`
+- `--max-slippage-cents 0.05`
+- `--min-post-slippage-edge 0.05`
+- `--entry-intent-ttl-seconds 180`
+- `--retry-cooldown-seconds 30`
+- `--max-attempts 6`
 
 ## Sizing And Risk
 
@@ -202,6 +236,12 @@ A typical morning/evening setup is:
 3. Let resolver populate `station_date_outcomes`.
 4. Paper loop marks open positions and settles resolved ones on later cycles.
 
+For immediate opt-in promotion after policy evaluation:
+
+```bash
+python -m weather_trader.cli research-loop --model data/models/dynamic_bucket_obs_2022_2025.joblib --enable-paper-policy-promotion
+```
+
 The important separation is:
 
 ```text
@@ -215,7 +255,47 @@ resolver creates authoritative outcomes
 Recent attempts:
 
 ```sql
-select id, timestamp, research_policy_position_id, final_state, final_reason, cost_usd
+select id, timestamp, research_policy_position_id, attempt_seq, final_state, final_reason, cost_usd
+from paper_policy_order_attempts
+order by id desc
+limit 20;
+```
+
+Partial fills:
+
+```sql
+select paper_position_id, attempt_seq, avg_price, cost_usd, levels_consumed
+from paper_policy_order_attempts
+where final_state = 'PARTIAL'
+order by id desc;
+```
+
+Retrying intents:
+
+```sql
+select id, policy_name, station, market_date, state, json_extract(raw_json, '$.last_attempt_seq') attempt_seq
+from paper_policy_positions
+where state in ('RESERVED', 'SUBMITTED')
+  and json_extract(raw_json, '$.last_attempt_reason') = 'INSUFFICIENT_DEPTH';
+```
+
+Expired intents:
+
+```sql
+select id, policy_name, station, market_date, json_extract(raw_json, '$.expired_attempt_seq') attempts
+from paper_policy_positions
+where state = 'EXPIRED_NO_LIQUIDITY';
+```
+
+VWAP and post-edge audit fields:
+
+```sql
+select
+  id,
+  json_extract(raw_payload, '$.raw_payload.vwap_price') vwap_price,
+  json_extract(raw_payload, '$.raw_payload.execution_price_cap') execution_price_cap,
+  json_extract(raw_payload, '$.raw_payload.post_slippage_edge') post_slippage_edge,
+  json_extract(raw_payload, '$.raw_payload.fillable_notional_usd') fillable_notional_usd
 from paper_policy_order_attempts
 order by id desc
 limit 20;

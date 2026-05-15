@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 
 import pytest
@@ -22,6 +23,7 @@ from weather_trader.execution.paper_policy import (
     PaperPolicyExecutionConfig,
     PaperPolicyRiskConfig,
     PaperPolicyTrader,
+    execution_price_cap_for_row,
     simulate_ladder_fill,
 )
 from weather_trader.execution.store import ExecutionStore
@@ -93,6 +95,78 @@ def test_simulate_ladder_fill_fak_partial() -> None:
     assert fill.final_state == PaperPolicyFinalState.PARTIAL
     assert fill.filled_shares == 5
     assert fill.cost_usd == 2
+
+
+def test_simulate_ladder_fill_vwap_cap_allows_partial_before_breach() -> None:
+    fill = simulate_ladder_fill(
+        book=_book("no", asks=[(0.5, 10), (0.8, 100)]),
+        limit_price=0.5,
+        execution_price_cap=0.55,
+        target_notional_usd=10,
+        order_mode=PaperPolicyOrderMode.FAK,
+        min_fill_usd=1,
+    )
+
+    assert fill.final_state == PaperPolicyFinalState.PARTIAL
+    assert fill.avg_price <= 0.55
+    assert fill.cost_usd > 5
+    assert fill.levels_consumed[-1]["price"] == 0.8
+
+
+def test_simulate_ladder_fill_never_spends_above_target_notional() -> None:
+    fill = simulate_ladder_fill(
+        book=_book("no", asks=[(0.55, 100)]),
+        limit_price=0.5,
+        execution_price_cap=0.55,
+        target_notional_usd=10,
+        order_mode=PaperPolicyOrderMode.FAK,
+        min_fill_usd=1,
+    )
+
+    assert fill.cost_usd <= 10
+
+
+def test_simulate_ladder_fill_rejects_below_minimum_and_fok_rejects_partial_depth() -> None:
+    fak = simulate_ladder_fill(
+        book=_book("no", asks=[(0.5, 3)]),
+        limit_price=0.5,
+        execution_price_cap=0.55,
+        target_notional_usd=10,
+        order_mode=PaperPolicyOrderMode.FAK,
+        min_fill_usd=1,
+    )
+    fok = simulate_ladder_fill(
+        book=_book("no", asks=[(0.5, 3)]),
+        limit_price=0.5,
+        execution_price_cap=0.55,
+        target_notional_usd=10,
+        order_mode=PaperPolicyOrderMode.FOK,
+        min_fill_usd=1,
+    )
+    tiny = simulate_ladder_fill(
+        book=_book("no", asks=[(0.5, 1)]),
+        limit_price=0.5,
+        execution_price_cap=0.55,
+        target_notional_usd=10,
+        order_mode=PaperPolicyOrderMode.FAK,
+        min_fill_usd=1,
+    )
+
+    assert fak.final_state == PaperPolicyFinalState.PARTIAL
+    assert fok.final_state == PaperPolicyFinalState.FOK_NOT_FILLED
+    assert tiny.final_state == PaperPolicyFinalState.REJECTED
+    assert tiny.reason == "INSUFFICIENT_DEPTH"
+
+
+def test_execution_price_cap_respects_slippage_and_post_edge_caps() -> None:
+    row = {"entry_price": 0.5, "entry_fair": 0.58}
+    assert execution_price_cap_for_row(row, max_slippage_cents=0.05, min_post_slippage_edge=0.05) == 0.53
+    assert execution_price_cap_for_row(row, max_slippage_cents=0.02, min_post_slippage_edge=0.01) == 0.52
+    assert execution_price_cap_for_row(
+        {"entry_price": 0.5, "entry_fair": None},
+        max_slippage_cents=0.05,
+        min_post_slippage_edge=0.05,
+    ) == 0.55
 
 
 def test_paper_policy_trader_promotes_allowlisted_policy_only(tmp_path) -> None:
@@ -208,6 +282,76 @@ def test_paper_policy_trader_records_stale_book_and_unknown_attempt(tmp_path) ->
     attempt = store.latest_paper_policy_attempts(1)[0]
     assert attempt["final_state"] == "UNKNOWN"
     assert attempt["not_found_count"] == 1
+
+
+def test_paper_policy_insufficient_depth_stays_pending_and_retries_same_position(tmp_path) -> None:
+    store = _store_with_market(tmp_path)
+    research_id = store.insert_research_policy_position(_policy_position(DEFAULT_PROMOTED_POLICIES[0], selected_side=TradeAction.BUY_NO))
+    assert research_id is not None
+    books = {"no": _book("no", asks=[(0.5, 1)])}
+    trader = PaperPolicyTrader(
+        store=store,
+        config=PaperPolicyExecutionConfig(retry_cooldown_seconds=0),
+        book_client=FakeBookClient(books),
+    )
+
+    first = trader.run_once()
+    position = store.connection.execute("select id, state from paper_policy_positions").fetchone()
+    assert first.attempts == 1
+    assert first.rejected == 0
+    assert position["state"] == "RESERVED"
+
+    books["no"] = _book("no", asks=[(0.5, 100)], bids=[(0.45, 100)])
+    second = trader.run_once()
+
+    attempts = store.connection.execute(
+        "select attempt_seq, final_state from paper_policy_order_attempts order by attempt_seq"
+    ).fetchall()
+    events = [
+        row["event_type"]
+        for row in store.connection.execute("select event_type from paper_policy_trade_events order by id").fetchall()
+    ]
+    assert second.attempts == 1
+    assert second.filled == 1
+    assert [(row["attempt_seq"], row["final_state"]) for row in attempts] == [(1, "REJECTED"), (2, "FILLED")]
+    assert store.connection.execute("select count(*) n from paper_policy_positions").fetchone()["n"] == 1
+    assert "ENTRY_RETRY" in events
+
+
+def test_paper_policy_pending_entry_expires_on_max_attempts(tmp_path) -> None:
+    store = _store_with_market(tmp_path)
+    store.insert_research_policy_position(_policy_position(DEFAULT_PROMOTED_POLICIES[0], selected_side=TradeAction.BUY_NO))
+    trader = PaperPolicyTrader(
+        store=store,
+        config=PaperPolicyExecutionConfig(retry_cooldown_seconds=0, max_attempts=2),
+        book_client=FakeBookClient({"no": _book("no", asks=[(0.5, 1)])}),
+    )
+
+    trader.run_once()
+    result = trader.run_once()
+
+    row = store.connection.execute("select state, raw_json from paper_policy_positions").fetchone()
+    assert result.rejected == 1
+    assert row["state"] == "EXPIRED_NO_LIQUIDITY"
+    assert json.loads(row["raw_json"])["last_attempt_seq"] == 2
+
+
+def test_paper_policy_attempt_raw_payload_records_vwap_audit_fields(tmp_path) -> None:
+    store = _store_with_market(tmp_path)
+    store.insert_research_policy_position(_policy_position(DEFAULT_PROMOTED_POLICIES[0], selected_side=TradeAction.BUY_NO))
+
+    PaperPolicyTrader(
+        store=store,
+        config=PaperPolicyExecutionConfig(),
+        book_client=FakeBookClient({"no": _book("no", asks=[(0.5, 100)], bids=[(0.45, 100)])}),
+    ).run_once()
+
+    attempt = store.latest_paper_policy_attempts(1)[0]
+    payload = json.loads(attempt["raw_payload"])["raw_payload"]
+    assert payload["vwap_price"] == 0.5
+    assert payload["execution_price_cap"] == 0.55
+    assert payload["post_slippage_edge"] == 0.3
+    assert payload["fillable_notional_usd"] == 20
 
 
 def test_paper_policy_settles_from_station_outcome(tmp_path) -> None:

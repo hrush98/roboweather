@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import random
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Protocol
+from typing import Any, Protocol
 
 from weather_trader.execution.books import RestBookClient
 from weather_trader.execution.contracts import (
@@ -45,12 +46,15 @@ class PaperPolicyRiskConfig:
 class PaperPolicyExecutionConfig:
     promoted_policies: tuple[str, ...] = DEFAULT_PROMOTED_POLICIES
     risk: PaperPolicyRiskConfig = PaperPolicyRiskConfig()
-    order_mode: PaperPolicyOrderMode = PaperPolicyOrderMode.FOK
+    order_mode: PaperPolicyOrderMode = PaperPolicyOrderMode.FAK
     max_book_age_seconds: float = 10.0
+    max_slippage_cents: float = 0.05
+    min_post_slippage_edge: float = 0.05
     min_fill_usd: float = 1.0
-    max_attempts: int = 3
-    unknown_retry_grace_seconds: float = 30.0
+    entry_intent_ttl_seconds: float = 180.0
     retry_cooldown_seconds: float = 30.0
+    max_attempts: int = 6
+    unknown_retry_grace_seconds: float = 30.0
     fok_miss_probability: float = 0.0
     stale_book_probability: float = 0.0
     delayed_probability: float = 0.0
@@ -125,6 +129,7 @@ class PaperPolicyTrader:
 
     def run_once(self, market_date: str | None = None) -> PaperPolicyCycleResult:
         self.reconcile_open_positions()
+        retry_attempts, retry_filled, retry_rejected, retry_delayed, retry_unknown = self.retry_pending_entries()
         if market_date is None:
             market_date = self.store.latest_research_market_date()
         candidates = self.store.promotable_research_policy_positions(
@@ -146,6 +151,8 @@ class PaperPolicyTrader:
                 delayed += 1
             elif state == PaperPolicyFinalState.UNKNOWN:
                 unknown += 1
+            elif state in {PaperPolicyFinalState.RESERVED, PaperPolicyFinalState.SUBMITTED}:
+                pass
             else:
                 rejected += 1
         marked = self.mark_open_positions()
@@ -154,11 +161,11 @@ class PaperPolicyTrader:
         return PaperPolicyCycleResult(
             candidates=len(candidates),
             reserved=reserved,
-            attempts=attempts,
-            filled=filled,
-            rejected=rejected,
-            delayed=delayed,
-            unknown=unknown,
+            attempts=attempts + retry_attempts,
+            filled=filled + retry_filled,
+            rejected=rejected + retry_rejected,
+            delayed=delayed + retry_delayed,
+            unknown=unknown + retry_unknown,
             marked=marked,
             settled=settled,
         )
@@ -182,6 +189,55 @@ class PaperPolicyTrader:
             )
             reconciled += 1
         return reconciled
+
+    def retry_pending_entries(self) -> tuple[int, int, int, int, int]:
+        attempts = filled = rejected = delayed = unknown = 0
+        now = datetime.now(timezone.utc)
+        for row in self.store.paper_policy_retryable_positions():
+            if float(row["filled_shares"] or 0.0) > 0:
+                continue
+            raw_json = _load_raw(row)
+            last_reason = str(raw_json.get("last_attempt_reason") or "")
+            state = str(row["state"])
+            if state in {str(PaperPolicyFinalState.RESERVED), str(PaperPolicyFinalState.SUBMITTED)} and last_reason != "INSUFFICIENT_DEPTH":
+                continue
+            attempt_seq = self.store.latest_paper_policy_attempt_seq(int(row["id"]))
+            age = _age_seconds(str(row["timestamp"]), now)
+            last_attempt_age = _age_seconds(str(raw_json.get("last_attempt_timestamp") or row["timestamp"]), now)
+            if not self._can_retry_entry(age_seconds=age, attempt_seq=attempt_seq):
+                self._expire_no_liquidity(row, age_seconds=age, attempt_seq=attempt_seq)
+                rejected += 1
+                continue
+            if last_attempt_age < self.config.retry_cooldown_seconds:
+                continue
+            research_row = _research_row_from_position_raw(raw_json)
+            if not research_row:
+                continue
+            position = self._position_from_row(row)
+            self._event(
+                int(row["id"]),
+                int(row["research_policy_position_id"]),
+                PaperPolicyEventType.ENTRY_RETRY,
+                "retrying pending entry",
+                {"attempt_seq": attempt_seq + 1, "age_seconds": age},
+            )
+            attempt = self._execute_attempt(
+                int(row["id"]),
+                research_row,
+                position,
+                attempt_seq=attempt_seq + 1,
+            )
+            applied_state = self._apply_attempt(int(row["id"]), int(row["research_policy_position_id"]), attempt, age_seconds=age)
+            attempts += 1
+            if applied_state in {PaperPolicyFinalState.FILLED, PaperPolicyFinalState.PARTIAL}:
+                filled += 1
+            elif applied_state == PaperPolicyFinalState.DELAYED:
+                delayed += 1
+            elif applied_state == PaperPolicyFinalState.UNKNOWN:
+                unknown += 1
+            elif self._is_terminal(applied_state, attempt.final_reason):
+                rejected += 1
+        return attempts, filled, rejected, delayed, unknown
 
     def mark_open_positions(self) -> int:
         marked = 0
@@ -313,25 +369,17 @@ class PaperPolicyTrader:
             return None
         self._event(paper_position_id, int(row["id"]), PaperPolicyEventType.ENTRY_RESERVED, "reserved paper exposure", {})
 
-        attempt = self._execute_attempt(paper_position_id, row, position)
-        self.store.insert_paper_policy_order_attempt(attempt)
-        self.store.update_paper_policy_position_execution(
-            paper_position_id,
-            state=attempt.final_state,
-            filled_shares=attempt.filled_shares,
-            avg_entry_price=attempt.avg_price,
-            cost_usd=attempt.cost_usd,
-            raw_patch={"last_attempt_state": str(attempt.final_state), "last_attempt_reason": attempt.final_reason},
-        )
-        event_type = (
-            PaperPolicyEventType.ENTRY_CONFIRMED
-            if attempt.final_state in {PaperPolicyFinalState.FILLED, PaperPolicyFinalState.PARTIAL}
-            else PaperPolicyEventType.ENTRY_REJECTED
-        )
-        self._event(paper_position_id, int(row["id"]), event_type, attempt.final_reason, attempt.raw_payload)
-        return attempt.final_state
+        attempt = self._execute_attempt(paper_position_id, row, position, attempt_seq=1)
+        return self._apply_attempt(paper_position_id, int(row["id"]), attempt, age_seconds=0.0)
 
-    def _execute_attempt(self, paper_position_id: int, row: dict, position: PaperPolicyPosition) -> PaperPolicyOrderAttempt:
+    def _execute_attempt(
+        self,
+        paper_position_id: int,
+        row: dict,
+        position: PaperPolicyPosition,
+        *,
+        attempt_seq: int,
+    ) -> PaperPolicyOrderAttempt:
         self._event(paper_position_id, int(row["id"]), PaperPolicyEventType.ENTRY_SUBMIT, "refetching live book", {})
         book: BookSnapshot | None
         try:
@@ -344,6 +392,7 @@ class PaperPolicyTrader:
                 PaperPolicyFinalState.REJECTED,
                 "MISSING_BOOK",
                 raw_payload={"error": str(exc)},
+                attempt_seq=attempt_seq,
             )
         if self._roll(self.config.stale_book_probability) or _book_age_seconds(book) > self.config.max_book_age_seconds:
             return self._attempt(
@@ -353,9 +402,18 @@ class PaperPolicyTrader:
                 PaperPolicyFinalState.STALE_BOOK,
                 "STALE_BOOK",
                 raw_payload={"book_timestamp": book.timestamp, "max_book_age_seconds": self.config.max_book_age_seconds},
+                attempt_seq=attempt_seq,
             )
         if self._roll(self.config.delayed_probability):
-            return self._attempt(paper_position_id, row, position, PaperPolicyFinalState.DELAYED, "DELAYED", external_status="DELAYED")
+            return self._attempt(
+                paper_position_id,
+                row,
+                position,
+                PaperPolicyFinalState.DELAYED,
+                "DELAYED",
+                external_status="DELAYED",
+                attempt_seq=attempt_seq,
+            )
         if self._roll(self.config.unknown_probability):
             return self._attempt(
                 paper_position_id,
@@ -365,13 +423,27 @@ class PaperPolicyTrader:
                 "UNKNOWN_ORDER_ID",
                 external_status="UNKNOWN",
                 external_order_id=None,
+                attempt_seq=attempt_seq,
             )
         if self.config.order_mode == PaperPolicyOrderMode.FOK and self._roll(self.config.fok_miss_probability):
-            return self._attempt(paper_position_id, row, position, PaperPolicyFinalState.FOK_NOT_FILLED, "FOK_MISS_AFTER_BOOK")
+            return self._attempt(
+                paper_position_id,
+                row,
+                position,
+                PaperPolicyFinalState.FOK_NOT_FILLED,
+                "FOK_MISS_AFTER_BOOK",
+                attempt_seq=attempt_seq,
+            )
 
+        execution_price_cap = execution_price_cap_for_row(
+            row,
+            max_slippage_cents=self.config.max_slippage_cents,
+            min_post_slippage_edge=self.config.min_post_slippage_edge,
+        )
         fill = simulate_ladder_fill(
             book=book,
             limit_price=position.entry_limit_price,
+            execution_price_cap=execution_price_cap,
             target_notional_usd=position.target_notional_usd,
             order_mode=self.config.order_mode,
             min_fill_usd=self.config.min_fill_usd,
@@ -389,7 +461,17 @@ class PaperPolicyTrader:
             levels_consumed=fill.levels_consumed,
             external_order_id=f"paper-{uuid.uuid4().hex[:12]}",
             external_status=str(fill.final_state),
-            raw_payload={"book_timestamp": book.timestamp, "best_ask": book.best_ask, "best_bid": book.best_bid},
+            raw_payload={
+                "book_timestamp": book.timestamp,
+                "best_ask": book.best_ask,
+                "best_bid": book.best_bid,
+                "vwap_price": fill.avg_price,
+                "execution_price_cap": execution_price_cap,
+                "post_slippage_edge": _post_slippage_edge(row, fill.avg_price),
+                "fillable_notional_usd": fill.cost_usd,
+                "levels_consumed": fill.levels_consumed,
+            },
+            attempt_seq=attempt_seq,
         )
 
     def _attempt(
@@ -407,12 +489,13 @@ class PaperPolicyTrader:
         external_order_id: str | None = None,
         external_status: str | None = None,
         raw_payload: dict | None = None,
+        attempt_seq: int = 1,
     ) -> PaperPolicyOrderAttempt:
         return PaperPolicyOrderAttempt(
             timestamp=utc_now_iso(),
             paper_position_id=paper_position_id,
             research_policy_position_id=int(row["id"]),
-            attempt_seq=1,
+            attempt_seq=attempt_seq,
             token_id=position.selected_token_id,
             side=position.selected_side,
             order_mode=self.config.order_mode,
@@ -429,6 +512,100 @@ class PaperPolicyTrader:
             levels_consumed=levels_consumed or [],
             raw_payload=raw_payload or {},
         )
+
+    def _apply_attempt(
+        self,
+        paper_position_id: int,
+        research_policy_position_id: int,
+        attempt: PaperPolicyOrderAttempt,
+        *,
+        age_seconds: float,
+    ) -> PaperPolicyFinalState:
+        self.store.insert_paper_policy_order_attempt(attempt)
+        state = attempt.final_state
+        if attempt.final_reason == "INSUFFICIENT_DEPTH" and attempt.final_state == PaperPolicyFinalState.REJECTED:
+            if self._can_retry_entry(age_seconds=age_seconds, attempt_seq=attempt.attempt_seq):
+                state = PaperPolicyFinalState.RESERVED
+            else:
+                state = PaperPolicyFinalState.EXPIRED_NO_LIQUIDITY
+        self.store.update_paper_policy_position_execution(
+            paper_position_id,
+            state=state,
+            filled_shares=attempt.filled_shares,
+            avg_entry_price=attempt.avg_price,
+            cost_usd=attempt.cost_usd,
+            raw_patch={
+                "last_attempt_state": str(attempt.final_state),
+                "last_attempt_reason": attempt.final_reason,
+                "last_attempt_timestamp": attempt.timestamp,
+                "last_attempt_seq": attempt.attempt_seq,
+                "expired_age_seconds": age_seconds if state == PaperPolicyFinalState.EXPIRED_NO_LIQUIDITY else None,
+            },
+        )
+        if attempt.final_state in {PaperPolicyFinalState.FILLED, PaperPolicyFinalState.PARTIAL}:
+            event_type = PaperPolicyEventType.ENTRY_CONFIRMED
+        elif state == PaperPolicyFinalState.RESERVED:
+            event_type = PaperPolicyEventType.ENTRY_RETRY
+        else:
+            event_type = PaperPolicyEventType.ENTRY_REJECTED
+        self._event(paper_position_id, research_policy_position_id, event_type, attempt.final_reason, attempt.raw_payload)
+        return state
+
+    def _can_retry_entry(self, *, age_seconds: float, attempt_seq: int) -> bool:
+        return age_seconds < self.config.entry_intent_ttl_seconds and attempt_seq < self.config.max_attempts
+
+    def _expire_no_liquidity(self, row: dict[str, Any], *, age_seconds: float, attempt_seq: int) -> None:
+        paper_position_id = int(row["id"])
+        self.store.update_paper_policy_position_execution(
+            paper_position_id,
+            state=PaperPolicyFinalState.EXPIRED_NO_LIQUIDITY,
+            filled_shares=0.0,
+            avg_entry_price=None,
+            cost_usd=0.0,
+            raw_patch={
+                "last_attempt_state": str(PaperPolicyFinalState.EXPIRED_NO_LIQUIDITY),
+                "last_attempt_reason": "EXPIRED_NO_LIQUIDITY",
+                "expired_age_seconds": age_seconds,
+                "expired_attempt_seq": attempt_seq,
+            },
+        )
+        self._event(
+            paper_position_id,
+            int(row["research_policy_position_id"]),
+            PaperPolicyEventType.ENTRY_REJECTED,
+            "EXPIRED_NO_LIQUIDITY",
+            {"age_seconds": age_seconds, "attempt_seq": attempt_seq},
+        )
+
+    def _position_from_row(self, row: dict[str, Any]) -> PaperPolicyPosition:
+        return PaperPolicyPosition(
+            timestamp=str(row["timestamp"]),
+            research_policy_position_id=int(row["research_policy_position_id"]),
+            policy_name=str(row["policy_name"]),
+            station=str(row["station"]),
+            market_date=datetime.fromisoformat(str(row["market_date"])).date(),
+            selected_market_id=str(row["selected_market_id"]),
+            selected_token_id=str(row["selected_token_id"]),
+            selected_side=TradeAction(str(row["selected_side"])),
+            selected_bucket=row.get("selected_bucket"),
+            entry_limit_price=float(row["entry_limit_price"]),
+            target_notional_usd=float(row["target_notional_usd"]),
+            filled_shares=float(row["filled_shares"] or 0.0),
+            avg_entry_price=row["avg_entry_price"],
+            cost_usd=float(row["cost_usd"] or 0.0),
+            state=PaperPolicyFinalState(str(row["state"])),
+            raw_json=_load_raw(row),
+        )
+
+    def _is_terminal(self, final_state: PaperPolicyFinalState, final_reason: str) -> bool:
+        if final_state == PaperPolicyFinalState.EXPIRED_NO_LIQUIDITY:
+            return True
+        return final_state not in {
+            PaperPolicyFinalState.FILLED,
+            PaperPolicyFinalState.PARTIAL,
+            PaperPolicyFinalState.DELAYED,
+            PaperPolicyFinalState.UNKNOWN,
+        } and final_reason != "INSUFFICIENT_DEPTH"
 
     def _record_risk_snapshot(self) -> None:
         exposure = self.store.paper_policy_exposure_summary()
@@ -478,6 +655,8 @@ class LadderFill:
     avg_price: float | None
     cost_usd: float
     levels_consumed: list[dict[str, float]]
+    execution_price_cap: float
+    fillable_notional_usd: float
 
 
 def simulate_ladder_fill(
@@ -487,12 +666,14 @@ def simulate_ladder_fill(
     target_notional_usd: float,
     order_mode: PaperPolicyOrderMode,
     min_fill_usd: float,
+    execution_price_cap: float | None = None,
     force_partial: bool = False,
 ) -> LadderFill:
     limit_price = quantize_price(limit_price)
+    execution_price_cap = quantize_price(execution_price_cap if execution_price_cap is not None else limit_price)
     target_notional_usd = quantize_usdc(target_notional_usd)
     if not book.asks:
-        return LadderFill(PaperPolicyFinalState.REJECTED, "MISSING_ASKS", 0.0, None, 0.0, [])
+        return LadderFill(PaperPolicyFinalState.REJECTED, "MISSING_ASKS", 0.0, None, 0.0, [], execution_price_cap, 0.0)
     target_shares = quantize_shares(target_notional_usd / limit_price)
     if force_partial:
         target_shares = quantize_shares(target_shares / 2.0)
@@ -502,11 +683,25 @@ def simulate_ladder_fill(
     consumed: list[dict[str, float]] = []
     for level in book.asks:
         price = quantize_price(level.price)
-        if price > limit_price:
+        if price > 1.0:
             break
         take = min(remaining, quantize_shares(level.size))
+        budget_remaining = quantize_usdc(target_notional_usd - cost)
+        if budget_remaining <= 0:
+            break
+        take = min(take, quantize_shares(budget_remaining / price))
         if take <= 0:
             continue
+        projected_cost = cost + take * price
+        projected_shares = shares + take
+        projected_vwap = projected_cost / projected_shares if projected_shares > 0 else float("inf")
+        if projected_vwap > execution_price_cap:
+            if price <= execution_price_cap or shares <= 0:
+                break
+            max_take = ((execution_price_cap * shares) - cost) / (price - execution_price_cap)
+            take = min(take, quantize_shares(max_take))
+            if take <= 0:
+                break
         level_cost = quantize_usdc(take * price)
         shares = quantize_shares(shares + take)
         cost = quantize_usdc(cost + level_cost)
@@ -516,12 +711,33 @@ def simulate_ladder_fill(
             break
 
     if shares <= 0 or cost < min_fill_usd:
-        return LadderFill(PaperPolicyFinalState.REJECTED, "INSUFFICIENT_DEPTH", 0.0, None, 0.0, consumed)
+        return LadderFill(PaperPolicyFinalState.REJECTED, "INSUFFICIENT_DEPTH", 0.0, None, 0.0, consumed, execution_price_cap, cost)
     if order_mode == PaperPolicyOrderMode.FOK and remaining > 0:
-        return LadderFill(PaperPolicyFinalState.FOK_NOT_FILLED, "FOK_NOT_FILLED", 0.0, None, 0.0, consumed)
+        return LadderFill(PaperPolicyFinalState.FOK_NOT_FILLED, "FOK_NOT_FILLED", 0.0, None, 0.0, consumed, execution_price_cap, cost)
     avg = quantize_price(cost / shares)
     state = PaperPolicyFinalState.FILLED if remaining <= 0 else PaperPolicyFinalState.PARTIAL
-    return LadderFill(state, str(state), shares, avg, cost, consumed)
+    return LadderFill(state, str(state), shares, avg, cost, consumed, execution_price_cap, cost)
+
+
+def execution_price_cap_for_row(
+    row: dict[str, Any],
+    *,
+    max_slippage_cents: float,
+    min_post_slippage_edge: float,
+) -> float:
+    entry_price = quantize_price(float(row["entry_price"]))
+    slippage_price_cap = entry_price + max_slippage_cents
+    fair = row.get("entry_fair")
+    if fair is None:
+        return quantize_price(min(slippage_price_cap, 1.0))
+    edge_price_cap = float(fair) - min_post_slippage_edge
+    return quantize_price(min(edge_price_cap, slippage_price_cap, 1.0))
+
+
+def _post_slippage_edge(row: dict[str, Any], avg_price: float | None) -> float | None:
+    if avg_price is None or row.get("entry_fair") is None:
+        return None
+    return round(float(row["entry_fair"]) - avg_price + 1e-12, 4)
 
 
 def quantize_price(value: float) -> float:
@@ -573,3 +789,20 @@ def _age_seconds(timestamp: str, now: datetime) -> float:
 
 def _jsonish(row: dict) -> dict:
     return {str(key): value for key, value in row.items()}
+
+
+def _load_raw(row: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return json.loads(row.get("raw_json") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+
+def _research_row_from_position_raw(raw_json: dict[str, Any]) -> dict[str, Any]:
+    direct = raw_json.get("research_policy_position")
+    if isinstance(direct, dict):
+        return dict(direct)
+    nested = raw_json.get("raw_json")
+    if isinstance(nested, dict) and isinstance(nested.get("research_policy_position"), dict):
+        return dict(nested["research_policy_position"])
+    return {}

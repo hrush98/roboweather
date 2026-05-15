@@ -1206,6 +1206,30 @@ class ExecutionStore:
         ).fetchone()
         return row is not None
 
+    def paper_policy_retryable_positions(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            select *
+            from paper_policy_positions
+            where state in ('RESERVED', 'SUBMITTED', 'DELAYED', 'UNKNOWN')
+            order by id
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def latest_paper_policy_attempt_seq(self, paper_position_id: int) -> int:
+        row = self.connection.execute(
+            """
+            select max(attempt_seq) as attempt_seq
+            from paper_policy_order_attempts
+            where paper_position_id = ?
+            """,
+            (paper_position_id,),
+        ).fetchone()
+        if row is None or row["attempt_seq"] is None:
+            return 0
+        return int(row["attempt_seq"])
+
     def latest_paper_policy_attempts(self, limit: int = 100) -> list[dict[str, Any]]:
         rows = self.connection.execute(
             """

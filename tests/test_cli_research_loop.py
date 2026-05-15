@@ -3,6 +3,9 @@ from __future__ import annotations
 import sys
 
 from weather_trader import cli
+from weather_trader.execution.contracts import EngineState, utc_now_iso
+from weather_trader.research import collector as research_collector
+from weather_trader.research.collector import ResearchCycleResult
 
 
 def test_research_loop_accepts_repeatable_extra_models(monkeypatch) -> None:
@@ -36,6 +39,123 @@ def test_research_loop_accepts_repeatable_extra_models(monkeypatch) -> None:
         "data/models/high_regression_obs_2022_2025.joblib",
         "data/models/ngboost_normal_obs_2022_2025.joblib",
     ]
+
+
+def test_research_loop_accepts_paper_policy_promotion_flag(monkeypatch) -> None:
+    captured = {}
+
+    def fake_research_loop_command(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli, "ensure_directories", lambda: None)
+    monkeypatch.setattr(cli, "research_loop_command", fake_research_loop_command)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "roboweather",
+            "research-loop",
+            "--model",
+            "data/models/dynamic_bucket_obs_2022_2025.joblib",
+            "--enable-paper-policy-promotion",
+        ],
+    )
+
+    cli.main()
+
+    assert captured["enable_paper_policy_promotion"] is True
+
+
+def test_paper_policy_cycle_accepts_execution_options(monkeypatch) -> None:
+    captured = {}
+
+    def fake_paper_policy_cycle_command(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli, "ensure_directories", lambda: None)
+    monkeypatch.setattr(cli, "paper_policy_cycle_command", fake_paper_policy_cycle_command)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "roboweather",
+            "paper-policy-cycle",
+            "--order-mode",
+            "FOK",
+            "--max-slippage-cents",
+            "0.03",
+            "--min-post-slippage-edge",
+            "0.04",
+            "--entry-intent-ttl-seconds",
+            "90",
+            "--retry-cooldown-seconds",
+            "5",
+            "--max-attempts",
+            "2",
+        ],
+    )
+
+    cli.main()
+
+    assert captured["order_mode"] == "FOK"
+    assert captured["max_slippage_cents"] == 0.03
+    assert captured["min_post_slippage_edge"] == 0.04
+    assert captured["entry_intent_ttl_seconds"] == 90
+    assert captured["retry_cooldown_seconds"] == 5
+    assert captured["max_attempts"] == 2
+
+
+def test_research_loop_hook_runs_paper_promotion_after_policy_evaluation(monkeypatch) -> None:
+    calls = []
+
+    class FakeCollector:
+        def __init__(self, **kwargs):
+            pass
+
+        def run_once(self):
+            calls.append("collector")
+            return ResearchCycleResult(
+                engine_state=EngineState(
+                    timestamp=utc_now_iso(),
+                    mode="research",
+                    discovered_markets=1,
+                    actionable_signals=1,
+                    orders_submitted=0,
+                    skipped=0,
+                    errors=[],
+                ),
+                snapshots_written=1,
+            )
+
+    class FakeStore:
+        def latest_research_market_date(self):
+            calls.append("latest_market_date")
+            return "2026-05-07"
+
+    class FakeEvaluator:
+        def evaluate(self):
+            calls.append("evaluator")
+            return 1
+
+    class FakePaperPolicyTrader:
+        def run_once(self, market_date=None):
+            calls.append(("paper", market_date))
+            return type("FakePaperResult", (), {"filled": 1})()
+
+    monkeypatch.setattr(research_collector, "ResearchCollector", FakeCollector)
+    monkeypatch.setattr(research_collector, "time", type("FakeTime", (), {"time": staticmethod(lambda: 0.0), "sleep": staticmethod(lambda _: None)}))
+
+    research_collector.run_research_loop(
+        store=FakeStore(),
+        model_paths=[],
+        config=None,
+        interval_seconds=1,
+        max_cycles=1,
+        policy_evaluator=FakeEvaluator(),
+        paper_policy_trader=FakePaperPolicyTrader(),
+    )
+
+    assert calls == ["collector", "evaluator", "latest_market_date", ("paper", "2026-05-07")]
 
 
 def test_build_dataset_accepts_explicit_stations(monkeypatch) -> None:

@@ -21,6 +21,7 @@ from weather_trader.execution.paper_policy import (
     PaperPolicyTrader,
     adversity_profile,
 )
+from weather_trader.execution.contracts import PaperPolicyOrderMode
 from weather_trader.execution.risk import RiskConfig, RiskManager
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import WeatherFeatureService
@@ -269,6 +270,7 @@ def main() -> None:
     research_loop.add_argument("--entry-end-local", default="15:00")
     research_loop.add_argument("--resolver-interval-seconds", type=int, default=3600)
     research_loop.add_argument("--resolve-after-local-hour", type=int, default=6)
+    research_loop.add_argument("--enable-paper-policy-promotion", action="store_true")
 
     resolve_research = subparsers.add_parser("resolve-research", help="Resolve and score due research snapshots")
     resolve_research.add_argument("--db", default=str(PAPER_DIR / "roboweather.sqlite"))
@@ -285,6 +287,7 @@ def main() -> None:
     paper_policy_cycle.add_argument("--max-exposure-per-station-date", type=float, default=50.0)
     paper_policy_cycle.add_argument("--max-total-open-risk", type=float, default=150.0)
     paper_policy_cycle.add_argument("--allow-duplicate-bucket-side", action="store_true")
+    _add_paper_policy_execution_args(paper_policy_cycle)
 
     paper_policy_loop = subparsers.add_parser("paper-policy-loop", help="Run repeated paper-policy promotion cycles")
     paper_policy_loop.add_argument("--db", default=DEFAULT_RESEARCH_DB)
@@ -297,6 +300,7 @@ def main() -> None:
     paper_policy_loop.add_argument("--max-exposure-per-station-date", type=float, default=50.0)
     paper_policy_loop.add_argument("--max-total-open-risk", type=float, default=150.0)
     paper_policy_loop.add_argument("--allow-duplicate-bucket-side", action="store_true")
+    _add_paper_policy_execution_args(paper_policy_loop)
     paper_policy_loop.add_argument("--interval-seconds", type=int, default=360)
     paper_policy_loop.add_argument("--max-cycles", type=int, default=None)
 
@@ -445,6 +449,7 @@ def main() -> None:
             entry_end_local=args.entry_end_local,
             resolver_interval_seconds=args.resolver_interval_seconds,
             resolve_after_local_hour=args.resolve_after_local_hour,
+            enable_paper_policy_promotion=args.enable_paper_policy_promotion,
         )
         return
     if args.command == "resolve-research":
@@ -462,6 +467,12 @@ def main() -> None:
             max_exposure_per_station_date=args.max_exposure_per_station_date,
             max_total_open_risk=args.max_total_open_risk,
             allow_duplicate_bucket_side=args.allow_duplicate_bucket_side,
+            order_mode=args.order_mode,
+            max_slippage_cents=args.max_slippage_cents,
+            min_post_slippage_edge=args.min_post_slippage_edge,
+            entry_intent_ttl_seconds=args.entry_intent_ttl_seconds,
+            retry_cooldown_seconds=args.retry_cooldown_seconds,
+            max_attempts=args.max_attempts,
         )
         return
     if args.command == "paper-policy-loop":
@@ -476,6 +487,12 @@ def main() -> None:
             max_exposure_per_station_date=args.max_exposure_per_station_date,
             max_total_open_risk=args.max_total_open_risk,
             allow_duplicate_bucket_side=args.allow_duplicate_bucket_side,
+            order_mode=args.order_mode,
+            max_slippage_cents=args.max_slippage_cents,
+            min_post_slippage_edge=args.min_post_slippage_edge,
+            entry_intent_ttl_seconds=args.entry_intent_ttl_seconds,
+            retry_cooldown_seconds=args.retry_cooldown_seconds,
+            max_attempts=args.max_attempts,
             interval_seconds=args.interval_seconds,
             max_cycles=args.max_cycles,
         )
@@ -484,6 +501,15 @@ def main() -> None:
         tui_command(args.db)
         return
     raise ValueError(f"Unhandled command: {args.command}")
+
+
+def _add_paper_policy_execution_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--order-mode", choices=[str(PaperPolicyOrderMode.FAK), str(PaperPolicyOrderMode.FOK)], default=str(PaperPolicyOrderMode.FAK))
+    parser.add_argument("--max-slippage-cents", type=float, default=0.05)
+    parser.add_argument("--min-post-slippage-edge", type=float, default=0.05)
+    parser.add_argument("--entry-intent-ttl-seconds", type=float, default=180.0)
+    parser.add_argument("--retry-cooldown-seconds", type=float, default=30.0)
+    parser.add_argument("--max-attempts", type=int, default=6)
 
 
 def pull_observations(station: str, start: str, end: str) -> None:
@@ -1415,6 +1441,7 @@ def research_loop_command(
     entry_end_local: str,
     resolver_interval_seconds: int,
     resolve_after_local_hour: int,
+    enable_paper_policy_promotion: bool = False,
 ) -> None:
     store = ExecutionStore(Path(db_path))
     try:
@@ -1443,6 +1470,7 @@ def research_loop_command(
             resolver=resolver,
             resolver_interval_seconds=resolver_interval_seconds,
             policy_evaluator=policy_evaluator,
+            paper_policy_trader=PaperPolicyTrader(store=store) if enable_paper_policy_promotion else None,
         )
     finally:
         store.close()
@@ -1471,6 +1499,12 @@ def paper_policy_cycle_command(
     max_exposure_per_station_date: float,
     max_total_open_risk: float,
     allow_duplicate_bucket_side: bool,
+    order_mode: str,
+    max_slippage_cents: float,
+    min_post_slippage_edge: float,
+    entry_intent_ttl_seconds: float,
+    retry_cooldown_seconds: float,
+    max_attempts: int,
 ) -> None:
     store = ExecutionStore(Path(db_path))
     try:
@@ -1485,6 +1519,12 @@ def paper_policy_cycle_command(
                 max_exposure_per_station_date=max_exposure_per_station_date,
                 max_total_open_risk=max_total_open_risk,
                 allow_duplicate_bucket_side=allow_duplicate_bucket_side,
+                order_mode=order_mode,
+                max_slippage_cents=max_slippage_cents,
+                min_post_slippage_edge=min_post_slippage_edge,
+                entry_intent_ttl_seconds=entry_intent_ttl_seconds,
+                retry_cooldown_seconds=retry_cooldown_seconds,
+                max_attempts=max_attempts,
             ),
         ).run_once(market_date=market_date)
         print(json.dumps(result.__dict__, indent=2))
@@ -1503,6 +1543,12 @@ def paper_policy_loop_command(
     max_exposure_per_station_date: float,
     max_total_open_risk: float,
     allow_duplicate_bucket_side: bool,
+    order_mode: str,
+    max_slippage_cents: float,
+    min_post_slippage_edge: float,
+    entry_intent_ttl_seconds: float,
+    retry_cooldown_seconds: float,
+    max_attempts: int,
     interval_seconds: int,
     max_cycles: int | None,
 ) -> None:
@@ -1519,6 +1565,12 @@ def paper_policy_loop_command(
                 max_exposure_per_station_date=max_exposure_per_station_date,
                 max_total_open_risk=max_total_open_risk,
                 allow_duplicate_bucket_side=allow_duplicate_bucket_side,
+                order_mode=order_mode,
+                max_slippage_cents=max_slippage_cents,
+                min_post_slippage_edge=min_post_slippage_edge,
+                entry_intent_ttl_seconds=entry_intent_ttl_seconds,
+                retry_cooldown_seconds=retry_cooldown_seconds,
+                max_attempts=max_attempts,
             ),
         )
         cycle = 0
@@ -1546,6 +1598,12 @@ def _paper_policy_config(
     max_exposure_per_station_date: float,
     max_total_open_risk: float,
     allow_duplicate_bucket_side: bool,
+    order_mode: str | None = None,
+    max_slippage_cents: float | None = None,
+    min_post_slippage_edge: float | None = None,
+    entry_intent_ttl_seconds: float | None = None,
+    retry_cooldown_seconds: float | None = None,
+    max_attempts: int | None = None,
 ) -> PaperPolicyExecutionConfig:
     base = adversity_profile(adversity_profile_name)
     return PaperPolicyExecutionConfig(
@@ -1558,12 +1616,15 @@ def _paper_policy_config(
             max_total_open_risk=max_total_open_risk,
             allow_duplicate_bucket_side=allow_duplicate_bucket_side,
         ),
-        order_mode=base.order_mode,
+        order_mode=PaperPolicyOrderMode(order_mode) if order_mode is not None else base.order_mode,
         max_book_age_seconds=base.max_book_age_seconds,
+        max_slippage_cents=base.max_slippage_cents if max_slippage_cents is None else max_slippage_cents,
+        min_post_slippage_edge=base.min_post_slippage_edge if min_post_slippage_edge is None else min_post_slippage_edge,
         min_fill_usd=base.min_fill_usd,
-        max_attempts=base.max_attempts,
+        entry_intent_ttl_seconds=base.entry_intent_ttl_seconds if entry_intent_ttl_seconds is None else entry_intent_ttl_seconds,
+        retry_cooldown_seconds=base.retry_cooldown_seconds if retry_cooldown_seconds is None else retry_cooldown_seconds,
+        max_attempts=base.max_attempts if max_attempts is None else max_attempts,
         unknown_retry_grace_seconds=base.unknown_retry_grace_seconds,
-        retry_cooldown_seconds=base.retry_cooldown_seconds,
         fok_miss_probability=base.fok_miss_probability,
         stale_book_probability=base.stale_book_probability,
         delayed_probability=base.delayed_probability,

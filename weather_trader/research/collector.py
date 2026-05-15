@@ -354,6 +354,7 @@ def run_research_loop(
     resolver=None,
     resolver_interval_seconds: int = 3600,
     policy_evaluator=None,
+    paper_policy_trader=None,
 ) -> None:
     collector = ResearchCollector(store=store, model_paths=model_paths, config=config)
     cycle = 0
@@ -364,6 +365,9 @@ def run_research_loop(
             started = time.time()
             result = collector.run_once()
             policy_positions_written = policy_evaluator.evaluate() if policy_evaluator is not None else 0
+            paper_policy_result = None
+            if paper_policy_trader is not None:
+                paper_policy_result = paper_policy_trader.run_once(market_date=store.latest_research_market_date())
             print(
                 {
                     "cycle": cycle,
@@ -371,6 +375,7 @@ def run_research_loop(
                     "markets": result.engine_state.discovered_markets,
                     "snapshots_written": result.snapshots_written,
                     "policy_positions_written": policy_positions_written,
+                    "paper_policy": None if paper_policy_result is None else paper_policy_result.__dict__,
                     "errors": result.engine_state.errors[:5],
                 },
                 flush=True,
