@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from textual.app import App, ComposeResult
@@ -24,6 +26,43 @@ from weather_trader.ui.dashboard_rollups import (
 CONFIG_STATIONS = {"KATL", "KBKF", "KDAL", "KDEN", "KHOU", "KLAX", "KLGA", "KMIA", "KORD", "KSEA", "KSFO"}
 
 
+@dataclass(frozen=True)
+class TableSort:
+    column_key: Any
+    reverse: bool
+
+
+OVERVIEW_TABLE_IDS = {"day-summary", "policy-leaderboard", "station-summary", "unique-exposures"}
+
+DEFAULT_DESC_SORT_COLUMNS = {
+    "avg_entry",
+    "avg_fair",
+    "avg_edge",
+    "avg_bid",
+    "mark_pct",
+    "expected_rr",
+    "live_rr",
+    "live_minus_exp",
+    "risk",
+    "resolved_positions",
+    "historical_rr",
+    "position_sharpe",
+    "markets",
+    "snapshots",
+    "high",
+    "hrrr",
+    "positions",
+    "weather_record",
+    "weather_rr",
+    "quote_pct",
+    "entry",
+    "fair",
+    "edge",
+    "rows",
+    "bid",
+}
+
+
 def _parse_dt(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -40,6 +79,23 @@ def _age_minutes(value: str | None) -> float | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds() / 60.0
+
+
+def _sort_key(value: Any, reverse: bool = False) -> tuple[int, int, float | str]:
+    text = str(value or "").strip()
+    if text.lower() in {"", "n/a", "none", "nan"}:
+        return (0 if reverse else 1, 0, "")
+
+    numeric_text = text.replace("$", "").replace("%", "").replace(",", "").strip()
+    try:
+        return (1 if reverse else 0, 0, float(numeric_text))
+    except ValueError:
+        return (1 if reverse else 0, 1, text.casefold())
+
+
+def _add_keyed_columns(table: DataTable, columns: list[tuple[str, str]]) -> None:
+    for label, key in columns:
+        table.add_column(label, key=key)
 
 
 def _policy_key(row: dict) -> tuple[str, str, str, str]:
@@ -199,6 +255,7 @@ class RoboWeatherTUI(App):
         self.db_path = db_path
         self.actionable_only = False
         self.target_date = _default_target_date(db_path)
+        self.table_sorts: dict[str, TableSort] = {}
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -275,49 +332,70 @@ class RoboWeatherTUI(App):
 
         day_summary = self.query_one("#day-summary", DataTable)
         day_summary.cursor_type = "row"
-        day_summary.add_columns("metric", "value", "detail")
+        _add_keyed_columns(day_summary, [("metric", "metric"), ("value", "value"), ("detail", "detail")])
 
         station_summary = self.query_one("#station-summary", DataTable)
         station_summary.cursor_type = "row"
-        station_summary.add_columns("station", "pm", "snaps", "high", "hrrr", "pos", "weather W-L", "weather R/R", "book", "quote%", "note")
+        _add_keyed_columns(
+            station_summary,
+            [
+                ("station", "station"),
+                ("pm", "markets"),
+                ("snaps", "snapshots"),
+                ("high", "high"),
+                ("hrrr", "hrrr"),
+                ("pos", "positions"),
+                ("weather W-L", "weather_record"),
+                ("weather R/R", "weather_rr"),
+                ("book", "book_status"),
+                ("quote%", "quote_pct"),
+                ("note", "note"),
+            ],
+        )
 
         unique_exposures = self.query_one("#unique-exposures", DataTable)
         unique_exposures.cursor_type = "row"
-        unique_exposures.add_columns(
-            "station",
-            "side",
-            "bucket",
-            "high",
-            "px",
-            "fair",
-            "edge",
-            "rows",
-            "weather",
-            "bid",
-            "exp R/R",
-            "live R/R",
-            "book",
+        _add_keyed_columns(
+            unique_exposures,
+            [
+                ("station", "station"),
+                ("side", "side"),
+                ("bucket", "bucket"),
+                ("high", "high"),
+                ("px", "entry"),
+                ("fair", "fair"),
+                ("edge", "edge"),
+                ("rows", "rows"),
+                ("weather", "weather_status"),
+                ("bid", "bid"),
+                ("exp R/R", "expected_rr"),
+                ("live R/R", "live_rr"),
+                ("book", "book_status"),
+            ],
         )
 
         policy_leaderboard = self.query_one("#policy-leaderboard", DataTable)
         policy_leaderboard.cursor_type = "row"
-        policy_leaderboard.add_columns(
-            "weather",
-            "book",
-            "policy",
-            "pos",
-            "avgPx",
-            "avgFair",
-            "avgEdge",
-            "liveBid",
-            "quote%",
-            "exp R/R",
-            "live R/R",
-            "live-exp",
-            "risk",
-            "res",
-            "hist R/R",
-            "pSharp",
+        _add_keyed_columns(
+            policy_leaderboard,
+            [
+                ("weather", "weather_status"),
+                ("book", "book_status"),
+                ("policy", "policy"),
+                ("pos", "open_positions"),
+                ("avgPx", "avg_entry"),
+                ("avgFair", "avg_fair"),
+                ("avgEdge", "avg_edge"),
+                ("liveBid", "avg_bid"),
+                ("quote%", "mark_pct"),
+                ("exp R/R", "expected_rr"),
+                ("live R/R", "live_rr"),
+                ("live-exp", "live_minus_exp"),
+                ("risk", "risk"),
+                ("res", "resolved_positions"),
+                ("hist R/R", "historical_rr"),
+                ("pSharp", "position_sharpe"),
+            ],
         )
 
         policy_positions = self.query_one("#policy-positions", DataTable)
@@ -479,6 +557,36 @@ class RoboWeatherTUI(App):
         )
         self.refresh_table()
         self.set_interval(10.0, self.refresh_table)
+
+    def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
+        table = event.data_table
+        table_id = str(table.id or "")
+        if table_id not in OVERVIEW_TABLE_IDS:
+            return
+
+        column_key = event.column_key
+        column_name = str(getattr(column_key, "value", column_key))
+        current = self.table_sorts.get(table_id)
+        reverse = (
+            not current.reverse
+            if current and current.column_key == column_key
+            else column_name in DEFAULT_DESC_SORT_COLUMNS
+        )
+        self.table_sorts[table_id] = TableSort(column_key=column_key, reverse=reverse)
+        self._apply_table_sort(table)
+        direction = "descending" if reverse else "ascending"
+        self.notify(f"Sorted {event.label} {direction}.")
+
+    def _apply_table_sort(self, table: DataTable) -> None:
+        table_id = str(table.id or "")
+        sort = self.table_sorts.get(table_id)
+        if sort is None:
+            return
+        table.sort(
+            sort.column_key,
+            key=lambda value: _sort_key(value, reverse=sort.reverse),
+            reverse=sort.reverse,
+        )
 
     def action_refresh(self) -> None:
         self.refresh_table()
@@ -909,6 +1017,8 @@ class RoboWeatherTUI(App):
                 str(signal.get("signal_side", "")),
                 ",".join(signal.get("reason_codes") or [])[:80],
             )
+        for table_id in OVERVIEW_TABLE_IDS:
+            self._apply_table_sort(self.query_one(f"#{table_id}", DataTable))
         summary = self.query_one("#summary", Static)
         summary.update(
             " | ".join(
