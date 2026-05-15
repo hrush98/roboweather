@@ -14,6 +14,13 @@ from weather_trader.config import CACHE_DIR, PROCESSED_DIR, RAW_DIR, ensure_dire
 from weather_trader.config import PAPER_DIR
 from weather_trader.execution.engine import PaperTradingEngine
 from weather_trader.execution.fair_value import FairValueEngine
+from weather_trader.execution.paper_policy import (
+    DEFAULT_PROMOTED_POLICIES,
+    PaperPolicyExecutionConfig,
+    PaperPolicyRiskConfig,
+    PaperPolicyTrader,
+    adversity_profile,
+)
 from weather_trader.execution.risk import RiskConfig, RiskManager
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import WeatherFeatureService
@@ -89,6 +96,8 @@ PM_ACTIVE_US_STATIONS = (
     "KSEA",
     "KHOU",
 )
+
+DEFAULT_RESEARCH_DB = "/home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite"
 
 
 def main() -> None:
@@ -265,6 +274,30 @@ def main() -> None:
     resolve_research.add_argument("--db", default=str(PAPER_DIR / "roboweather.sqlite"))
     resolve_research.add_argument("--resolve-after-local-hour", type=int, default=6)
 
+    paper_policy_cycle = subparsers.add_parser("paper-policy-cycle", help="Promote allowlisted research policies into paper execution")
+    paper_policy_cycle.add_argument("--db", default=DEFAULT_RESEARCH_DB)
+    paper_policy_cycle.add_argument("--promoted-policy", action="append", default=[])
+    paper_policy_cycle.add_argument("--adversity-profile", choices=["off", "mild", "stress"], default="off")
+    paper_policy_cycle.add_argument("--bankroll", type=float, default=1000.0)
+    paper_policy_cycle.add_argument("--fixed-fraction", type=float, default=0.02)
+    paper_policy_cycle.add_argument("--max-usd-per-order", type=float, default=25.0)
+    paper_policy_cycle.add_argument("--max-exposure-per-station-date", type=float, default=50.0)
+    paper_policy_cycle.add_argument("--max-total-open-risk", type=float, default=150.0)
+    paper_policy_cycle.add_argument("--allow-duplicate-bucket-side", action="store_true")
+
+    paper_policy_loop = subparsers.add_parser("paper-policy-loop", help="Run repeated paper-policy promotion cycles")
+    paper_policy_loop.add_argument("--db", default=DEFAULT_RESEARCH_DB)
+    paper_policy_loop.add_argument("--promoted-policy", action="append", default=[])
+    paper_policy_loop.add_argument("--adversity-profile", choices=["off", "mild", "stress"], default="off")
+    paper_policy_loop.add_argument("--bankroll", type=float, default=1000.0)
+    paper_policy_loop.add_argument("--fixed-fraction", type=float, default=0.02)
+    paper_policy_loop.add_argument("--max-usd-per-order", type=float, default=25.0)
+    paper_policy_loop.add_argument("--max-exposure-per-station-date", type=float, default=50.0)
+    paper_policy_loop.add_argument("--max-total-open-risk", type=float, default=150.0)
+    paper_policy_loop.add_argument("--allow-duplicate-bucket-side", action="store_true")
+    paper_policy_loop.add_argument("--interval-seconds", type=int, default=360)
+    paper_policy_loop.add_argument("--max-cycles", type=int, default=None)
+
     tui = subparsers.add_parser("tui", help="Open Textual UI for the paper-trading database")
     tui.add_argument("--db", default=str(PAPER_DIR / "roboweather.sqlite"))
 
@@ -414,6 +447,34 @@ def main() -> None:
         return
     if args.command == "resolve-research":
         resolve_research_command(args.db, args.resolve_after_local_hour)
+        return
+    if args.command == "paper-policy-cycle":
+        paper_policy_cycle_command(
+            db_path=args.db,
+            promoted_policies=args.promoted_policy,
+            adversity_profile_name=args.adversity_profile,
+            bankroll=args.bankroll,
+            fixed_fraction=args.fixed_fraction,
+            max_usd_per_order=args.max_usd_per_order,
+            max_exposure_per_station_date=args.max_exposure_per_station_date,
+            max_total_open_risk=args.max_total_open_risk,
+            allow_duplicate_bucket_side=args.allow_duplicate_bucket_side,
+        )
+        return
+    if args.command == "paper-policy-loop":
+        paper_policy_loop_command(
+            db_path=args.db,
+            promoted_policies=args.promoted_policy,
+            adversity_profile_name=args.adversity_profile,
+            bankroll=args.bankroll,
+            fixed_fraction=args.fixed_fraction,
+            max_usd_per_order=args.max_usd_per_order,
+            max_exposure_per_station_date=args.max_exposure_per_station_date,
+            max_total_open_risk=args.max_total_open_risk,
+            allow_duplicate_bucket_side=args.allow_duplicate_bucket_side,
+            interval_seconds=args.interval_seconds,
+            max_cycles=args.max_cycles,
+        )
         return
     if args.command == "tui":
         tui_command(args.db)
@@ -1393,6 +1454,117 @@ def resolve_research_command(db_path: str, resolve_after_local_hour: int) -> Non
         print(json.dumps(summary.__dict__, indent=2))
     finally:
         store.close()
+
+
+def paper_policy_cycle_command(
+    db_path: str,
+    promoted_policies: list[str],
+    adversity_profile_name: str,
+    bankroll: float,
+    fixed_fraction: float,
+    max_usd_per_order: float,
+    max_exposure_per_station_date: float,
+    max_total_open_risk: float,
+    allow_duplicate_bucket_side: bool,
+) -> None:
+    store = ExecutionStore(Path(db_path))
+    try:
+        result = PaperPolicyTrader(
+            store=store,
+            config=_paper_policy_config(
+                promoted_policies=promoted_policies,
+                adversity_profile_name=adversity_profile_name,
+                bankroll=bankroll,
+                fixed_fraction=fixed_fraction,
+                max_usd_per_order=max_usd_per_order,
+                max_exposure_per_station_date=max_exposure_per_station_date,
+                max_total_open_risk=max_total_open_risk,
+                allow_duplicate_bucket_side=allow_duplicate_bucket_side,
+            ),
+        ).run_once()
+        print(json.dumps(result.__dict__, indent=2))
+    finally:
+        store.close()
+
+
+def paper_policy_loop_command(
+    db_path: str,
+    promoted_policies: list[str],
+    adversity_profile_name: str,
+    bankroll: float,
+    fixed_fraction: float,
+    max_usd_per_order: float,
+    max_exposure_per_station_date: float,
+    max_total_open_risk: float,
+    allow_duplicate_bucket_side: bool,
+    interval_seconds: int,
+    max_cycles: int | None,
+) -> None:
+    store = ExecutionStore(Path(db_path))
+    try:
+        trader = PaperPolicyTrader(
+            store=store,
+            config=_paper_policy_config(
+                promoted_policies=promoted_policies,
+                adversity_profile_name=adversity_profile_name,
+                bankroll=bankroll,
+                fixed_fraction=fixed_fraction,
+                max_usd_per_order=max_usd_per_order,
+                max_exposure_per_station_date=max_exposure_per_station_date,
+                max_total_open_risk=max_total_open_risk,
+                allow_duplicate_bucket_side=allow_duplicate_bucket_side,
+            ),
+        )
+        cycle = 0
+        while True:
+            cycle += 1
+            started = time.time()
+            result = trader.run_once()
+            print({"cycle": cycle, **result.__dict__}, flush=True)
+            if max_cycles is not None and cycle >= max_cycles:
+                break
+            time.sleep(max(1.0, interval_seconds - (time.time() - started)))
+    except KeyboardInterrupt:
+        print("paper-policy-loop stopped")
+    finally:
+        store.close()
+
+
+def _paper_policy_config(
+    *,
+    promoted_policies: list[str],
+    adversity_profile_name: str,
+    bankroll: float,
+    fixed_fraction: float,
+    max_usd_per_order: float,
+    max_exposure_per_station_date: float,
+    max_total_open_risk: float,
+    allow_duplicate_bucket_side: bool,
+) -> PaperPolicyExecutionConfig:
+    base = adversity_profile(adversity_profile_name)
+    return PaperPolicyExecutionConfig(
+        promoted_policies=tuple(promoted_policies) if promoted_policies else DEFAULT_PROMOTED_POLICIES,
+        risk=PaperPolicyRiskConfig(
+            bankroll_usd=bankroll,
+            fixed_fraction=fixed_fraction,
+            max_usd_per_order=max_usd_per_order,
+            max_exposure_per_station_date=max_exposure_per_station_date,
+            max_total_open_risk=max_total_open_risk,
+            allow_duplicate_bucket_side=allow_duplicate_bucket_side,
+        ),
+        order_mode=base.order_mode,
+        max_book_age_seconds=base.max_book_age_seconds,
+        min_fill_usd=base.min_fill_usd,
+        max_attempts=base.max_attempts,
+        unknown_retry_grace_seconds=base.unknown_retry_grace_seconds,
+        retry_cooldown_seconds=base.retry_cooldown_seconds,
+        fok_miss_probability=base.fok_miss_probability,
+        stale_book_probability=base.stale_book_probability,
+        delayed_probability=base.delayed_probability,
+        unknown_probability=base.unknown_probability,
+        partial_fill_probability=base.partial_fill_probability,
+        random_seed=base.random_seed,
+    )
 
 
 def _bucket_label(lower_f: float | None, upper_f: float | None) -> str:

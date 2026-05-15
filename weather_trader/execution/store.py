@@ -13,6 +13,11 @@ from weather_trader.execution.contracts import (
     EngineState,
     MarketSnapshot,
     PaperOrder,
+    PaperPolicyFinalState,
+    PaperPolicyOrderAttempt,
+    PaperPolicyPosition,
+    PaperPolicyRiskSnapshot,
+    PaperPolicyTradeEvent,
     PredictionResult,
     PredictionSnapshot,
     Position,
@@ -270,6 +275,75 @@ class ExecutionStore:
                 source_prediction_snapshot_ids text not null,
                 raw_json text not null,
                 unique(policy_name, station, market_date, scope_key)
+            );
+
+            create table if not exists paper_policy_positions (
+                id integer primary key autoincrement,
+                timestamp text not null,
+                research_policy_position_id integer not null,
+                policy_name text not null,
+                station text not null,
+                market_date text not null,
+                selected_market_id text not null,
+                selected_token_id text not null,
+                selected_side text not null,
+                selected_bucket text,
+                entry_limit_price real not null,
+                target_notional_usd real not null,
+                filled_shares real not null default 0,
+                avg_entry_price real,
+                cost_usd real not null default 0,
+                state text not null,
+                realized_pnl real,
+                realized_rr real,
+                mark_value real,
+                unrealized_pnl real,
+                raw_json text not null,
+                unique(research_policy_position_id)
+            );
+
+            create table if not exists paper_policy_order_attempts (
+                id integer primary key autoincrement,
+                timestamp text not null,
+                paper_position_id integer not null,
+                research_policy_position_id integer not null,
+                attempt_seq integer not null,
+                token_id text not null,
+                side text not null,
+                order_mode text not null,
+                limit_price real not null,
+                target_notional_usd real not null,
+                external_order_id text,
+                external_status text,
+                not_found_count integer not null,
+                final_state text not null,
+                final_reason text not null,
+                filled_shares real not null,
+                avg_price real,
+                cost_usd real not null,
+                levels_consumed text not null,
+                raw_payload text not null,
+                unique(paper_position_id, attempt_seq)
+            );
+
+            create table if not exists paper_policy_trade_events (
+                id integer primary key autoincrement,
+                timestamp text not null,
+                paper_position_id integer,
+                research_policy_position_id integer,
+                event_type text not null,
+                message text not null,
+                raw_payload text not null
+            );
+
+            create table if not exists paper_policy_risk_snapshots (
+                id integer primary key autoincrement,
+                timestamp text not null,
+                bankroll_usd real not null,
+                open_positions integer not null,
+                open_risk_usd real not null,
+                station_date_exposure_usd text not null,
+                raw_payload text not null
             );
 
             create table if not exists hermes_insights (
@@ -792,6 +866,351 @@ class ExecutionStore:
             payload["id"] = int(row["id"])
             positions.append(payload)
         return positions
+
+    def promotable_research_policy_positions(
+        self,
+        promoted_policies: set[str],
+        market_date: date | str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        if not promoted_policies:
+            return []
+        policy_placeholders = ",".join("?" for _ in promoted_policies)
+        market_date_text = _date_text(market_date)
+        date_filter = "and rpp.market_date = ?" if market_date_text is not None else ""
+        params: list[Any] = [*sorted(promoted_policies)]
+        if market_date_text is not None:
+            params.append(market_date_text)
+        params.append(limit)
+        rows = self.connection.execute(
+            f"""
+            select
+                rpp.id,
+                rpp.timestamp,
+                rpp.policy_name,
+                rpp.station,
+                rpp.market_date,
+                rpp.scope_key,
+                rpp.model_group,
+                rpp.strategy_bucket,
+                rpp.obs_delay_bucket,
+                rpp.selected_market_id,
+                rpp.selected_side,
+                rpp.selected_bucket,
+                rpp.entry_price,
+                rpp.entry_edge,
+                rpp.entry_fair,
+                rpp.source_prediction_snapshot_ids,
+                rpp.raw_json,
+                m.yes_token_id,
+                m.no_token_id,
+                m.lower_f,
+                m.upper_f,
+                case
+                    when rpp.selected_side = 'BUY_YES' then m.yes_token_id
+                    else m.no_token_id
+                end as selected_token_id
+            from research_policy_positions rpp
+            join markets m on m.market_id = rpp.selected_market_id
+            left join paper_policy_positions ppp
+                on ppp.research_policy_position_id = rpp.id
+            where rpp.policy_name in ({policy_placeholders})
+                and ppp.id is null
+                and rpp.selected_side in ('BUY_YES', 'BUY_NO')
+                {date_filter}
+            order by rpp.timestamp, rpp.id
+            limit ?
+            """,
+            tuple(params),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def insert_paper_policy_position(self, position: PaperPolicyPosition) -> int | None:
+        data = dataclass_to_jsonable(position)
+        cursor = self.connection.execute(
+            """
+            insert or ignore into paper_policy_positions (
+                timestamp, research_policy_position_id, policy_name, station, market_date,
+                selected_market_id, selected_token_id, selected_side, selected_bucket,
+                entry_limit_price, target_notional_usd, filled_shares, avg_entry_price,
+                cost_usd, state, realized_pnl, realized_rr, mark_value,
+                unrealized_pnl, raw_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                position.timestamp,
+                position.research_policy_position_id,
+                position.policy_name,
+                position.station,
+                data["market_date"],
+                position.selected_market_id,
+                position.selected_token_id,
+                str(position.selected_side),
+                position.selected_bucket,
+                position.entry_limit_price,
+                position.target_notional_usd,
+                position.filled_shares,
+                position.avg_entry_price,
+                position.cost_usd,
+                str(position.state),
+                position.realized_pnl,
+                position.realized_rr,
+                position.mark_value,
+                position.unrealized_pnl,
+                json.dumps(data, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+        if cursor.rowcount == 0:
+            return None
+        return int(cursor.lastrowid)
+
+    def update_paper_policy_position_execution(
+        self,
+        paper_position_id: int,
+        *,
+        state: PaperPolicyFinalState,
+        filled_shares: float,
+        avg_entry_price: float | None,
+        cost_usd: float,
+        raw_patch: dict[str, Any] | None = None,
+    ) -> None:
+        row = self.connection.execute(
+            "select raw_json from paper_policy_positions where id = ?",
+            (paper_position_id,),
+        ).fetchone()
+        raw_json: dict[str, Any] = {}
+        if row is not None:
+            raw_json = json.loads(row["raw_json"])
+        if raw_patch:
+            raw_json.update(raw_patch)
+        raw_json.update(
+            {
+                "state": str(state),
+                "filled_shares": filled_shares,
+                "avg_entry_price": avg_entry_price,
+                "cost_usd": cost_usd,
+            }
+        )
+        self.connection.execute(
+            """
+            update paper_policy_positions
+            set state = ?,
+                filled_shares = ?,
+                avg_entry_price = ?,
+                cost_usd = ?,
+                raw_json = ?
+            where id = ?
+            """,
+            (
+                str(state),
+                filled_shares,
+                avg_entry_price,
+                cost_usd,
+                json.dumps(raw_json, sort_keys=True),
+                paper_position_id,
+            ),
+        )
+        self.connection.commit()
+
+    def update_paper_policy_position_mark(
+        self,
+        paper_position_id: int,
+        *,
+        mark_value: float | None,
+        unrealized_pnl: float | None,
+        raw_patch: dict[str, Any] | None = None,
+    ) -> None:
+        row = self.connection.execute(
+            "select raw_json from paper_policy_positions where id = ?",
+            (paper_position_id,),
+        ).fetchone()
+        raw_json = json.loads(row["raw_json"]) if row is not None else {}
+        if raw_patch:
+            raw_json.update(raw_patch)
+        self.connection.execute(
+            """
+            update paper_policy_positions
+            set mark_value = ?,
+                unrealized_pnl = ?,
+                raw_json = ?
+            where id = ?
+            """,
+            (mark_value, unrealized_pnl, json.dumps(raw_json, sort_keys=True), paper_position_id),
+        )
+        self.connection.commit()
+
+    def update_paper_policy_position_settlement(
+        self,
+        paper_position_id: int,
+        *,
+        state: PaperPolicyFinalState,
+        realized_pnl: float,
+        realized_rr: float | None,
+        raw_patch: dict[str, Any] | None = None,
+    ) -> None:
+        row = self.connection.execute(
+            "select raw_json from paper_policy_positions where id = ?",
+            (paper_position_id,),
+        ).fetchone()
+        raw_json = json.loads(row["raw_json"]) if row is not None else {}
+        if raw_patch:
+            raw_json.update(raw_patch)
+        raw_json.update({"state": str(state), "realized_pnl": realized_pnl, "realized_rr": realized_rr})
+        self.connection.execute(
+            """
+            update paper_policy_positions
+            set state = ?,
+                realized_pnl = ?,
+                realized_rr = ?,
+                raw_json = ?
+            where id = ?
+            """,
+            (str(state), realized_pnl, realized_rr, json.dumps(raw_json, sort_keys=True), paper_position_id),
+        )
+        self.connection.commit()
+
+    def insert_paper_policy_order_attempt(self, attempt: PaperPolicyOrderAttempt) -> int | None:
+        data = dataclass_to_jsonable(attempt)
+        cursor = self.connection.execute(
+            """
+            insert or ignore into paper_policy_order_attempts (
+                timestamp, paper_position_id, research_policy_position_id, attempt_seq,
+                token_id, side, order_mode, limit_price, target_notional_usd,
+                external_order_id, external_status, not_found_count, final_state,
+                final_reason, filled_shares, avg_price, cost_usd, levels_consumed,
+                raw_payload
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                attempt.timestamp,
+                attempt.paper_position_id,
+                attempt.research_policy_position_id,
+                attempt.attempt_seq,
+                attempt.token_id,
+                str(attempt.side),
+                str(attempt.order_mode),
+                attempt.limit_price,
+                attempt.target_notional_usd,
+                attempt.external_order_id,
+                attempt.external_status,
+                attempt.not_found_count,
+                str(attempt.final_state),
+                attempt.final_reason,
+                attempt.filled_shares,
+                attempt.avg_price,
+                attempt.cost_usd,
+                json.dumps(data["levels_consumed"], sort_keys=True),
+                json.dumps(data, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+        if cursor.rowcount == 0:
+            return None
+        return int(cursor.lastrowid)
+
+    def insert_paper_policy_trade_event(self, event: PaperPolicyTradeEvent) -> int:
+        data = dataclass_to_jsonable(event)
+        cursor = self.connection.execute(
+            """
+            insert into paper_policy_trade_events (
+                timestamp, paper_position_id, research_policy_position_id,
+                event_type, message, raw_payload
+            )
+            values (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.timestamp,
+                event.paper_position_id,
+                event.research_policy_position_id,
+                str(event.event_type),
+                event.message,
+                json.dumps(data, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+        return int(cursor.lastrowid)
+
+    def insert_paper_policy_risk_snapshot(self, snapshot: PaperPolicyRiskSnapshot) -> int:
+        data = dataclass_to_jsonable(snapshot)
+        cursor = self.connection.execute(
+            """
+            insert into paper_policy_risk_snapshots (
+                timestamp, bankroll_usd, open_positions, open_risk_usd,
+                station_date_exposure_usd, raw_payload
+            )
+            values (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot.timestamp,
+                snapshot.bankroll_usd,
+                snapshot.open_positions,
+                snapshot.open_risk_usd,
+                json.dumps(snapshot.station_date_exposure_usd, sort_keys=True),
+                json.dumps(data, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+        return int(cursor.lastrowid)
+
+    def paper_policy_open_positions(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            select *
+            from paper_policy_positions
+            where state in ('FILLED', 'PARTIAL', 'DELAYED', 'UNKNOWN', 'RESERVED', 'SUBMITTED')
+            order by id
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def paper_policy_exposure_summary(self) -> dict[str, Any]:
+        rows = self.paper_policy_open_positions()
+        station_date: dict[str, float] = {}
+        total = 0.0
+        for row in rows:
+            risk = float(row["cost_usd"] or row["target_notional_usd"] or 0.0)
+            total += risk
+            key = f"{row['station']}:{row['market_date']}"
+            station_date[key] = station_date.get(key, 0.0) + risk
+        return {"open_positions": len(rows), "open_risk_usd": total, "station_date_exposure_usd": station_date}
+
+    def has_open_paper_policy_exposure(
+        self,
+        *,
+        station: str,
+        market_date: date | str,
+        selected_bucket: str | None,
+        selected_side: str,
+    ) -> bool:
+        row = self.connection.execute(
+            """
+            select 1
+            from paper_policy_positions
+            where station = ?
+                and market_date = ?
+                and coalesce(selected_bucket, '') = coalesce(?, '')
+                and selected_side = ?
+                and state in ('FILLED', 'PARTIAL', 'DELAYED', 'UNKNOWN', 'RESERVED', 'SUBMITTED')
+            limit 1
+            """,
+            (station, _date_text(market_date), selected_bucket, selected_side),
+        ).fetchone()
+        return row is not None
+
+    def latest_paper_policy_attempts(self, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            select *
+            from paper_policy_order_attempts
+            order by id desc
+            limit ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def latest_research_market_date(self) -> str | None:
         row = self.connection.execute(

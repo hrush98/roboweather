@@ -42,6 +42,34 @@ class EffectiveStatus(StringEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class PaperPolicyOrderMode(StringEnum):
+    FOK = "FOK"
+    FAK = "FAK"
+
+
+class PaperPolicyFinalState(StringEnum):
+    RESERVED = "RESERVED"
+    SUBMITTED = "SUBMITTED"
+    FILLED = "FILLED"
+    PARTIAL = "PARTIAL"
+    REJECTED = "REJECTED"
+    DELAYED = "DELAYED"
+    UNKNOWN = "UNKNOWN"
+    STALE_BOOK = "STALE_BOOK"
+    FOK_NOT_FILLED = "FOK_NOT_FILLED"
+    SETTLED = "SETTLED"
+
+
+class PaperPolicyEventType(StringEnum):
+    ENTRY_RESERVED = "ENTRY_RESERVED"
+    ENTRY_SUBMIT = "ENTRY_SUBMIT"
+    ENTRY_CONFIRMED = "ENTRY_CONFIRMED"
+    ENTRY_REJECTED = "ENTRY_REJECTED"
+    ENTRY_RETRY = "ENTRY_RETRY"
+    MARK = "MARK"
+    RESOLVED = "RESOLVED"
+
+
 @dataclass(frozen=True)
 class MarketSnapshot:
     market_id: str
@@ -327,6 +355,80 @@ class ResearchPolicyPosition:
     entry_fair: float | None
     source_prediction_snapshot_ids: list[int]
     raw_policy: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PaperPolicySizingDecision:
+    target_notional_usd: float
+    cap_reason: str
+    raw_inputs: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PaperPolicyPosition:
+    timestamp: str
+    research_policy_position_id: int
+    policy_name: str
+    station: str
+    market_date: date
+    selected_market_id: str
+    selected_token_id: str
+    selected_side: TradeAction
+    selected_bucket: str | None
+    entry_limit_price: float
+    target_notional_usd: float
+    filled_shares: float
+    avg_entry_price: float | None
+    cost_usd: float
+    state: PaperPolicyFinalState
+    realized_pnl: float | None = None
+    realized_rr: float | None = None
+    mark_value: float | None = None
+    unrealized_pnl: float | None = None
+    raw_json: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PaperPolicyOrderAttempt:
+    timestamp: str
+    paper_position_id: int
+    research_policy_position_id: int
+    attempt_seq: int
+    token_id: str
+    side: TradeAction
+    order_mode: PaperPolicyOrderMode
+    limit_price: float
+    target_notional_usd: float
+    external_order_id: str | None
+    external_status: str | None
+    not_found_count: int
+    final_state: PaperPolicyFinalState
+    final_reason: str
+    filled_shares: float
+    avg_price: float | None
+    cost_usd: float
+    levels_consumed: list[dict[str, float]]
+    raw_payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PaperPolicyTradeEvent:
+    timestamp: str
+    paper_position_id: int | None
+    research_policy_position_id: int | None
+    event_type: PaperPolicyEventType
+    message: str
+    raw_payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PaperPolicyRiskSnapshot:
+    timestamp: str
+    bankroll_usd: float
+    open_positions: int
+    open_risk_usd: float
+    station_date_exposure_usd: dict[str, float]
+    raw_payload: dict[str, Any]
 
 
 def utc_now_iso() -> str:
