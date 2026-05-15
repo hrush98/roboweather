@@ -4,6 +4,7 @@ Simple MVP for same-day U.S. daily-high temperature markets.
 
 Reference docs:
 
+- [Project overview](docs/project-overview.md)
 - [Changelog](docs/changelog.md)
 - [Modeling and trading decisions](docs/modeling-and-trading-decisions.md)
 

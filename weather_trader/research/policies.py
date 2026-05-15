@@ -310,9 +310,11 @@ class ResearchPolicyEvaluator:
                 continue
             edge_values = [_float_or_none(dynamic.get("selected_edge")), _float_or_none(mvp.get("selected_edge"))]
             fair_values = [_selected_fair(dynamic), _selected_fair(mvp)]
+            newer = max((dynamic, mvp), key=lambda item: (str(item.get("timestamp")), int(item.get("id", 0))))
             rows.append(
                 {
                     **dynamic,
+                    **_liquidity_fields(newer),
                     "id": min(int(dynamic["id"]), int(mvp["id"])),
                     "timestamp": max(str(dynamic.get("timestamp")), str(mvp.get("timestamp"))),
                     "model_name": consensus_name,
@@ -434,6 +436,7 @@ class ResearchPolicyEvaluator:
                 },
                 **dict(candidate.get("raw_policy") or {}),
             },
+            **_liquidity_fields(candidate),
         )
 
 
@@ -570,3 +573,18 @@ def _mean_present(values: list[float | None]) -> float | None:
     if not present:
         return None
     return sum(present) / len(present)
+
+
+def _liquidity_fields(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "selected_best_bid": _float_or_none(item.get("selected_best_bid")),
+        "selected_best_ask": _float_or_none(item.get("selected_best_ask")),
+        "selected_spread": _float_or_none(item.get("selected_spread")),
+        "selected_depth_at_ask": _float_or_none(item.get("selected_depth_at_ask")),
+        "selected_depth_ask_plus_0_01": _float_or_none(item.get("selected_depth_ask_plus_0_01")),
+        "selected_depth_ask_plus_0_03": _float_or_none(item.get("selected_depth_ask_plus_0_03")),
+        "selected_depth_ask_plus_0_05": _float_or_none(item.get("selected_depth_ask_plus_0_05")),
+        "selected_book_timestamp": None if item.get("selected_book_timestamp") is None else str(item.get("selected_book_timestamp")),
+        "selected_book_age_seconds": _float_or_none(item.get("selected_book_age_seconds")),
+        "selected_liquidity": item.get("selected_liquidity"),
+    }
