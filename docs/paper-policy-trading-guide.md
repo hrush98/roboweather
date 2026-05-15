@@ -11,7 +11,7 @@ RoboWeather now has two separate live loops:
 
 Restarting the existing `research-loop` does not start paper execution and does not change data collection behavior. The paper layer only runs when explicitly invoked with `paper-policy-cycle`, `paper-policy-loop`, or `scripts/run_policy_paper.sh`.
 
-The research ledger remains the source of all policy hypotheses. Paper trading records link back to `research_policy_positions.id` and are stored in separate tables.
+The research ledger remains the source of all policy hypotheses. Paper trading records link back to `research_policy_positions.id` and are stored in separate tables. Each promoted policy is treated as its own paper book for sizing and duplicate-exposure control; the default three policies are not traded as one aggregate portfolio.
 
 ## Default Promoted Policies
 
@@ -146,13 +146,15 @@ Sizing v1 uses fixed fractional bankroll sizing with caps:
 - `--max-exposure-per-station-date`
 - `--max-total-open-risk`
 
-By default, duplicate promoted-policy exposure is blocked for the same:
+Risk caps are applied per `policy_name`, so one promoted policy does not consume another promoted policy's paper bankroll or station/date cap. The aggregate risk snapshot still records total exposure across paper policy positions for monitoring, and its raw payload includes a per-policy breakdown.
+
+By default, duplicate exposure is blocked inside the same policy book for the same:
 
 ```text
 station / market_date / selected_bucket / selected_side
 ```
 
-Allow it explicitly:
+Allow same-policy duplicate bucket/side exposure explicitly:
 
 ```bash
 python -m weather_trader.cli paper-policy-cycle --allow-duplicate-bucket-side

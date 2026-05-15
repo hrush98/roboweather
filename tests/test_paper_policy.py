@@ -113,10 +113,35 @@ def test_paper_policy_trader_promotes_allowlisted_policy_only(tmp_path) -> None:
     assert [(row["research_policy_position_id"], row["state"]) for row in rows] == [(promoted_id, "FILLED")]
 
 
-def test_paper_policy_trader_blocks_duplicate_bucket_side_exposure(tmp_path) -> None:
+def test_paper_policy_trader_keeps_promoted_policy_books_independent(tmp_path) -> None:
     store = _store_with_market(tmp_path)
     store.insert_research_policy_position(_policy_position(DEFAULT_PROMOTED_POLICIES[0], selected_side=TradeAction.BUY_NO))
     store.insert_research_policy_position(_policy_position(DEFAULT_PROMOTED_POLICIES[1], selected_side=TradeAction.BUY_NO))
+
+    result = PaperPolicyTrader(
+        store=store,
+        config=PaperPolicyExecutionConfig(),
+        book_client=FakeBookClient({"no": _book("no", asks=[(0.5, 100)], bids=[(0.45, 100)])}),
+    ).run_once()
+
+    assert result.candidates == 2
+    assert result.filled == 2
+    assert store.connection.execute("select count(*) n from paper_policy_positions").fetchone()["n"] == 2
+    policies = {
+        row["policy_name"]
+        for row in store.connection.execute("select policy_name from paper_policy_positions").fetchall()
+    }
+    assert policies == {DEFAULT_PROMOTED_POLICIES[0], DEFAULT_PROMOTED_POLICIES[1]}
+
+
+def test_paper_policy_trader_blocks_duplicate_bucket_side_inside_same_policy(tmp_path) -> None:
+    store = _store_with_market(tmp_path)
+    store.insert_research_policy_position(
+        _policy_position(DEFAULT_PROMOTED_POLICIES[0], selected_side=TradeAction.BUY_NO, scope_key="first")
+    )
+    store.insert_research_policy_position(
+        _policy_position(DEFAULT_PROMOTED_POLICIES[0], selected_side=TradeAction.BUY_NO, scope_key="second")
+    )
 
     result = PaperPolicyTrader(
         store=store,
@@ -207,13 +232,13 @@ def _store_with_market(tmp_path) -> ExecutionStore:
     return store
 
 
-def _policy_position(policy_name: str, selected_side: TradeAction) -> ResearchPolicyPosition:
+def _policy_position(policy_name: str, selected_side: TradeAction, scope_key: str | None = None) -> ResearchPolicyPosition:
     return ResearchPolicyPosition(
         timestamp=utc_now_iso(),
         policy_name=policy_name,
         station="KATL",
         market_date=date(2026, 5, 7),
-        scope_key=f"scope:{policy_name}",
+        scope_key=scope_key or f"scope:{policy_name}",
         model_group="consensus_pm_active_us12_dynamic_mvp",
         strategy_bucket=StrategyBucket.HIGH_CONVICTION,
         obs_delay_bucket="15m",

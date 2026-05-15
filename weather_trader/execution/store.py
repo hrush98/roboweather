@@ -1155,19 +1155,23 @@ class ExecutionStore:
         self.connection.commit()
         return int(cursor.lastrowid)
 
-    def paper_policy_open_positions(self) -> list[dict[str, Any]]:
+    def paper_policy_open_positions(self, policy_name: str | None = None) -> list[dict[str, Any]]:
+        policy_filter = "and policy_name = ?" if policy_name is not None else ""
+        params: tuple[Any, ...] = (policy_name,) if policy_name is not None else ()
         rows = self.connection.execute(
-            """
+            f"""
             select *
             from paper_policy_positions
             where state in ('FILLED', 'PARTIAL', 'DELAYED', 'UNKNOWN', 'RESERVED', 'SUBMITTED')
+                {policy_filter}
             order by id
-            """
+            """,
+            params,
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def paper_policy_exposure_summary(self) -> dict[str, Any]:
-        rows = self.paper_policy_open_positions()
+    def paper_policy_exposure_summary(self, policy_name: str | None = None) -> dict[str, Any]:
+        rows = self.paper_policy_open_positions(policy_name=policy_name)
         station_date: dict[str, float] = {}
         total = 0.0
         for row in rows:
@@ -1180,6 +1184,7 @@ class ExecutionStore:
     def has_open_paper_policy_exposure(
         self,
         *,
+        policy_name: str,
         station: str,
         market_date: date | str,
         selected_bucket: str | None,
@@ -1191,12 +1196,13 @@ class ExecutionStore:
             from paper_policy_positions
             where station = ?
                 and market_date = ?
+                and policy_name = ?
                 and coalesce(selected_bucket, '') = coalesce(?, '')
                 and selected_side = ?
                 and state in ('FILLED', 'PARTIAL', 'DELAYED', 'UNKNOWN', 'RESERVED', 'SUBMITTED')
             limit 1
             """,
-            (station, _date_text(market_date), selected_bucket, selected_side),
+            (station, _date_text(market_date), policy_name, selected_bucket, selected_side),
         ).fetchone()
         return row is not None
 

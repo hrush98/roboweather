@@ -267,6 +267,7 @@ class PaperPolicyTrader:
             self._event(None, int(row["id"]), PaperPolicyEventType.ENTRY_REJECTED, "missing selected token", row)
             return None
         if not self.config.risk.allow_duplicate_bucket_side and self.store.has_open_paper_policy_exposure(
+            policy_name=str(row["policy_name"]),
             station=str(row["station"]),
             market_date=str(row["market_date"]),
             selected_bucket=row.get("selected_bucket"),
@@ -275,7 +276,7 @@ class PaperPolicyTrader:
             self._event(None, int(row["id"]), PaperPolicyEventType.ENTRY_REJECTED, "duplicate exposure blocked", row)
             return None
 
-        exposure = self.store.paper_policy_exposure_summary()
+        exposure = self.store.paper_policy_exposure_summary(policy_name=str(row["policy_name"]))
         sizing = self.sizing_model.size(row, exposure)
         if sizing.target_notional_usd < self.config.min_fill_usd:
             self._event(
@@ -429,6 +430,10 @@ class PaperPolicyTrader:
 
     def _record_risk_snapshot(self) -> None:
         exposure = self.store.paper_policy_exposure_summary()
+        by_policy = {
+            policy_name: self.store.paper_policy_exposure_summary(policy_name=policy_name)
+            for policy_name in self.config.promoted_policies
+        }
         self.store.insert_paper_policy_risk_snapshot(
             PaperPolicyRiskSnapshot(
                 timestamp=utc_now_iso(),
@@ -436,7 +441,7 @@ class PaperPolicyTrader:
                 open_positions=int(exposure["open_positions"]),
                 open_risk_usd=float(exposure["open_risk_usd"]),
                 station_date_exposure_usd=dict(exposure["station_date_exposure_usd"]),
-                raw_payload={"risk_config": self.config.risk.__dict__},
+                raw_payload={"risk_config": self.config.risk.__dict__, "by_policy": by_policy},
             )
         )
 
