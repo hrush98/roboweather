@@ -36,6 +36,15 @@ def test_discovery_dedupes_market_ids() -> None:
     assert [market.market_id for market in markets] == ["same"]
 
 
+def test_discovery_preserves_gamma_active_flag() -> None:
+    reader = FakeReader(event_items=[{"id": "inactive", "active": False}], broad_items=[])
+    discovery = MarketDiscoveryService(reader=reader)
+
+    markets = discovery.discover()
+
+    assert markets[0].active is False
+
+
 class FakeReader:
     def __init__(self, event_items: list[dict], broad_items: list[dict], missing: list[str] | None = None) -> None:
         self.event_items = event_items

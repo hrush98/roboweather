@@ -315,6 +315,24 @@ class PredictionSnapshot:
     selected_book_timestamp: str | None = None
     selected_book_age_seconds: float | None = None
     selected_liquidity: dict[str, Any] | None = None
+    selected_ask_sweep: dict[str, Any] | None = None
+    selected_bid_ladder: dict[str, Any] | None = None
+    selected_sweep_price_cap: float | None = None
+    selected_sweep_depth_to_cap: float | None = None
+    selected_sweep_fillable_25_usd: float | None = None
+    selected_sweep_fillable_50_usd: float | None = None
+    selected_sweep_fillable_100_usd: float | None = None
+    selected_sweep_vwap_25: float | None = None
+    selected_sweep_vwap_50: float | None = None
+    selected_sweep_vwap_100: float | None = None
+    selected_bid_ladder_top_price: float | None = None
+    selected_bid_ladder_low_price: float | None = None
+    selected_bid_ladder_levels: int | None = None
+    selected_bid_ladder_total_notional_usd: float | None = None
+    selected_bid_ladder_top_distance_from_ask: float | None = None
+    selected_bid_ladder_top_improvement_over_best_bid: float | None = None
+    selected_bid_ladder_min_edge: float | None = None
+    selected_bid_ladder_max_edge: float | None = None
 
 
 @dataclass(frozen=True)
@@ -376,6 +394,24 @@ class ResearchPolicyPosition:
     selected_book_timestamp: str | None = None
     selected_book_age_seconds: float | None = None
     selected_liquidity: dict[str, Any] | None = None
+    selected_ask_sweep: dict[str, Any] | None = None
+    selected_bid_ladder: dict[str, Any] | None = None
+    selected_sweep_price_cap: float | None = None
+    selected_sweep_depth_to_cap: float | None = None
+    selected_sweep_fillable_25_usd: float | None = None
+    selected_sweep_fillable_50_usd: float | None = None
+    selected_sweep_fillable_100_usd: float | None = None
+    selected_sweep_vwap_25: float | None = None
+    selected_sweep_vwap_50: float | None = None
+    selected_sweep_vwap_100: float | None = None
+    selected_bid_ladder_top_price: float | None = None
+    selected_bid_ladder_low_price: float | None = None
+    selected_bid_ladder_levels: int | None = None
+    selected_bid_ladder_total_notional_usd: float | None = None
+    selected_bid_ladder_top_distance_from_ask: float | None = None
+    selected_bid_ladder_top_improvement_over_best_bid: float | None = None
+    selected_bid_ladder_min_edge: float | None = None
+    selected_bid_ladder_max_edge: float | None = None
 
 
 @dataclass(frozen=True)

@@ -102,7 +102,7 @@ class MarketDiscoveryService:
                     end_date=market.end_date,
                     resolution_source=market.resolution_source,
                     discovered_at=discovered_at,
-                    active=True,
+                    active=_active_flag(item),
                 )
             )
         return snapshots
@@ -119,3 +119,12 @@ def same_day_markets(markets: list[MarketSnapshot], as_of_utc) -> list[MarketSna
         if market.market_date is None or market.market_date == local_date:
             filtered.append(market)
     return filtered
+
+
+def _active_flag(item: dict) -> bool:
+    value = item.get("active", True)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in {"false", "0", "no"}
+    return bool(value)

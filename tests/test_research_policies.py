@@ -100,6 +100,41 @@ def test_research_policy_positions_carry_snapshot_liquidity(tmp_path) -> None:
     assert consensus["selected_liquidity"] == {"source": "mvp"}
 
 
+def test_research_policy_positions_carry_execution_mode_metadata(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+    store.upsert_market(_market())
+    store.insert_prediction_snapshot(
+        _snapshot(
+            model_name=MVP_MODEL,
+            strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+            selected_side=TradeAction.BUY_NO,
+            selected_bucket="74-75F",
+            selected_edge=0.3,
+            selected_fair_no=0.9,
+            selected_no_ask=0.6,
+            selected_ask_sweep={"mode": "ask_sweep", "eligible": True},
+            selected_bid_ladder={"mode": "post_only_bid_ladder", "eligible": True},
+            selected_sweep_price_cap=0.65,
+            selected_sweep_fillable_50_usd=50,
+            selected_bid_ladder_top_price=0.59,
+            selected_bid_ladder_levels=10,
+            selected_bid_ladder_total_notional_usd=500,
+        )
+    )
+    policy = ResearchPolicySpec("execution_modes", "model", StrategyBucket.HIGH_CONVICTION, model_name=MVP_MODEL)
+
+    assert ResearchPolicyEvaluator(store, (policy,)).evaluate() == 1
+
+    position = store.recent_research_policy_positions(limit=1)[0]
+    assert position["selected_ask_sweep"] == {"mode": "ask_sweep", "eligible": True}
+    assert position["selected_bid_ladder"] == {"mode": "post_only_bid_ladder", "eligible": True}
+    assert position["selected_sweep_price_cap"] == 0.65
+    assert position["selected_sweep_fillable_50_usd"] == 50
+    assert position["selected_bid_ladder_top_price"] == 0.59
+    assert position["selected_bid_ladder_levels"] == 10
+    assert position["selected_bid_ladder_total_notional_usd"] == 500
+
+
 def test_research_policy_registry_tracks_expected_policies() -> None:
     names = {policy.name for policy in POLICIES}
 
@@ -485,6 +520,13 @@ def _snapshot(
     selected_depth_at_ask: float | None = None,
     selected_book_timestamp: str | None = None,
     selected_liquidity: dict | None = None,
+    selected_ask_sweep: dict | None = None,
+    selected_bid_ladder: dict | None = None,
+    selected_sweep_price_cap: float | None = None,
+    selected_sweep_fillable_50_usd: float | None = None,
+    selected_bid_ladder_top_price: float | None = None,
+    selected_bid_ladder_levels: int | None = None,
+    selected_bid_ladder_total_notional_usd: float | None = None,
     station: str = "KATL",
     timestamp: str = "2026-05-07T16:00:01+00:00",
     decision_time_local: str = "2026-05-07T12:00:00-04:00",
@@ -521,4 +563,11 @@ def _snapshot(
         selected_depth_at_ask=selected_depth_at_ask,
         selected_book_timestamp=selected_book_timestamp,
         selected_liquidity=selected_liquidity,
+        selected_ask_sweep=selected_ask_sweep,
+        selected_bid_ladder=selected_bid_ladder,
+        selected_sweep_price_cap=selected_sweep_price_cap,
+        selected_sweep_fillable_50_usd=selected_sweep_fillable_50_usd,
+        selected_bid_ladder_top_price=selected_bid_ladder_top_price,
+        selected_bid_ladder_levels=selected_bid_ladder_levels,
+        selected_bid_ladder_total_notional_usd=selected_bid_ladder_total_notional_usd,
     )

@@ -23,7 +23,7 @@ from weather_trader.execution.decision import DecisionEngine
 from weather_trader.execution.discovery import MarketDiscoveryService, same_day_markets
 from weather_trader.execution.fair_value import FairValueEngine
 from weather_trader.execution.grouping import GroupMarketContext, StationDateDecisionEngine, group_key
-from weather_trader.execution.liquidity import selected_side_liquidity
+from weather_trader.execution.liquidity import selected_side_execution_modes, selected_side_liquidity
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import StationWeatherState, WeatherFeatureService
 from weather_trader.stations.metadata import get_station
@@ -100,6 +100,10 @@ class ResearchCollector:
             }
         )
         books = self.book_client.fetch_books(token_ids)
+        if token_ids and not books:
+            errors.append(f"book_coverage_empty: requested={len(token_ids)} returned=0")
+        elif token_ids and len(books) < len(token_ids):
+            errors.append(f"book_coverage_partial: requested={len(token_ids)} returned={len(books)}")
         for book in books.values():
             self.store.insert_book_snapshot(book)
 
@@ -307,6 +311,19 @@ def build_prediction_snapshot(
         elif selected_side == TradeAction.BUY_NO:
             selected_book = selected_context.no_book
     liquidity = selected_side_liquidity(selected_book, as_of_utc=as_of_utc)
+    selected_fair = None
+    if selected_side == TradeAction.BUY_YES:
+        selected_fair = _candidate_float(selected_candidate, "fair_yes", selected_context.signal.fair_yes if selected_context else None)
+    elif selected_side == TradeAction.BUY_NO:
+        selected_fair = _candidate_float(selected_candidate, "fair_no", selected_context.signal.fair_no if selected_context else None)
+    execution_modes = selected_side_execution_modes(
+        selected_book,
+        selected_side=str(selected_side),
+        fair=selected_fair,
+        entry_edge=selection.selected_decision.expected_value if selection.selected_decision else None,
+    )
+    ask_sweep = execution_modes["ask_sweep"]
+    bid_ladder = execution_modes["bid_ladder"]
     return PredictionSnapshot(
         timestamp=utc_now_iso(),
         station=weather.station,
@@ -344,6 +361,24 @@ def build_prediction_snapshot(
         selected_book_timestamp=liquidity["book_timestamp"],
         selected_book_age_seconds=liquidity["book_age_seconds"],
         selected_liquidity=liquidity["summary"],
+        selected_ask_sweep=ask_sweep,
+        selected_bid_ladder=bid_ladder,
+        selected_sweep_price_cap=ask_sweep.get("price_cap"),
+        selected_sweep_depth_to_cap=ask_sweep.get("depth_to_cap"),
+        selected_sweep_fillable_25_usd=_target_value(ask_sweep, "25", "fillable_notional_usd"),
+        selected_sweep_fillable_50_usd=_target_value(ask_sweep, "50", "fillable_notional_usd"),
+        selected_sweep_fillable_100_usd=_target_value(ask_sweep, "100", "fillable_notional_usd"),
+        selected_sweep_vwap_25=_target_value(ask_sweep, "25", "vwap"),
+        selected_sweep_vwap_50=_target_value(ask_sweep, "50", "vwap"),
+        selected_sweep_vwap_100=_target_value(ask_sweep, "100", "vwap"),
+        selected_bid_ladder_top_price=bid_ladder.get("post_only_top_bid"),
+        selected_bid_ladder_low_price=bid_ladder.get("low_bid"),
+        selected_bid_ladder_levels=bid_ladder.get("level_count"),
+        selected_bid_ladder_total_notional_usd=bid_ladder.get("total_notional_usd"),
+        selected_bid_ladder_top_distance_from_ask=bid_ladder.get("top_distance_from_ask"),
+        selected_bid_ladder_top_improvement_over_best_bid=bid_ladder.get("top_improvement_over_best_bid"),
+        selected_bid_ladder_min_edge=bid_ladder.get("min_edge"),
+        selected_bid_ladder_max_edge=bid_ladder.get("max_edge"),
     )
 
 
@@ -355,6 +390,20 @@ def _candidate_float(candidate: dict[str, object] | None, key: str, default: flo
         return float(value) if value is not None else default
     except (TypeError, ValueError):
         return default
+
+
+def _target_value(plan: dict[str, object], target: str, key: str) -> float | None:
+    targets = plan.get("targets")
+    if not isinstance(targets, dict):
+        return None
+    row = targets.get(target)
+    if not isinstance(row, dict):
+        return None
+    value = row.get(key)
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _time_in_window(value: day_time, start: day_time, end: day_time) -> bool:

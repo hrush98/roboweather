@@ -26,6 +26,7 @@ from weather_trader.execution.paper_policy import (
     execution_price_cap_for_row,
     simulate_ladder_fill,
 )
+from weather_trader.execution.liquidity import selected_side_execution_modes
 from weather_trader.execution.store import ExecutionStore
 
 
@@ -167,6 +168,48 @@ def test_execution_price_cap_respects_slippage_and_post_edge_caps() -> None:
         max_slippage_cents=0.05,
         min_post_slippage_edge=0.05,
     ) == 0.55
+
+
+def test_selected_side_execution_modes_split_sweep_and_bid_ladder() -> None:
+    modes = selected_side_execution_modes(
+        _book("no", asks=[(0.60, 40), (0.65, 40), (0.70, 100)], bids=[(0.45, 100)]),
+        selected_side=str(TradeAction.BUY_NO),
+        fair=0.85,
+        entry_edge=0.25,
+    )
+
+    sweep = modes["ask_sweep"]
+    ladder = modes["bid_ladder"]
+    assert sweep["eligible"] is True
+    assert sweep["price_cap"] == 0.65
+    assert sweep["depth_to_cap"] == 50
+    assert sweep["targets"]["25"]["fully_fillable"] is True
+    assert sweep["targets"]["50"]["fully_fillable"] is True
+    assert sweep["targets"]["100"]["fully_fillable"] is False
+    assert ladder["eligible"] is True
+    assert ladder["edge_max_bid"] == 0.70
+    assert ladder["post_only_top_bid"] == 0.59
+    assert ladder["low_bid"] == 0.49
+    assert ladder["level_count"] == 10
+    assert ladder["total_notional_usd"] == 500
+    assert ladder["levels"][0]["edge_after_fill"] == 0.26
+    assert ladder["levels"][0]["distance_from_ask"] == 0.01
+    assert ladder["levels"][0]["distance_from_best_bid"] == 0.14
+    assert ladder["levels"][0]["would_be_best_bid"] is True
+
+
+def test_selected_side_execution_modes_records_ineligible_reason() -> None:
+    modes = selected_side_execution_modes(
+        _book("no", asks=[(0.60, 40)], bids=[(0.45, 100)]),
+        selected_side=str(TradeAction.BUY_NO),
+        fair=0.80,
+        entry_edge=0.20,
+    )
+
+    assert modes["ask_sweep"]["eligible"] is False
+    assert modes["ask_sweep"]["reason"] == "EDGE_BELOW_SIGNAL_GATE"
+    assert modes["bid_ladder"]["eligible"] is False
+    assert modes["bid_ladder"]["reason"] == "EDGE_BELOW_SIGNAL_GATE"
 
 
 def test_paper_policy_trader_promotes_allowlisted_policy_only(tmp_path) -> None:

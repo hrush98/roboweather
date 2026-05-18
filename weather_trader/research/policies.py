@@ -315,6 +315,7 @@ class ResearchPolicyEvaluator:
                 {
                     **dynamic,
                     **_liquidity_fields(newer),
+                    **_execution_mode_fields(newer),
                     "id": min(int(dynamic["id"]), int(mvp["id"])),
                     "timestamp": max(str(dynamic.get("timestamp")), str(mvp.get("timestamp"))),
                     "model_name": consensus_name,
@@ -437,6 +438,7 @@ class ResearchPolicyEvaluator:
                 **dict(candidate.get("raw_policy") or {}),
             },
             **_liquidity_fields(candidate),
+            **_execution_mode_fields(candidate),
         )
 
 
@@ -559,6 +561,13 @@ def _float_or_none(value: object) -> float | None:
         return None
 
 
+def _int_or_none(value: object) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _selected_fair(item: dict[str, Any]) -> float | None:
     selected_side = str(item.get("selected_side") or "")
     if selected_side == str(TradeAction.BUY_YES):
@@ -587,4 +596,27 @@ def _liquidity_fields(item: dict[str, Any]) -> dict[str, Any]:
         "selected_book_timestamp": None if item.get("selected_book_timestamp") is None else str(item.get("selected_book_timestamp")),
         "selected_book_age_seconds": _float_or_none(item.get("selected_book_age_seconds")),
         "selected_liquidity": item.get("selected_liquidity"),
+    }
+
+
+def _execution_mode_fields(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "selected_ask_sweep": item.get("selected_ask_sweep"),
+        "selected_bid_ladder": item.get("selected_bid_ladder"),
+        "selected_sweep_price_cap": _float_or_none(item.get("selected_sweep_price_cap")),
+        "selected_sweep_depth_to_cap": _float_or_none(item.get("selected_sweep_depth_to_cap")),
+        "selected_sweep_fillable_25_usd": _float_or_none(item.get("selected_sweep_fillable_25_usd")),
+        "selected_sweep_fillable_50_usd": _float_or_none(item.get("selected_sweep_fillable_50_usd")),
+        "selected_sweep_fillable_100_usd": _float_or_none(item.get("selected_sweep_fillable_100_usd")),
+        "selected_sweep_vwap_25": _float_or_none(item.get("selected_sweep_vwap_25")),
+        "selected_sweep_vwap_50": _float_or_none(item.get("selected_sweep_vwap_50")),
+        "selected_sweep_vwap_100": _float_or_none(item.get("selected_sweep_vwap_100")),
+        "selected_bid_ladder_top_price": _float_or_none(item.get("selected_bid_ladder_top_price")),
+        "selected_bid_ladder_low_price": _float_or_none(item.get("selected_bid_ladder_low_price")),
+        "selected_bid_ladder_levels": _int_or_none(item.get("selected_bid_ladder_levels")),
+        "selected_bid_ladder_total_notional_usd": _float_or_none(item.get("selected_bid_ladder_total_notional_usd")),
+        "selected_bid_ladder_top_distance_from_ask": _float_or_none(item.get("selected_bid_ladder_top_distance_from_ask")),
+        "selected_bid_ladder_top_improvement_over_best_bid": _float_or_none(item.get("selected_bid_ladder_top_improvement_over_best_bid")),
+        "selected_bid_ladder_min_edge": _float_or_none(item.get("selected_bid_ladder_min_edge")),
+        "selected_bid_ladder_max_edge": _float_or_none(item.get("selected_bid_ladder_max_edge")),
     }

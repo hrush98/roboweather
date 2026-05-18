@@ -90,6 +90,21 @@ def test_research_collector_records_discovery_timeout_without_crashing(tmp_path)
     assert "gamma stalled" in row["raw_json"]
 
 
+def test_research_collector_warns_when_books_are_missing(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+    collector = ResearchCollector(
+        store=store,
+        model_paths=[],
+        discovery=_StaticDiscovery([_market(market_date=date(2026, 5, 13))]),
+        book_client=_EmptyBookClient(),
+    )
+
+    result = collector.run_once(datetime(2026, 5, 13, 16, 5, tzinfo=timezone.utc))
+
+    assert result.engine_state.discovered_markets == 1
+    assert result.engine_state.errors == ["book_coverage_empty: requested=2 returned=0"]
+
+
 def test_paper_engine_records_discovery_timeout_without_crashing(tmp_path) -> None:
     store = ExecutionStore(tmp_path / "paper.sqlite")
     engine = PaperTradingEngine(
@@ -159,12 +174,60 @@ def test_build_prediction_snapshot_persists_buy_yes_liquidity(tmp_path) -> None:
     assert row["selected_depth_ask_plus_0_05"] == 160
 
 
+def test_build_prediction_snapshot_persists_sweep_and_bid_ladder(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+
+    snapshot = build_prediction_snapshot(
+        selection=_selection(TradeAction.BUY_YES, expected_value=0.3, fair_yes=0.8, fair_no=0.2),
+        contexts=[_context()],
+        weather=_weather("2026-05-06T16:00:00+00:00"),
+        market_date=date(2026, 5, 6),
+        as_of_utc=datetime(2026, 5, 6, 16, 1, tzinfo=timezone.utc),
+        obs_delay_bucket="instant",
+        model_name="model",
+    )
+    snapshot_id = store.insert_prediction_snapshot(snapshot)
+
+    row = store.connection.execute(
+        """
+        select selected_ask_sweep_json, selected_bid_ladder_json,
+               selected_sweep_price_cap, selected_sweep_fillable_50_usd,
+               selected_bid_ladder_top_price, selected_bid_ladder_levels,
+               selected_bid_ladder_total_notional_usd
+        from prediction_snapshots
+        where id = ?
+        """,
+        (snapshot_id,),
+    ).fetchone()
+    assert '"mode": "ask_sweep"' in row["selected_ask_sweep_json"]
+    assert '"mode": "post_only_bid_ladder"' in row["selected_bid_ladder_json"]
+    assert row["selected_sweep_price_cap"] == 0.55
+    assert row["selected_sweep_fillable_50_usd"] == 50
+    assert row["selected_bid_ladder_top_price"] == 0.49
+    assert row["selected_bid_ladder_levels"] == 10
+    assert row["selected_bid_ladder_total_notional_usd"] == 500
+
+
 class _FailingDiscovery:
     def discover(self, limit: int = 50000, validate_stations: bool = True):
         raise requests.ReadTimeout("gamma stalled")
 
 
-def _selection(side: TradeAction) -> GroupSelection:
+class _StaticDiscovery:
+    def __init__(self, markets: list[MarketSnapshot]) -> None:
+        self.markets = markets
+        self.last_warnings: list[str] = []
+
+    def discover(self, limit: int = 50000, validate_stations: bool = True):
+        return self.markets
+
+
+class _EmptyBookClient:
+    def fetch_books(self, token_ids: list[str]):
+        return {}
+
+
+def _selection(side: TradeAction, expected_value: float = 0.1, fair_yes: float = 0.7, fair_no: float = 0.3) -> GroupSelection:
     decision = Decision(
         timestamp="2026-05-06T16:00:00+00:00",
         market_id="m1",
@@ -173,7 +236,7 @@ def _selection(side: TradeAction) -> GroupSelection:
         strategy_bucket=StrategyBucket.HIGH_CONVICTION,
         max_price=0.5 if side == TradeAction.BUY_YES else 0.6,
         target_usd=10,
-        expected_value=0.1,
+        expected_value=expected_value,
         skip_reasons=[],
         reason_codes=[],
     )
@@ -193,8 +256,8 @@ def _selection(side: TradeAction) -> GroupSelection:
             {
                 "market_id": "m1",
                 "bucket": "75-76F",
-                "fair_yes": 0.7,
-                "fair_no": 0.3,
+                "fair_yes": fair_yes,
+                "fair_no": fair_no,
                 "selected": True,
             }
         ],
@@ -203,22 +266,7 @@ def _selection(side: TradeAction) -> GroupSelection:
 
 
 def _context() -> GroupMarketContext:
-    market = MarketSnapshot(
-        market_id="m1",
-        condition_id=None,
-        question="Will Atlanta hit 75-76F?",
-        slug="slug",
-        city="Atlanta",
-        station="KATL",
-        market_date=date(2026, 5, 6),
-        lower_f=75,
-        upper_f=76,
-        yes_token_id="yes",
-        no_token_id="no",
-        end_date="2026-05-06",
-        resolution_source="test",
-        discovered_at="2026-05-06T15:00:00+00:00",
-    )
+    market = _market()
     signal = Signal(
         timestamp="2026-05-06T16:00:00+00:00",
         market_id="m1",
@@ -261,6 +309,25 @@ def _context() -> GroupMarketContext:
             asks=[BookLevel(0.6, 100), BookLevel(0.65, 200)],
             timestamp="2026-05-06T16:00:00+00:00",
         ),
+    )
+
+
+def _market(market_date: date = date(2026, 5, 6)) -> MarketSnapshot:
+    return MarketSnapshot(
+        market_id="m1",
+        condition_id=None,
+        question="Will Atlanta hit 75-76F?",
+        slug="slug",
+        city="Atlanta",
+        station="KATL",
+        market_date=market_date,
+        lower_f=75,
+        upper_f=76,
+        yes_token_id="yes",
+        no_token_id="no",
+        end_date="2026-05-06",
+        resolution_source="test",
+        discovered_at="2026-05-06T15:00:00+00:00",
     )
 
 

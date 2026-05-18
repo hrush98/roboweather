@@ -14,6 +14,15 @@ DEFAULT_LIQUIDITY_CAP_OFFSETS: tuple[tuple[str, float], ...] = (
     ("ask_plus_0_03", 0.03),
     ("ask_plus_0_05", 0.05),
 )
+DEFAULT_SWEEP_TARGETS_USD: tuple[float, ...] = (25.0, 50.0, 100.0)
+DEFAULT_SIGNAL_MIN_EDGE = 0.25
+DEFAULT_POST_FILL_MIN_EDGE = 0.15
+DEFAULT_SWEEP_MAX_SLIPPAGE = 0.05
+DEFAULT_BID_LADDER_ORDER_NOTIONAL_USD = 50.0
+DEFAULT_BID_LADDER_TOTAL_NOTIONAL_USD = 500.0
+DEFAULT_BID_LADDER_STEP_CENTS = 0.01
+DEFAULT_BID_LADDER_RANGE_CENTS = 0.10
+DEFAULT_BID_LADDER_TTL_SECONDS = 180
 
 
 @dataclass(frozen=True)
@@ -134,6 +143,180 @@ def selected_side_liquidity(
     }
 
 
+def selected_side_execution_modes(
+    book: BookSnapshot | None,
+    *,
+    selected_side: str,
+    fair: float | None,
+    entry_edge: float | None = None,
+    signal_min_edge: float = DEFAULT_SIGNAL_MIN_EDGE,
+    post_fill_min_edge: float = DEFAULT_POST_FILL_MIN_EDGE,
+    sweep_max_slippage: float = DEFAULT_SWEEP_MAX_SLIPPAGE,
+    sweep_targets_usd: tuple[float, ...] = DEFAULT_SWEEP_TARGETS_USD,
+    bid_ladder_order_notional_usd: float = DEFAULT_BID_LADDER_ORDER_NOTIONAL_USD,
+    bid_ladder_total_notional_usd: float = DEFAULT_BID_LADDER_TOTAL_NOTIONAL_USD,
+    bid_ladder_step_cents: float = DEFAULT_BID_LADDER_STEP_CENTS,
+    bid_ladder_range_cents: float = DEFAULT_BID_LADDER_RANGE_CENTS,
+    bid_ladder_ttl_seconds: int = DEFAULT_BID_LADDER_TTL_SECONDS,
+) -> dict[str, Any]:
+    reason = _execution_ineligible_reason(
+        book=book,
+        selected_side=selected_side,
+        fair=fair,
+        entry_edge=entry_edge,
+        signal_min_edge=signal_min_edge,
+    )
+    if reason is not None:
+        return {
+            "ask_sweep": _ineligible_ask_sweep(reason, fair, signal_min_edge, post_fill_min_edge, sweep_max_slippage),
+            "bid_ladder": _ineligible_bid_ladder(reason, fair, signal_min_edge, post_fill_min_edge),
+        }
+
+    assert book is not None
+    assert fair is not None
+    assert book.best_ask is not None
+    edge = float(entry_edge) if entry_edge is not None else fair - book.best_ask
+    ask_sweep = build_ask_sweep(
+        book=book,
+        fair=fair,
+        entry_edge=edge,
+        signal_min_edge=signal_min_edge,
+        post_fill_min_edge=post_fill_min_edge,
+        sweep_max_slippage=sweep_max_slippage,
+        sweep_targets_usd=sweep_targets_usd,
+    )
+    bid_ladder = build_bid_ladder(
+        book=book,
+        fair=fair,
+        entry_edge=edge,
+        signal_min_edge=signal_min_edge,
+        post_fill_min_edge=post_fill_min_edge,
+        order_notional_usd=bid_ladder_order_notional_usd,
+        total_notional_usd=bid_ladder_total_notional_usd,
+        step_cents=bid_ladder_step_cents,
+        range_cents=bid_ladder_range_cents,
+        ttl_seconds=bid_ladder_ttl_seconds,
+    )
+    return {"ask_sweep": ask_sweep, "bid_ladder": bid_ladder}
+
+
+def build_ask_sweep(
+    *,
+    book: BookSnapshot,
+    fair: float,
+    entry_edge: float,
+    signal_min_edge: float = DEFAULT_SIGNAL_MIN_EDGE,
+    post_fill_min_edge: float = DEFAULT_POST_FILL_MIN_EDGE,
+    sweep_max_slippage: float = DEFAULT_SWEEP_MAX_SLIPPAGE,
+    sweep_targets_usd: tuple[float, ...] = DEFAULT_SWEEP_TARGETS_USD,
+) -> dict[str, Any]:
+    best_ask = book.best_ask
+    if best_ask is None:
+        return _ineligible_ask_sweep("MISSING_ASK", fair, signal_min_edge, post_fill_min_edge, sweep_max_slippage)
+    price_cap = quantize_price(min(best_ask + sweep_max_slippage, fair - post_fill_min_edge))
+    depth_to_cap = _depth_at_cap(book, price_cap)
+    targets: dict[str, dict[str, Any]] = {}
+    for target in sweep_targets_usd:
+        walk = walk_ask_ladder(
+            book=book,
+            limit_price=best_ask,
+            target_notional_usd=target,
+            execution_price_cap=price_cap,
+        )
+        targets[f"{int(target)}"] = {
+            "fillable_notional_usd": walk.cost_usd,
+            "filled_shares": walk.filled_shares,
+            "vwap": walk.avg_price,
+            "fully_fillable": walk.cost_usd + 1e-9 >= quantize_usdc(target),
+            "levels_consumed": walk.levels_consumed,
+        }
+    return {
+        "version": 1,
+        "mode": "ask_sweep",
+        "eligible": True,
+        "reason": None,
+        "fair": quantize_price(fair),
+        "entry_ask": quantize_price(best_ask),
+        "entry_edge": round(entry_edge, 4),
+        "signal_min_edge": signal_min_edge,
+        "post_fill_min_edge": post_fill_min_edge,
+        "sweep_max_slippage": sweep_max_slippage,
+        "price_cap": price_cap,
+        "price_cap_formula": "min(ask+0.05,fair-0.15)",
+        "depth_to_cap": depth_to_cap,
+        "targets": targets,
+    }
+
+
+def build_bid_ladder(
+    *,
+    book: BookSnapshot,
+    fair: float,
+    entry_edge: float,
+    signal_min_edge: float = DEFAULT_SIGNAL_MIN_EDGE,
+    post_fill_min_edge: float = DEFAULT_POST_FILL_MIN_EDGE,
+    order_notional_usd: float = DEFAULT_BID_LADDER_ORDER_NOTIONAL_USD,
+    total_notional_usd: float = DEFAULT_BID_LADDER_TOTAL_NOTIONAL_USD,
+    step_cents: float = DEFAULT_BID_LADDER_STEP_CENTS,
+    range_cents: float = DEFAULT_BID_LADDER_RANGE_CENTS,
+    ttl_seconds: int = DEFAULT_BID_LADDER_TTL_SECONDS,
+) -> dict[str, Any]:
+    best_ask = book.best_ask
+    if best_ask is None:
+        return _ineligible_bid_ladder("MISSING_ASK", fair, signal_min_edge, post_fill_min_edge)
+    edge_max_bid = quantize_price(fair - post_fill_min_edge)
+    post_only_top_bid = quantize_price(min(edge_max_bid, best_ask - 0.01))
+    if post_only_top_bid <= 0:
+        return _ineligible_bid_ladder("NO_POST_ONLY_PRICE", fair, signal_min_edge, post_fill_min_edge)
+    low_bid = quantize_price(post_only_top_bid - range_cents)
+    step = quantize_price(step_cents)
+    levels: list[dict[str, Any]] = []
+    total = 0.0
+    price = post_only_top_bid
+    best_bid = book.best_bid
+    while price >= low_bid and price > 0 and total < total_notional_usd:
+        notional = min(order_notional_usd, quantize_usdc(total_notional_usd - total))
+        levels.append(
+            {
+                "price": price,
+                "notional_usd": quantize_usdc(notional),
+                "edge_after_fill": round(fair - price, 4),
+                "distance_from_ask": round(best_ask - price, 4),
+                "distance_from_best_bid": None if best_bid is None else round(price - best_bid, 4),
+                "would_improve_best_bid": best_bid is None or price > best_bid,
+                "would_be_best_bid": best_bid is None or price > best_bid,
+            }
+        )
+        total = quantize_usdc(total + notional)
+        price = quantize_price(price - step)
+    edges = [float(level["edge_after_fill"]) for level in levels]
+    return {
+        "version": 1,
+        "mode": "post_only_bid_ladder",
+        "eligible": True,
+        "reason": None,
+        "fair": quantize_price(fair),
+        "entry_ask": quantize_price(best_ask),
+        "entry_edge": round(entry_edge, 4),
+        "signal_min_edge": signal_min_edge,
+        "post_fill_min_edge": post_fill_min_edge,
+        "edge_max_bid": edge_max_bid,
+        "post_only_top_bid": post_only_top_bid,
+        "low_bid": low_bid,
+        "step": step,
+        "ttl_seconds": ttl_seconds,
+        "order_notional_usd": quantize_usdc(order_notional_usd),
+        "total_notional_usd": quantize_usdc(total),
+        "target_total_notional_usd": quantize_usdc(total_notional_usd),
+        "levels": levels,
+        "level_count": len(levels),
+        "top_distance_from_ask": None if not levels else levels[0]["distance_from_ask"],
+        "top_improvement_over_best_bid": None if not levels else levels[0]["distance_from_best_bid"],
+        "min_edge": min(edges) if edges else None,
+        "max_edge": max(edges) if edges else None,
+    }
+
+
 def _empty_liquidity() -> dict[str, Any]:
     return {
         "best_bid": None,
@@ -197,3 +380,70 @@ def _depth_at_cap(book: BookSnapshot | None, cap: float | None) -> float:
     if book is None or cap is None:
         return 0.0
     return quantize_usdc(sum(level.price * level.size for level in book.asks if quantize_price(level.price) <= cap))
+
+
+def _execution_ineligible_reason(
+    *,
+    book: BookSnapshot | None,
+    selected_side: str,
+    fair: float | None,
+    entry_edge: float | None,
+    signal_min_edge: float,
+) -> str | None:
+    if selected_side not in {"BUY_YES", "BUY_NO"}:
+        return "SKIP"
+    if fair is None:
+        return "MISSING_FAIR"
+    if book is None:
+        return "MISSING_BOOK"
+    if book.best_ask is None:
+        return "MISSING_ASK"
+    edge = entry_edge if entry_edge is not None else fair - book.best_ask
+    if edge < signal_min_edge:
+        return "EDGE_BELOW_SIGNAL_GATE"
+    return None
+
+
+def _ineligible_ask_sweep(
+    reason: str,
+    fair: float | None,
+    signal_min_edge: float,
+    post_fill_min_edge: float,
+    sweep_max_slippage: float,
+) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "mode": "ask_sweep",
+        "eligible": False,
+        "reason": reason,
+        "fair": None if fair is None else quantize_price(fair),
+        "signal_min_edge": signal_min_edge,
+        "post_fill_min_edge": post_fill_min_edge,
+        "sweep_max_slippage": sweep_max_slippage,
+        "price_cap": None,
+        "depth_to_cap": 0.0,
+        "targets": {},
+    }
+
+
+def _ineligible_bid_ladder(
+    reason: str,
+    fair: float | None,
+    signal_min_edge: float,
+    post_fill_min_edge: float,
+) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "mode": "post_only_bid_ladder",
+        "eligible": False,
+        "reason": reason,
+        "fair": None if fair is None else quantize_price(fair),
+        "signal_min_edge": signal_min_edge,
+        "post_fill_min_edge": post_fill_min_edge,
+        "edge_max_bid": None,
+        "post_only_top_bid": None,
+        "low_bid": None,
+        "levels": [],
+        "level_count": 0,
+        "total_notional_usd": 0.0,
+    }
