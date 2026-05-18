@@ -12,28 +12,71 @@ from weather_trader.execution.store import ExecutionStore
 LEGACY_DYNAMIC_MODEL = "dynamic_bucket_obs_2022_2025"
 LEGACY_MVP_MODEL = "mvp_obs_corrected"
 DYNAMIC_MODEL = "dynamic_bucket_pm_active_us12_obs_2022_2025"
+DYNAMIC_TUNED_MODEL = "dynamic_bucket_tuned_pm_active_us12_obs_2022_2025"
+CATBOOST_MODEL = "catboost_bucket_pm_active_us12_obs_2022_2025"
 MVP_MODEL = "mvp_pm_active_us12_obs_2022_2025"
-MODEL_PAIRS = (
-    ("legacy_dynamic_mvp", LEGACY_DYNAMIC_MODEL, LEGACY_MVP_MODEL, "consensus_dynamic_mvp"),
-    ("pm_active_us12_dynamic_mvp", DYNAMIC_MODEL, MVP_MODEL, "consensus_pm_active_us12_dynamic_mvp"),
+HIGH_REGRESSION_MODEL = "high_regression_pm_active_us12_obs_2022_2025"
+NGBOOST_MODEL = "ngboost_normal_pm_active_us12_obs_2022_2025"
+
+DYNAMIC_HRRR_V2_MODEL = "dynamic_bucket_hrrr_v2_obs_2022_2025"
+DYNAMIC_TUNED_HRRR_V2_MODEL = "dynamic_bucket_tuned_hrrr_v2_obs_2022_2025"
+CATBOOST_HRRR_V2_MODEL = "catboost_bucket_hrrr_v2_obs_2022_2025"
+MVP_HRRR_V2_MODEL = "mvp_hrrr_v2_obs_2022_2025"
+HIGH_REGRESSION_HRRR_V2_MODEL = "high_regression_hrrr_v2_obs_2022_2025"
+NGBOOST_HRRR_V2_MODEL = "ngboost_normal_hrrr_v2_obs_2022_2025"
+
+BROAD_STRATEGY_BUCKETS: tuple[StrategyBucket, ...] = (
+    StrategyBucket.HIGH_CONVICTION,
+    StrategyBucket.TAIL,
+    StrategyBucket.BEST_BUCKET,
 )
-MODEL_PAIRS_BY_NAME = {pair_name: pair for pair_name, *pair in MODEL_PAIRS}
-MODEL_PAIRS_BY_MODEL = {
-    model_name: (pair_name, dynamic_model, mvp_model, consensus_name)
-    for pair_name, dynamic_model, mvp_model, consensus_name in MODEL_PAIRS
-    for model_name in (dynamic_model, mvp_model)
+
+MODEL_FAMILIES: dict[str, dict[str, str]] = {
+    "obs": {
+        "dynamic_default": DYNAMIC_MODEL,
+        "dynamic_tuned": DYNAMIC_TUNED_MODEL,
+        "catboost": CATBOOST_MODEL,
+        "mvp": MVP_MODEL,
+        "high_regression": HIGH_REGRESSION_MODEL,
+        "ngboost": NGBOOST_MODEL,
+    },
+    "hrrr_v2": {
+        "dynamic_default": DYNAMIC_HRRR_V2_MODEL,
+        "dynamic_tuned": DYNAMIC_TUNED_HRRR_V2_MODEL,
+        "catboost": CATBOOST_HRRR_V2_MODEL,
+        "mvp": MVP_HRRR_V2_MODEL,
+        "high_regression": HIGH_REGRESSION_HRRR_V2_MODEL,
+        "ngboost": NGBOOST_HRRR_V2_MODEL,
+    },
 }
 
-EXPERIMENTAL_COASTAL_STATIONS: frozenset[str] = frozenset({"KBOS", "KDCA", "KHOU", "KLAX", "KLGA", "KMIA", "KSEA", "KSFO"})
-EXPERIMENTAL_INLAND_STATIONS: frozenset[str] = frozenset({"KATL", "KDEN", "KDFW", "KORD"})
-EXPERIMENTAL_MANUAL_STRESS_EXCLUDE_STATIONS: frozenset[str] = frozenset()
-ENTRY_BAND_EXPERIMENTS: tuple[tuple[str, float, float], ...] = (
-    ("00_10", 0.00, 0.10),
-    ("10_25", 0.10, 0.25),
-    ("25_50", 0.25, 0.50),
-    ("50_75", 0.50, 0.75),
-    ("75_100", 0.75, 1.00),
+CONSENSUS_GROUPS: dict[str, tuple[str, ...]] = {
+    f"{family}_dynamic_tuned_mvp": (models["dynamic_tuned"], models["mvp"])
+    for family, models in MODEL_FAMILIES.items()
+}
+CONSENSUS_GROUPS.update(
+    {
+        f"{family}_catboost_mvp": (models["catboost"], models["mvp"])
+        for family, models in MODEL_FAMILIES.items()
+    }
 )
+CONSENSUS_GROUPS.update(
+    {
+        f"{family}_bucket_consensus": (models["dynamic_tuned"], models["catboost"])
+        for family, models in MODEL_FAMILIES.items()
+    }
+)
+CONSENSUS_GROUPS.update(
+    {
+        f"{family}_three_model_consensus": (models["dynamic_tuned"], models["catboost"], models["mvp"])
+        for family, models in MODEL_FAMILIES.items()
+    }
+)
+CONSENSUS_GROUPS_BY_MODEL: dict[str, tuple[str, ...]] = {}
+for _group_name, _model_names in CONSENSUS_GROUPS.items():
+    for _model_name in _model_names:
+        CONSENSUS_GROUPS_BY_MODEL.setdefault(_model_name, ())
+        CONSENSUS_GROUPS_BY_MODEL[_model_name] = (*CONSENSUS_GROUPS_BY_MODEL[_model_name], _group_name)
 
 
 @dataclass(frozen=True)
@@ -59,190 +102,41 @@ class ResearchPolicySpec:
     uniqueness_key_mode: str = "station_date"
 
 
-def _entry_band_policy_specs(
-    *,
-    name_prefix: str,
-    source: str,
-    strategy_bucket: StrategyBucket,
-    model_group: str | None = None,
-    model_name: str | None = None,
-    obs_delay_bucket: str | None = None,
-    local_decision_start: str | None = None,
-    local_decision_end: str | None = None,
-) -> tuple[ResearchPolicySpec, ...]:
-    return tuple(
-        ResearchPolicySpec(
-            f"{name_prefix}_entry_{suffix}_first",
-            source,
-            strategy_bucket,
-            model_group=model_group,
-            model_name=model_name,
-            obs_delay_bucket=obs_delay_bucket,
-            local_decision_start=local_decision_start,
-            local_decision_end=local_decision_end,
-            entry_price_min=minimum,
-            entry_price_max=maximum,
-        )
-        for suffix, minimum, maximum in ENTRY_BAND_EXPERIMENTS
-    )
+def _strategy_slug(strategy_bucket: StrategyBucket) -> str:
+    return str(strategy_bucket).lower()
 
 
-def _by_bucket_side_delay_policy_spec(
-    *,
-    name: str,
-    obs_delay_bucket: str | None = None,
-    entry_price_min: float | None = None,
-    entry_price_max: float | None = None,
-    local_decision_start: str | None = None,
-    local_decision_end: str | None = None,
-) -> ResearchPolicySpec:
-    return ResearchPolicySpec(
-        name,
-        "consensus",
-        StrategyBucket.HIGH_CONVICTION,
-        model_group="pm_active_us12_dynamic_mvp",
-        obs_delay_bucket=obs_delay_bucket,
-        entry_price_min=entry_price_min,
-        entry_price_max=entry_price_max,
-        local_decision_start=local_decision_start,
-        local_decision_end=local_decision_end,
-        uniqueness_key_mode="station_date_bucket_side_obs_delay",
-    )
+def _broad_policy_specs() -> tuple[ResearchPolicySpec, ...]:
+    specs: list[ResearchPolicySpec] = []
+    for family, models in MODEL_FAMILIES.items():
+        for alias, model_name in models.items():
+            for strategy_bucket in BROAD_STRATEGY_BUCKETS:
+                specs.append(
+                    ResearchPolicySpec(
+                        name=f"broad_{family}_{alias}_{_strategy_slug(strategy_bucket)}_first",
+                        source="model",
+                        strategy_bucket=strategy_bucket,
+                        model_name=model_name,
+                    )
+                )
+        for group_name in CONSENSUS_GROUPS:
+            if not group_name.startswith(f"{family}_"):
+                continue
+            short_group_name = group_name.removeprefix(f"{family}_")
+            for strategy_bucket in BROAD_STRATEGY_BUCKETS:
+                specs.append(
+                    ResearchPolicySpec(
+                        name=f"broad_{family}_{short_group_name}_{_strategy_slug(strategy_bucket)}_first",
+                        source="consensus",
+                        strategy_bucket=strategy_bucket,
+                        model_group=group_name,
+                    )
+                )
+    specs.append(ResearchPolicySpec("broad_max_so_far_first", "max_so_far", StrategyBucket.MAX_SO_FAR))
+    return tuple(specs)
 
 
-POLICIES: tuple[ResearchPolicySpec, ...] = (
-    ResearchPolicySpec("pm_us12_consensus_hc_first", "consensus", StrategyBucket.HIGH_CONVICTION, model_group="pm_active_us12_dynamic_mvp"),
-    _by_bucket_side_delay_policy_spec(name="pm_us12_consensus_hc_by_bucket_side_delay_first"),
-    ResearchPolicySpec(
-        "pm_us12_consensus_hc_10m_first",
-        "consensus",
-        StrategyBucket.HIGH_CONVICTION,
-        model_group="pm_active_us12_dynamic_mvp",
-        obs_delay_bucket="10m",
-    ),
-    ResearchPolicySpec(
-        "pm_us12_consensus_hc_15m_first",
-        "consensus",
-        StrategyBucket.HIGH_CONVICTION,
-        model_group="pm_active_us12_dynamic_mvp",
-        obs_delay_bucket="15m",
-    ),
-    _by_bucket_side_delay_policy_spec(
-        name="pm_us12_consensus_hc_15m_by_bucket_side_delay_first",
-        obs_delay_bucket="15m",
-    ),
-    *_entry_band_policy_specs(
-        name_prefix="pm_us12_consensus_hc_15m",
-        source="consensus",
-        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
-        model_group="pm_active_us12_dynamic_mvp",
-        obs_delay_bucket="15m",
-    ),
-    ResearchPolicySpec(
-        "pm_us12_consensus_hc_15m_entry_25_75_first",
-        "consensus",
-        StrategyBucket.HIGH_CONVICTION,
-        model_group="pm_active_us12_dynamic_mvp",
-        obs_delay_bucket="15m",
-        entry_price_min=0.25,
-        entry_price_max=0.75,
-    ),
-    _by_bucket_side_delay_policy_spec(
-        name="pm_us12_consensus_hc_15m_entry_25_75_by_bucket_side_delay_first",
-        obs_delay_bucket="15m",
-        entry_price_min=0.25,
-        entry_price_max=0.75,
-    ),
-    _by_bucket_side_delay_policy_spec(
-        name="pm_us12_consensus_hc_15m_entry_50_75_by_bucket_side_delay_first",
-        obs_delay_bucket="15m",
-        entry_price_min=0.50,
-        entry_price_max=0.75,
-    ),
-    ResearchPolicySpec(
-        "pm_us12_consensus_hc_15m_no_tiny_first",
-        "consensus",
-        StrategyBucket.HIGH_CONVICTION,
-        model_group="pm_active_us12_dynamic_mvp",
-        obs_delay_bucket="15m",
-        entry_price_min=0.05,
-    ),
-    ResearchPolicySpec(
-        "pm_us12_consensus_hc_late_first",
-        "consensus",
-        StrategyBucket.HIGH_CONVICTION,
-        model_group="pm_active_us12_dynamic_mvp",
-        local_decision_start="12:00",
-        local_decision_end="15:00",
-    ),
-    _by_bucket_side_delay_policy_spec(
-        name="pm_us12_consensus_hc_late_by_bucket_side_delay_first",
-        local_decision_start="12:00",
-        local_decision_end="15:00",
-    ),
-    *_entry_band_policy_specs(
-        name_prefix="pm_us12_consensus_hc_late",
-        source="consensus",
-        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
-        model_group="pm_active_us12_dynamic_mvp",
-        local_decision_start="12:00",
-        local_decision_end="15:00",
-    ),
-    _by_bucket_side_delay_policy_spec(
-        name="pm_us12_consensus_hc_late_entry_50_75_by_bucket_side_delay_first",
-        entry_price_min=0.50,
-        entry_price_max=0.75,
-        local_decision_start="12:00",
-        local_decision_end="15:00",
-    ),
-    ResearchPolicySpec(
-        "pm_us12_consensus_hc_early_first",
-        "consensus",
-        StrategyBucket.HIGH_CONVICTION,
-        model_group="pm_active_us12_dynamic_mvp",
-        local_decision_start="10:00",
-        local_decision_end="12:00",
-    ),
-    ResearchPolicySpec(
-        "pm_us12_consensus_best_15m_first",
-        "consensus",
-        StrategyBucket.BEST_BUCKET,
-        model_group="pm_active_us12_dynamic_mvp",
-        obs_delay_bucket="15m",
-    ),
-    ResearchPolicySpec("pm_us12_consensus_per_strategy_first", "consensus", model_group="pm_active_us12_dynamic_mvp", scope_by_strategy=True),
-    ResearchPolicySpec("pm_us12_mvp_hc_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=MVP_MODEL),
-    ResearchPolicySpec("pm_us12_mvp_hc_10m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=MVP_MODEL, obs_delay_bucket="10m"),
-    ResearchPolicySpec("pm_us12_mvp_hc_15m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=MVP_MODEL, obs_delay_bucket="15m"),
-    ResearchPolicySpec("pm_us12_mvp_best_15m_first", "model", StrategyBucket.BEST_BUCKET, model_name=MVP_MODEL, obs_delay_bucket="15m"),
-    ResearchPolicySpec("pm_us12_dynamic_hc_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=DYNAMIC_MODEL),
-    ResearchPolicySpec("pm_us12_dynamic_hc_10m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=DYNAMIC_MODEL, obs_delay_bucket="10m"),
-    ResearchPolicySpec("pm_us12_dynamic_hc_15m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=DYNAMIC_MODEL, obs_delay_bucket="15m"),
-    *_entry_band_policy_specs(
-        name_prefix="pm_us12_dynamic_hc_15m",
-        source="model",
-        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
-        model_name=DYNAMIC_MODEL,
-        obs_delay_bucket="15m",
-    ),
-    ResearchPolicySpec("pm_us12_dynamic_best_15m_first", "model", StrategyBucket.BEST_BUCKET, model_name=DYNAMIC_MODEL, obs_delay_bucket="15m"),
-    ResearchPolicySpec("consensus_hc_first", "consensus", StrategyBucket.HIGH_CONVICTION, model_group="legacy_dynamic_mvp"),
-    ResearchPolicySpec("consensus_hc_10m_first", "consensus", StrategyBucket.HIGH_CONVICTION, model_group="legacy_dynamic_mvp", obs_delay_bucket="10m"),
-    ResearchPolicySpec("consensus_hc_15m_first", "consensus", StrategyBucket.HIGH_CONVICTION, model_group="legacy_dynamic_mvp", obs_delay_bucket="15m"),
-    ResearchPolicySpec("consensus_best_15m_first", "consensus", StrategyBucket.BEST_BUCKET, model_group="legacy_dynamic_mvp", obs_delay_bucket="15m"),
-    ResearchPolicySpec("consensus_per_strategy_first", "consensus", model_group="legacy_dynamic_mvp", scope_by_strategy=True),
-    ResearchPolicySpec("mvp_hc_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LEGACY_MVP_MODEL),
-    ResearchPolicySpec("mvp_hc_10m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LEGACY_MVP_MODEL, obs_delay_bucket="10m"),
-    ResearchPolicySpec("mvp_hc_15m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LEGACY_MVP_MODEL, obs_delay_bucket="15m"),
-    ResearchPolicySpec("mvp_best_15m_first", "model", StrategyBucket.BEST_BUCKET, model_name=LEGACY_MVP_MODEL, obs_delay_bucket="15m"),
-    ResearchPolicySpec("dynamic_hc_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LEGACY_DYNAMIC_MODEL),
-    ResearchPolicySpec("dynamic_hc_10m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LEGACY_DYNAMIC_MODEL, obs_delay_bucket="10m"),
-    ResearchPolicySpec("dynamic_hc_15m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LEGACY_DYNAMIC_MODEL, obs_delay_bucket="15m"),
-    ResearchPolicySpec("dynamic_best_15m_first", "model", StrategyBucket.BEST_BUCKET, model_name=LEGACY_DYNAMIC_MODEL, obs_delay_bucket="15m"),
-    ResearchPolicySpec("max_so_far_first", "max_so_far", StrategyBucket.MAX_SO_FAR),
-    ResearchPolicySpec("max_so_far_10m_first", "max_so_far", StrategyBucket.MAX_SO_FAR, obs_delay_bucket="10m"),
-    ResearchPolicySpec("max_so_far_15m_first", "max_so_far", StrategyBucket.MAX_SO_FAR, obs_delay_bucket="15m"),
-)
+POLICIES: tuple[ResearchPolicySpec, ...] = _broad_policy_specs()
 
 
 class ResearchPolicyEvaluator:
@@ -285,49 +179,51 @@ class ResearchPolicyEvaluator:
             if item.get("strategy_bucket") == str(StrategyBucket.MAX_SO_FAR):
                 continue
             model_name = str(item.get("model_name") or "")
-            if model_name not in MODEL_PAIRS_BY_MODEL:
+            group_names = CONSENSUS_GROUPS_BY_MODEL.get(model_name)
+            if not group_names:
                 continue
-            pair_name, _, _, _ = MODEL_PAIRS_BY_MODEL[model_name]
-            key = (
-                pair_name,
-                item.get("station"),
-                item.get("market_date"),
-                item.get("obs_delay_bucket"),
-                item.get("strategy_bucket"),
-                item.get("selected_side"),
-                item.get("selected_market_id"),
-                item.get("selected_bucket"),
-            )
-            by_key.setdefault(key, {})[model_name] = item
+            for group_name in group_names:
+                key = (
+                    group_name,
+                    item.get("station"),
+                    item.get("market_date"),
+                    item.get("obs_delay_bucket"),
+                    item.get("strategy_bucket"),
+                    item.get("selected_side"),
+                    item.get("selected_market_id"),
+                    item.get("selected_bucket"),
+                )
+                by_key.setdefault(key, {})[model_name] = item
 
         rows: list[dict[str, Any]] = []
-        for key, pair in by_key.items():
-            pair_name = str(key[0])
-            dynamic_model, mvp_model, consensus_name = MODEL_PAIRS_BY_NAME[pair_name]
-            dynamic = pair.get(dynamic_model)
-            mvp = pair.get(mvp_model)
-            if dynamic is None or mvp is None:
+        for key, snapshots_by_model in by_key.items():
+            group_name = str(key[0])
+            required_models = CONSENSUS_GROUPS[group_name]
+            participants = [snapshots_by_model.get(model_name) for model_name in required_models]
+            if any(item is None for item in participants):
                 continue
-            edge_values = [_float_or_none(dynamic.get("selected_edge")), _float_or_none(mvp.get("selected_edge"))]
-            fair_values = [_selected_fair(dynamic), _selected_fair(mvp)]
-            newer = max((dynamic, mvp), key=lambda item: (str(item.get("timestamp")), int(item.get("id", 0))))
+            agreed = [item for item in participants if item is not None]
+            edge_values = [_float_or_none(item.get("selected_edge")) for item in agreed]
+            fair_values = [_selected_fair(item) for item in agreed]
+            newer = max(agreed, key=lambda item: (str(item.get("timestamp")), int(item.get("id", 0))))
+            base = min(agreed, key=lambda item: int(item.get("id", 0)))
             rows.append(
                 {
-                    **dynamic,
+                    **base,
                     **_liquidity_fields(newer),
                     **_execution_mode_fields(newer),
-                    "id": min(int(dynamic["id"]), int(mvp["id"])),
-                    "timestamp": max(str(dynamic.get("timestamp")), str(mvp.get("timestamp"))),
-                    "model_name": consensus_name,
+                    **_hrrr_fields(newer),
+                    "id": min(int(item["id"]) for item in agreed),
+                    "timestamp": max(str(item.get("timestamp")) for item in agreed),
+                    "model_name": group_name,
                     "selected_edge": _mean_present(edge_values),
                     "selected_fair": _mean_present(fair_values),
-                    "source_prediction_snapshot_ids": [int(dynamic["id"]), int(mvp["id"])],
+                    "source_prediction_snapshot_ids": [int(item["id"]) for item in agreed],
                     "raw_policy": {
-                        "dynamic_snapshot_id": int(dynamic["id"]),
-                        "mvp_snapshot_id": int(mvp["id"]),
-                        "dynamic_edge": dynamic.get("selected_edge"),
-                        "mvp_edge": mvp.get("selected_edge"),
-                        "model_group": pair_name,
+                        "model_group": group_name,
+                        "model_names": list(required_models),
+                        "model_snapshot_ids": {str(item.get("model_name")): int(item["id"]) for item in agreed},
+                        "model_edges": {str(item.get("model_name")): item.get("selected_edge") for item in agreed},
                     },
                 }
             )
@@ -437,6 +333,7 @@ class ResearchPolicyEvaluator:
                 },
                 **dict(candidate.get("raw_policy") or {}),
             },
+            **_hrrr_fields(candidate),
             **_liquidity_fields(candidate),
             **_execution_mode_fields(candidate),
         )
@@ -582,6 +479,35 @@ def _mean_present(values: list[float | None]) -> float | None:
     if not present:
         return None
     return sum(present) / len(present)
+
+
+HRRR_FIELD_NAMES: tuple[str, ...] = (
+    "hrrr_remaining_max",
+    "hrrr_current_temp",
+    "hrrr_current_temp_minus_current_temp",
+    "hrrr_remaining_max_minus_selected_lower",
+    "hrrr_remaining_max_minus_selected_upper",
+    "hrrr_temp_next_3h_max",
+    "hrrr_temp_next_3h_mean",
+    "hrrr_remaining_min",
+    "hrrr_wind_speed_current",
+    "hrrr_wind_speed_next_3h_mean",
+    "hrrr_wind_speed_remaining_max",
+    "hrrr_gust_remaining_max",
+    "hrrr_cloud_cover_current",
+    "hrrr_cloud_cover_next_3h_mean",
+    "hrrr_cloud_cover_remaining_mean",
+    "hrrr_cloud_cover_remaining_max",
+    "hrrr_rh_current",
+    "hrrr_rh_next_3h_mean",
+    "hrrr_rh_remaining_mean",
+    "hrrr_shortwave_next_3h_mean",
+    "hrrr_shortwave_remaining_max",
+)
+
+
+def _hrrr_fields(item: dict[str, Any]) -> dict[str, Any]:
+    return {name: _float_or_none(item.get(name)) for name in HRRR_FIELD_NAMES}
 
 
 def _liquidity_fields(item: dict[str, Any]) -> dict[str, Any]:

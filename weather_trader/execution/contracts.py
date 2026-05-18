@@ -305,6 +305,26 @@ class PredictionSnapshot:
     skip_reason: str | None
     candidate_count: int
     candidate_distribution: list[dict[str, Any]]
+    hrrr_current_temp: float | None = None
+    hrrr_current_temp_minus_current_temp: float | None = None
+    hrrr_remaining_max_minus_selected_lower: float | None = None
+    hrrr_remaining_max_minus_selected_upper: float | None = None
+    hrrr_temp_next_3h_max: float | None = None
+    hrrr_temp_next_3h_mean: float | None = None
+    hrrr_remaining_min: float | None = None
+    hrrr_wind_speed_current: float | None = None
+    hrrr_wind_speed_next_3h_mean: float | None = None
+    hrrr_wind_speed_remaining_max: float | None = None
+    hrrr_gust_remaining_max: float | None = None
+    hrrr_cloud_cover_current: float | None = None
+    hrrr_cloud_cover_next_3h_mean: float | None = None
+    hrrr_cloud_cover_remaining_mean: float | None = None
+    hrrr_cloud_cover_remaining_max: float | None = None
+    hrrr_rh_current: float | None = None
+    hrrr_rh_next_3h_mean: float | None = None
+    hrrr_rh_remaining_mean: float | None = None
+    hrrr_shortwave_next_3h_mean: float | None = None
+    hrrr_shortwave_remaining_max: float | None = None
     selected_best_bid: float | None = None
     selected_best_ask: float | None = None
     selected_spread: float | None = None
@@ -384,6 +404,27 @@ class ResearchPolicyPosition:
     entry_fair: float | None
     source_prediction_snapshot_ids: list[int]
     raw_policy: dict[str, Any]
+    hrrr_current_temp: float | None = None
+    hrrr_current_temp_minus_current_temp: float | None = None
+    hrrr_remaining_max: float | None = None
+    hrrr_remaining_max_minus_selected_lower: float | None = None
+    hrrr_remaining_max_minus_selected_upper: float | None = None
+    hrrr_temp_next_3h_max: float | None = None
+    hrrr_temp_next_3h_mean: float | None = None
+    hrrr_remaining_min: float | None = None
+    hrrr_wind_speed_current: float | None = None
+    hrrr_wind_speed_next_3h_mean: float | None = None
+    hrrr_wind_speed_remaining_max: float | None = None
+    hrrr_gust_remaining_max: float | None = None
+    hrrr_cloud_cover_current: float | None = None
+    hrrr_cloud_cover_next_3h_mean: float | None = None
+    hrrr_cloud_cover_remaining_mean: float | None = None
+    hrrr_cloud_cover_remaining_max: float | None = None
+    hrrr_rh_current: float | None = None
+    hrrr_rh_next_3h_mean: float | None = None
+    hrrr_rh_remaining_mean: float | None = None
+    hrrr_shortwave_next_3h_mean: float | None = None
+    hrrr_shortwave_remaining_max: float | None = None
     selected_best_bid: float | None = None
     selected_best_ask: float | None = None
     selected_spread: float | None = None

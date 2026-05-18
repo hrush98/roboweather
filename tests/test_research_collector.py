@@ -140,14 +140,27 @@ def test_build_prediction_snapshot_persists_buy_no_liquidity(tmp_path) -> None:
     snapshot_id = store.insert_prediction_snapshot(snapshot)
 
     row = store.connection.execute(
-        "select selected_best_ask, selected_depth_at_ask, selected_book_age_seconds, selected_liquidity_json, raw_json from prediction_snapshots where id = ?",
+        """
+        select selected_best_ask, selected_depth_at_ask, selected_book_age_seconds,
+               selected_liquidity_json, hrrr_current_temp,
+               hrrr_current_temp_minus_current_temp,
+               hrrr_remaining_max_minus_selected_lower,
+               hrrr_remaining_max_minus_selected_upper, raw_json
+        from prediction_snapshots
+        where id = ?
+        """,
         (snapshot_id,),
     ).fetchone()
     assert row["selected_best_ask"] == 0.6
     assert row["selected_depth_at_ask"] == 60
     assert row["selected_book_age_seconds"] == 300
+    assert row["hrrr_current_temp"] == 74
+    assert row["hrrr_current_temp_minus_current_temp"] == -1
+    assert row["hrrr_remaining_max_minus_selected_lower"] == 7
+    assert row["hrrr_remaining_max_minus_selected_upper"] == 6
     assert '"ask_plus_0_05"' in row["selected_liquidity_json"]
     assert '"selected_liquidity"' in row["raw_json"]
+    assert '"hrrr_current_temp"' in row["raw_json"]
 
 
 def test_build_prediction_snapshot_persists_buy_yes_liquidity(tmp_path) -> None:
@@ -348,7 +361,7 @@ def _weather(latest_obs_time: str) -> StationWeatherState:
         wind_dir_sin=0,
         wind_dir_cos=1,
         cloud_cover_code=0,
-        hrrr_current_temp=None,
-        hrrr_remaining_max=None,
+        hrrr_current_temp=74,
+        hrrr_remaining_max=82,
         stale=False,
     )

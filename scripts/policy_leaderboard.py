@@ -72,7 +72,7 @@ STATION_TIMEZONES = {
 
 
 def is_active_policy(name: str) -> bool:
-    return name.startswith("pm_us12_") or name.startswith("max_so_far_")
+    return name.startswith("broad_")
 
 
 def parse_bucket(bucket: str | None) -> tuple[float | None, float | None]:

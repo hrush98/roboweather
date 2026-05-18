@@ -70,8 +70,12 @@ def test_execution_store_adds_nullable_liquidity_columns_to_existing_db(tmp_path
     policy_columns = _columns(store, "research_policy_positions")
     assert "selected_depth_ask_plus_0_05" in snapshot_columns
     assert "selected_liquidity_json" in snapshot_columns
+    assert "hrrr_current_temp" in snapshot_columns
+    assert "hrrr_remaining_max_minus_selected_lower" in snapshot_columns
     assert "selected_book_age_seconds" in policy_columns
     assert "selected_liquidity_json" in policy_columns
+    assert "hrrr_current_temp" in policy_columns
+    assert "hrrr_remaining_max_minus_selected_upper" in policy_columns
 
 
 def _columns(store: ExecutionStore, table: str) -> set[str]:

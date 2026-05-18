@@ -337,6 +337,16 @@ def build_prediction_snapshot(
         current_temp=weather.current_temp,
         high_so_far=weather.high_so_far,
         hrrr_remaining_max=weather.hrrr_remaining_max,
+        hrrr_current_temp=weather.hrrr_current_temp,
+        hrrr_current_temp_minus_current_temp=_diff(weather.hrrr_current_temp, weather.current_temp),
+        hrrr_remaining_max_minus_selected_lower=_diff(
+            weather.hrrr_remaining_max,
+            selected_context.market.lower_f if selected_context else None,
+        ),
+        hrrr_remaining_max_minus_selected_upper=_diff(
+            weather.hrrr_remaining_max,
+            selected_context.market.upper_f if selected_context else None,
+        ),
         strategy_bucket=selection.trace.selected_strategy_bucket,
         selected_market_id=selected_market_id,
         selected_bucket=str(selected_candidate.get("bucket")) if selected_candidate else None,
@@ -404,6 +414,12 @@ def _target_value(plan: dict[str, object], target: str, key: str) -> float | Non
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _diff(left: float | None, right: float | None) -> float | None:
+    if left is None or right is None:
+        return None
+    return float(left) - float(right)
 
 
 def _time_in_window(value: day_time, start: day_time, end: day_time) -> bool:
