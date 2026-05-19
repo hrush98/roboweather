@@ -113,14 +113,7 @@ Use this as the place to record future calls on:
 - how much HRRR should influence trading,
 - what edge thresholds are acceptable by window.
 
-### HRRR model family
-
-The HRRR v2 cache now supports a parallel HRRR model family. Keep these models
-separate from observation-only models until validation and research-policy replay
-show clear improvement. See [HRRR model family plan](./hrrr-model-family-plan-2026-05-18.md).
-
 ## Reference Files
 
 - [Changelog](./changelog.md)
 - [Bucket distribution findings](./bucket_distribution_model_findings.md)
-- [HRRR model family plan](./hrrr-model-family-plan-2026-05-18.md)
