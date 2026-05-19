@@ -72,12 +72,14 @@ def test_execution_store_adds_nullable_liquidity_columns_to_existing_db(tmp_path
     assert "selected_liquidity_json" in snapshot_columns
     assert "hrrr_current_temp" in snapshot_columns
     assert "hrrr_remaining_max_minus_selected_lower" in snapshot_columns
+    assert "hrrr_remaining_min_minus_selected_lower" in snapshot_columns
     assert "market_family" in snapshot_columns
     assert "low_so_far" in snapshot_columns
     assert "selected_book_age_seconds" in policy_columns
     assert "selected_liquidity_json" in policy_columns
     assert "hrrr_current_temp" in policy_columns
     assert "hrrr_remaining_max_minus_selected_upper" in policy_columns
+    assert "hrrr_remaining_min_minus_selected_upper" in policy_columns
     assert "market_family" in policy_columns
     assert "market_family" in _columns(store, "markets")
     assert "final_low_tmpf" in _columns(store, "station_date_outcomes")

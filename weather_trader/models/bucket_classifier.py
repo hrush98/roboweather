@@ -24,6 +24,7 @@ BASE_FEATURE_COLUMNS = [
     "day_of_year",
     "current_temp",
     "max_temp_so_far",
+    "min_temp_so_far",
     "temp_change_1h",
     "temp_change_3h",
     "dewpoint",
@@ -38,17 +39,22 @@ BASE_FEATURE_COLUMNS = [
     "upper_minus_current_temp",
     "lower_minus_max_so_far",
     "upper_minus_max_so_far",
+    "lower_minus_min_so_far",
+    "upper_minus_min_so_far",
     "is_left_tail",
     "is_right_tail",
 ]
 HRRR_FEATURE_COLUMNS = [
     "hrrr_current_temp",
     "hrrr_remaining_max",
+    "hrrr_remaining_min",
     "hrrr_current_temp_minus_current_temp",
     "hrrr_lower_minus_current_temp",
     "hrrr_upper_minus_current_temp",
     "hrrr_remaining_max_minus_lower",
     "hrrr_remaining_max_minus_upper",
+    "hrrr_remaining_min_minus_lower",
+    "hrrr_remaining_min_minus_upper",
 ]
 FEATURE_COLUMNS = BASE_FEATURE_COLUMNS + HRRR_FEATURE_COLUMNS
 
@@ -67,6 +73,7 @@ class BucketTrainingArtifacts:
     metrics: dict[str, float]
     feature_columns: list[str]
     ladder_config: LadderConfig
+    temperature_metric: str = "HIGH_TEMP"
 
 
 @dataclass(frozen=True)
@@ -115,12 +122,15 @@ BUCKET_TUNING_CONFIGS = [
 def build_synthetic_bucket_dataset(
     same_day_dataset: pd.DataFrame,
     ladder_config: LadderConfig | None = None,
+    temperature_metric: str = "high",
 ) -> pd.DataFrame:
     config = ladder_config or LadderConfig()
+    metric = _normalize_temperature_metric(temperature_metric)
     frame = same_day_dataset.copy()
     frame["local_date"] = pd.to_datetime(frame["local_date"]).dt.date
     frame["snapshot_time_local"] = pd.to_datetime(frame["snapshot_time_local"], utc=True)
-    frame = frame.loc[frame["final_high_tmpf"].notna()].copy()
+    final_column = _final_temp_column(metric)
+    frame = frame.loc[frame[final_column].notna()].copy()
 
     snapshots = (
         frame.sort_values(["station", "local_date", "snapshot_time_local"])
@@ -130,18 +140,18 @@ def build_synthetic_bucket_dataset(
 
     rows: list[dict[str, object]] = []
     for index, item in enumerate(snapshots.itertuples(index=False)):
-        final_high = float(item.final_high_tmpf)
-        center = int(np.floor(final_high))
+        final_temp = float(getattr(item, final_column))
+        center = int(np.floor(final_temp))
         first_lower = center - config.bounded_buckets_each_side
         last_lower = center + config.bounded_buckets_each_side
         ladder_id = f"{item.station}_{item.local_date}_{index}"
         specs: list[tuple[float | None, float | None]] = [(None, float(first_lower))]
         specs.extend((float(lower), float(lower + 1)) for lower in range(first_lower, last_lower + 1))
         specs.append((float(last_lower + 1), None))
-        winner_index = _winning_bucket_index(final_high, specs)
+        winner_index = _winning_bucket_index(final_temp, specs)
 
         for bucket_index, (lower, upper) in enumerate(specs):
-            rows.append(_candidate_row(item, ladder_id, bucket_index, lower, upper, bucket_index == winner_index))
+            rows.append(_candidate_row(item, ladder_id, bucket_index, lower, upper, bucket_index == winner_index, temperature_metric=metric))
     return pd.DataFrame(rows)
 
 
@@ -151,10 +161,12 @@ def train_bucket_classifier(
     ladder_config: LadderConfig | None = None,
     model_config: BucketModelConfig = DEFAULT_BUCKET_MODEL_CONFIG,
     hour_local_max: int | None = None,
+    temperature_metric: str = "high",
 ) -> BucketTrainingArtifacts:
     config = ladder_config or LadderConfig()
+    metric = _normalize_temperature_metric(temperature_metric)
     filtered_dataset = _filter_source_dataset(dataset, hour_local_max=hour_local_max)
-    candidates = build_synthetic_bucket_dataset(filtered_dataset, config)
+    candidates = build_synthetic_bucket_dataset(filtered_dataset, config, temperature_metric=metric)
     candidates["local_date"] = pd.to_datetime(candidates["local_date"])
     train = candidates.loc[candidates["local_date"].dt.year < validation_year].copy()
     validation = candidates.loc[candidates["local_date"].dt.year == validation_year].copy()
@@ -206,6 +218,7 @@ def train_bucket_classifier(
         feature_columns=feature_columns,
         validation_year=validation_year,
         ladder_config=config,
+        temperature_metric=metric,
     )
     metrics = build_grouped_metrics(predictions)
     return BucketTrainingArtifacts(
@@ -215,6 +228,7 @@ def train_bucket_classifier(
         metrics=metrics,
         feature_columns=feature_columns,
         ladder_config=config,
+        temperature_metric=_artifact_metric(metric),
     )
 
 
@@ -224,6 +238,7 @@ def tune_bucket_model_configs(
     ladder_config: LadderConfig | None = None,
     configs: list[BucketModelConfig] | None = None,
     hour_local_max: int | None = None,
+    temperature_metric: str = "high",
 ) -> pd.DataFrame:
     rows = []
     for config in configs or BUCKET_TUNING_CONFIGS:
@@ -233,6 +248,7 @@ def tune_bucket_model_configs(
             ladder_config=ladder_config,
             model_config=config,
             hour_local_max=hour_local_max,
+            temperature_metric=temperature_metric,
         )
         rows.append(
             {
@@ -256,6 +272,7 @@ def train_catboost_bucket_classifier(
     validation_year: int = 2025,
     ladder_config: LadderConfig | None = None,
     hour_local_max: int | None = None,
+    temperature_metric: str = "high",
 ) -> BucketTrainingArtifacts:
     try:
         from catboost import CatBoostClassifier
@@ -263,8 +280,9 @@ def train_catboost_bucket_classifier(
         raise ModuleNotFoundError("CatBoost is not installed. Install catboost in the experiment environment before running train-catboost-bucket-model.") from exc
 
     config = ladder_config or LadderConfig()
+    metric = _normalize_temperature_metric(temperature_metric)
     filtered_dataset = _filter_source_dataset(dataset, hour_local_max=hour_local_max)
-    candidates = build_synthetic_bucket_dataset(filtered_dataset, config)
+    candidates = build_synthetic_bucket_dataset(filtered_dataset, config, temperature_metric=metric)
     candidates["local_date"] = pd.to_datetime(candidates["local_date"])
     train = candidates.loc[candidates["local_date"].dt.year < validation_year].copy()
     validation = candidates.loc[candidates["local_date"].dt.year == validation_year].copy()
@@ -293,6 +311,7 @@ def train_catboost_bucket_classifier(
         feature_columns=feature_columns,
         validation_year=validation_year,
         ladder_config=config,
+        temperature_metric=metric,
     )
     metrics = build_grouped_metrics(predictions)
     return BucketTrainingArtifacts(
@@ -302,6 +321,7 @@ def train_catboost_bucket_classifier(
         metrics=metrics,
         feature_columns=feature_columns,
         ladder_config=config,
+        temperature_metric=_artifact_metric(metric),
     )
 
 
@@ -316,6 +336,8 @@ def save_bucket_artifacts(artifacts: BucketTrainingArtifacts, output_path: Path)
             "metrics": artifacts.metrics,
             "feature_columns": artifacts.feature_columns,
             "ladder_config": asdict(artifacts.ladder_config),
+            "market_family": artifacts.temperature_metric,
+            "temperature_metric": artifacts.temperature_metric,
         },
         output_path,
     )
@@ -332,6 +354,8 @@ def save_catboost_bucket_artifacts(artifacts: BucketTrainingArtifacts, output_pa
             "metrics": artifacts.metrics,
             "feature_columns": artifacts.feature_columns,
             "ladder_config": asdict(artifacts.ladder_config),
+            "market_family": artifacts.temperature_metric,
+            "temperature_metric": artifacts.temperature_metric,
         },
         output_path,
     )
@@ -343,8 +367,9 @@ def build_bucket_validation_predictions(
     feature_columns: list[str],
     validation_year: int,
     ladder_config: LadderConfig | None = None,
+    temperature_metric: str = "high",
 ) -> pd.DataFrame:
-    candidates = build_synthetic_bucket_dataset(dataset, ladder_config)
+    candidates = build_synthetic_bucket_dataset(dataset, ladder_config, temperature_metric=temperature_metric)
     candidates["local_date"] = pd.to_datetime(candidates["local_date"])
     validation = candidates.loc[candidates["local_date"].dt.year == validation_year].copy()
     if validation.empty:
@@ -366,9 +391,10 @@ def build_threshold_bucket_validation_predictions(
     threshold_feature_columns: list[str],
     validation_year: int,
     ladder_config: LadderConfig | None = None,
+    temperature_metric: str = "high",
 ) -> pd.DataFrame:
     config = ladder_config or LadderConfig()
-    candidates = build_synthetic_bucket_dataset(dataset, ladder_config)
+    candidates = build_synthetic_bucket_dataset(dataset, ladder_config, temperature_metric=temperature_metric)
     candidates["local_date"] = pd.to_datetime(candidates["local_date"])
     validation = candidates.loc[candidates["local_date"].dt.year == validation_year].copy()
     if validation.empty:
@@ -539,9 +565,22 @@ def build_model_comparison_report(
     )
 
 
-def _candidate_row(item, ladder_id: str, bucket_index: int, lower: float | None, upper: float | None, target: bool) -> dict[str, object]:
+def _candidate_row(
+    item,
+    ladder_id: str,
+    bucket_index: int,
+    lower: float | None,
+    upper: float | None,
+    target: bool,
+    temperature_metric: str = "high",
+) -> dict[str, object]:
     current_temp = float(item.current_temp)
-    max_so_far = float(item.max_temp_so_far)
+    max_so_far = _get_optional_float(item, "max_temp_so_far", np.nan)
+    min_so_far = _get_optional_float(item, "min_temp_so_far", _get_optional_float(item, "low_so_far", current_temp))
+    final_high = _get_optional_float(item, "final_high_tmpf", np.nan)
+    final_low = _get_optional_float(item, "final_low_tmpf", np.nan)
+    final_temp = final_low if temperature_metric == "low" else final_high
+    progress_temp = min_so_far if temperature_metric == "low" else max_so_far
     row = {
         "station": item.station,
         "local_date": item.local_date,
@@ -557,7 +596,8 @@ def _candidate_row(item, ladder_id: str, bucket_index: int, lower: float | None,
         "hour_local": item.hour_local,
         "day_of_year": item.day_of_year,
         "current_temp": item.current_temp,
-        "max_temp_so_far": item.max_temp_so_far,
+        "max_temp_so_far": max_so_far,
+        "min_temp_so_far": min_so_far,
         "temp_change_1h": getattr(item, "temp_change_1h", np.nan),
         "temp_change_3h": getattr(item, "temp_change_3h", np.nan),
         "dewpoint": getattr(item, "dewpoint", np.nan),
@@ -569,21 +609,29 @@ def _candidate_row(item, ladder_id: str, bucket_index: int, lower: float | None,
         "upper_minus_current_temp": upper - current_temp if upper is not None else np.nan,
         "lower_minus_max_so_far": lower - max_so_far if lower is not None else np.nan,
         "upper_minus_max_so_far": upper - max_so_far if upper is not None else np.nan,
-        "final_high_tmpf": float(item.final_high_tmpf),
+        "lower_minus_min_so_far": lower - min_so_far if lower is not None else np.nan,
+        "upper_minus_min_so_far": upper - min_so_far if upper is not None else np.nan,
+        "final_high_tmpf": final_high,
+        "final_low_tmpf": final_low,
+        "final_tmpf": final_temp,
         "target": int(target),
-        "contains_max_so_far": _contains(max_so_far, lower, upper),
+        "contains_max_so_far": _contains(progress_temp, lower, upper),
     }
     hrrr_current = getattr(item, "hrrr_current_temp", np.nan)
     hrrr_remaining = getattr(item, "hrrr_remaining_max", np.nan)
+    hrrr_remaining_min = getattr(item, "hrrr_remaining_min", np.nan)
     row.update(
         {
             "hrrr_current_temp": hrrr_current,
             "hrrr_remaining_max": hrrr_remaining,
+            "hrrr_remaining_min": hrrr_remaining_min,
             "hrrr_current_temp_minus_current_temp": hrrr_current - current_temp if pd.notna(hrrr_current) else np.nan,
             "hrrr_lower_minus_current_temp": lower - hrrr_current if lower is not None and pd.notna(hrrr_current) else np.nan,
             "hrrr_upper_minus_current_temp": upper - hrrr_current if upper is not None and pd.notna(hrrr_current) else np.nan,
             "hrrr_remaining_max_minus_lower": hrrr_remaining - lower if lower is not None and pd.notna(hrrr_remaining) else np.nan,
             "hrrr_remaining_max_minus_upper": hrrr_remaining - upper if upper is not None and pd.notna(hrrr_remaining) else np.nan,
+            "hrrr_remaining_min_minus_lower": hrrr_remaining_min - lower if lower is not None and pd.notna(hrrr_remaining_min) else np.nan,
+            "hrrr_remaining_min_minus_upper": hrrr_remaining_min - upper if upper is not None and pd.notna(hrrr_remaining_min) else np.nan,
         }
     )
     return row
@@ -604,8 +652,12 @@ def _predict_threshold_survival(
     examples["threshold"] = thresholds.loc[active].astype(float)
     examples["threshold_minus_current_temp"] = examples["threshold"] - examples["current_temp"].astype(float)
     examples["threshold_minus_max_so_far"] = examples["threshold"] - examples["max_temp_so_far"].astype(float)
+    if "min_temp_so_far" in examples:
+        examples["threshold_minus_min_so_far"] = examples["threshold"] - examples["min_temp_so_far"].astype(float)
     if "hrrr_remaining_max" in examples:
         examples["hrrr_remaining_max_minus_threshold"] = examples["hrrr_remaining_max"] - examples["threshold"]
+    if "hrrr_remaining_min" in examples:
+        examples["hrrr_remaining_min_minus_threshold"] = examples["hrrr_remaining_min"] - examples["threshold"]
     for column in feature_columns:
         if column not in examples:
             examples[column] = np.nan
@@ -672,6 +724,26 @@ def _select_active_feature_columns(frame: pd.DataFrame) -> list[str]:
         elif column in frame and frame[column].notna().any():
             active.append(column)
     return active
+
+
+def _normalize_temperature_metric(value: str) -> str:
+    text = str(value).lower()
+    if text not in {"high", "low"}:
+        raise ValueError("temperature_metric must be 'high' or 'low'")
+    return text
+
+
+def _artifact_metric(metric: str) -> str:
+    return "LOW_TEMP" if metric == "low" else "HIGH_TEMP"
+
+
+def _final_temp_column(metric: str) -> str:
+    return "final_low_tmpf" if metric == "low" else "final_high_tmpf"
+
+
+def _get_optional_float(item, name: str, default: float) -> float:
+    value = getattr(item, name, default)
+    return float(value) if pd.notna(value) else default
 
 
 def _filter_source_dataset(dataset: pd.DataFrame, hour_local_max: int | None = None) -> pd.DataFrame:

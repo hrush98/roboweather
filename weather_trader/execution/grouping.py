@@ -6,6 +6,7 @@ from datetime import date
 from weather_trader.execution.contracts import (
     BookSnapshot,
     Decision,
+    MarketFamily,
     MarketSnapshot,
     Signal,
     StationDateDecisionTrace,
@@ -230,7 +231,18 @@ class StationDateDecisionEngine:
         if strategy_bucket == StrategyBucket.BEST_BUCKET:
             return max(contexts, key=lambda context: context.signal.fair_yes)
         if strategy_bucket == StrategyBucket.MAX_SO_FAR:
-            return next((context for context in contexts if _contains(context.signal.high_so_far, context.market.lower_f, context.market.upper_f)), None)
+            return next(
+                (
+                    context
+                    for context in contexts
+                    if _contains(
+                        _progress_temp(context),
+                        context.market.lower_f,
+                        context.market.upper_f,
+                    )
+                ),
+                None,
+            )
 
         candidates: list[tuple[float, GroupMarketContext]] = []
         for context in contexts:
@@ -317,6 +329,12 @@ def _best_side(
     if no_edge > yes_edge:
         return TradeAction.BUY_NO, context.signal.fair_no, context.signal.edge_no, context.no_book
     return TradeAction.BUY_YES, context.signal.fair_yes, context.signal.edge_yes, context.yes_book
+
+
+def _progress_temp(context: GroupMarketContext) -> float:
+    if context.market.market_family == MarketFamily.LOW_TEMP:
+        return context.signal.low_so_far if context.signal.low_so_far is not None else context.signal.current_temp
+    return context.signal.high_so_far
 
 
 def _contains(value: float, lower_f: float | None, upper_f: float | None) -> bool:

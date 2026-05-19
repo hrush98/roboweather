@@ -130,6 +130,7 @@ def main() -> None:
     train_model.add_argument("--validation-year", type=int, default=2025)
     train_model.add_argument("--report-dir", required=False)
     train_model.add_argument("--require-hrrr", action="store_true")
+    train_model.add_argument("--temperature-metric", choices=["high", "low"], default="high")
 
     train_bucket_model = subparsers.add_parser("train-bucket-model", help="Train dynamic bucket candidate classifier")
     train_bucket_model.add_argument("--dataset", required=True)
@@ -139,6 +140,7 @@ def main() -> None:
     train_bucket_model.add_argument("--require-hrrr", action="store_true")
     train_bucket_model.add_argument("--hour-local-max", type=int, default=None)
     train_bucket_model.add_argument("--bucket-config", default="current_sigmoid")
+    train_bucket_model.add_argument("--temperature-metric", choices=["high", "low"], default="high")
 
     train_catboost_bucket_model = subparsers.add_parser("train-catboost-bucket-model", help="Train CatBoost dynamic bucket classifier")
     train_catboost_bucket_model.add_argument("--dataset", required=True)
@@ -186,6 +188,7 @@ def main() -> None:
     tune_model.add_argument("--output", required=True)
     tune_model.add_argument("--validation-year", type=int, default=2025)
     tune_model.add_argument("--require-hrrr", action="store_true")
+    tune_model.add_argument("--temperature-metric", choices=["high", "low"], default="high")
 
     tune_bucket_model = subparsers.add_parser("tune-bucket-model", help="Compare dynamic bucket classifier configs on chronological validation")
     tune_bucket_model.add_argument("--dataset", required=True)
@@ -193,6 +196,7 @@ def main() -> None:
     tune_bucket_model.add_argument("--validation-year", type=int, default=2025)
     tune_bucket_model.add_argument("--require-hrrr", action="store_true")
     tune_bucket_model.add_argument("--hour-local-max", type=int, default=None)
+    tune_bucket_model.add_argument("--temperature-metric", choices=["high", "low"], default="high")
 
     build_next_day = subparsers.add_parser("build-next-day-dataset", help="Build synthetic next-day threshold dataset from same-day rows")
     build_next_day.add_argument("--same-day-dataset", required=True)
@@ -320,7 +324,7 @@ def main() -> None:
         build_dataset_command(args.start, args.end, args.all_stations, args.stations)
         return
     if args.command == "train-model":
-        train_model_command(args.dataset, args.output, args.validation_year, args.report_dir, args.require_hrrr)
+        train_model_command(args.dataset, args.output, args.validation_year, args.report_dir, args.require_hrrr, args.temperature_metric)
         return
     if args.command == "train-bucket-model":
         train_bucket_model_command(
@@ -331,6 +335,7 @@ def main() -> None:
             args.require_hrrr,
             args.hour_local_max,
             args.bucket_config,
+            args.temperature_metric,
         )
         return
     if args.command == "train-catboost-bucket-model":
@@ -366,10 +371,10 @@ def main() -> None:
         validate_model_data_command(args.dataset, args.kind, args.validation_year, args.report_dir, args.require_hrrr)
         return
     if args.command == "tune-model":
-        tune_model_command(args.dataset, args.output, args.validation_year, args.require_hrrr)
+        tune_model_command(args.dataset, args.output, args.validation_year, args.require_hrrr, args.temperature_metric)
         return
     if args.command == "tune-bucket-model":
-        tune_bucket_model_command(args.dataset, args.output, args.validation_year, args.require_hrrr, args.hour_local_max)
+        tune_bucket_model_command(args.dataset, args.output, args.validation_year, args.require_hrrr, args.hour_local_max, args.temperature_metric)
         return
     if args.command == "build-next-day-dataset":
         build_next_day_dataset_command(args.same_day_dataset, args.output)
@@ -577,20 +582,23 @@ def train_model_command(
     validation_year: int,
     report_dir: str | None,
     require_hrrr: bool,
+    temperature_metric: str = "high",
 ) -> None:
     dataset = pd.read_csv(dataset_path)
     if require_hrrr:
-        dataset = dataset.loc[dataset["hrrr_remaining_max"].notna()].copy()
-    diagnostics = validate_same_day_dataset(dataset, validation_year=validation_year)
-    if diagnostics.has_errors:
+        hrrr_column = "hrrr_remaining_min" if temperature_metric == "low" else "hrrr_remaining_max"
+        dataset = dataset.loc[dataset[hrrr_column].notna()].copy()
+    diagnostics = None if temperature_metric == "low" else validate_same_day_dataset(dataset, validation_year=validation_year)
+    if diagnostics is not None and diagnostics.has_errors:
         raise ValueError(_format_diagnostic_errors(diagnostics))
-    artifacts = train_and_calibrate(dataset=dataset, validation_year=validation_year)
+    artifacts = train_and_calibrate(dataset=dataset, validation_year=validation_year, temperature_metric=temperature_metric)
     save_artifacts(artifacts, Path(output_path))
     output = {
         "train_rows": artifacts.train_rows,
         "validation_rows": artifacts.validation_rows,
         "feature_columns": artifacts.feature_columns,
         "metrics": artifacts.metrics,
+        "temperature_metric": artifacts.temperature_metric,
     }
     if report_dir:
         report_path = Path(report_dir)
@@ -600,6 +608,7 @@ def train_model_command(
             model=artifacts.model,
             feature_columns=artifacts.feature_columns,
             validation_year=validation_year,
+            temperature_metric=temperature_metric,
         )
         predictions.to_csv(report_path / "validation_predictions.csv", index=False)
         bucket_reports = build_bucket_reports(predictions)
@@ -607,7 +616,8 @@ def train_model_command(
             frame.to_csv(report_path / f"bucket_{name}.csv", index=False)
         build_reliability_report(predictions).to_csv(report_path / "reliability.csv", index=False)
         build_station_report(predictions).to_csv(report_path / "station_metrics.csv", index=False)
-        _write_diagnostics(report_path, diagnostics)
+        if diagnostics is not None:
+            _write_diagnostics(report_path, diagnostics)
         output["report_dir"] = str(report_path)
     print(json.dumps(output, indent=2))
 
@@ -620,17 +630,24 @@ def train_bucket_model_command(
     require_hrrr: bool,
     hour_local_max: int | None = None,
     bucket_config_name: str = "current_sigmoid",
+    temperature_metric: str = "high",
 ) -> None:
     dataset = pd.read_csv(dataset_path)
     if require_hrrr:
-        dataset = dataset.loc[dataset["hrrr_remaining_max"].notna()].copy()
+        hrrr_column = "hrrr_remaining_min" if temperature_metric == "low" else "hrrr_remaining_max"
+        dataset = dataset.loc[dataset[hrrr_column].notna()].copy()
     if hour_local_max is not None:
         dataset = dataset.loc[pd.to_numeric(dataset["hour_local"], errors="coerce") <= hour_local_max].copy()
-    diagnostics = validate_same_day_dataset(dataset, validation_year=validation_year)
-    if diagnostics.has_errors:
+    diagnostics = None if temperature_metric == "low" else validate_same_day_dataset(dataset, validation_year=validation_year)
+    if diagnostics is not None and diagnostics.has_errors:
         raise ValueError(_format_diagnostic_errors(diagnostics))
     bucket_config = _bucket_model_config(bucket_config_name)
-    artifacts = train_bucket_classifier(dataset=dataset, validation_year=validation_year, model_config=bucket_config)
+    artifacts = train_bucket_classifier(
+        dataset=dataset,
+        validation_year=validation_year,
+        model_config=bucket_config,
+        temperature_metric=temperature_metric,
+    )
     save_bucket_artifacts(artifacts, Path(output_path))
     output = {
         "model_type": "dynamic_bucket",
@@ -641,6 +658,7 @@ def train_bucket_model_command(
         "metrics": artifacts.metrics,
         "hour_local_max": hour_local_max,
         "bucket_config": bucket_config.name,
+        "temperature_metric": artifacts.temperature_metric,
     }
     if report_dir:
         report_path = Path(report_dir)
@@ -651,9 +669,11 @@ def train_bucket_model_command(
             feature_columns=artifacts.feature_columns,
             validation_year=validation_year,
             ladder_config=artifacts.ladder_config,
+            temperature_metric=temperature_metric,
         )
         _write_bucket_prediction_reports(report_path, predictions)
-        _write_diagnostics(report_path, diagnostics)
+        if diagnostics is not None:
+            _write_diagnostics(report_path, diagnostics)
         output["report_dir"] = str(report_path)
     print(json.dumps(output, indent=2))
 
@@ -1018,11 +1038,12 @@ def validate_model_data_command(
         raise SystemExit(1)
 
 
-def tune_model_command(dataset_path: str, output_path: str, validation_year: int, require_hrrr: bool) -> None:
+def tune_model_command(dataset_path: str, output_path: str, validation_year: int, require_hrrr: bool, temperature_metric: str = "high") -> None:
     dataset = pd.read_csv(dataset_path)
     if require_hrrr:
-        dataset = dataset.loc[dataset["hrrr_remaining_max"].notna()].copy()
-    results = tune_model_configs(dataset=dataset, validation_year=validation_year)
+        hrrr_column = "hrrr_remaining_min" if temperature_metric == "low" else "hrrr_remaining_max"
+        dataset = dataset.loc[dataset[hrrr_column].notna()].copy()
+    results = tune_model_configs(dataset=dataset, validation_year=validation_year, temperature_metric=temperature_metric)
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     results.to_csv(output, index=False)
@@ -1032,6 +1053,7 @@ def tune_model_command(dataset_path: str, output_path: str, validation_year: int
                 "output": str(output),
                 "best": results.iloc[0].to_dict() if not results.empty else None,
                 "rows": int(len(results)),
+                "temperature_metric": temperature_metric,
             },
             indent=2,
         )
@@ -1044,13 +1066,15 @@ def tune_bucket_model_command(
     validation_year: int,
     require_hrrr: bool,
     hour_local_max: int | None = None,
+    temperature_metric: str = "high",
 ) -> None:
     dataset = pd.read_csv(dataset_path)
     if require_hrrr:
-        dataset = dataset.loc[dataset["hrrr_remaining_max"].notna()].copy()
+        hrrr_column = "hrrr_remaining_min" if temperature_metric == "low" else "hrrr_remaining_max"
+        dataset = dataset.loc[dataset[hrrr_column].notna()].copy()
     if hour_local_max is not None:
         dataset = dataset.loc[pd.to_numeric(dataset["hour_local"], errors="coerce") <= hour_local_max].copy()
-    results = tune_bucket_model_configs(dataset=dataset, validation_year=validation_year)
+    results = tune_bucket_model_configs(dataset=dataset, validation_year=validation_year, temperature_metric=temperature_metric)
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     results.to_csv(output, index=False)
@@ -1061,6 +1085,7 @@ def tune_bucket_model_command(
                 "best": results.iloc[0].to_dict() if not results.empty else None,
                 "rows": int(len(results)),
                 "hour_local_max": hour_local_max,
+                "temperature_metric": temperature_metric,
             },
             indent=2,
         )

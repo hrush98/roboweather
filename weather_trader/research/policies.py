@@ -516,6 +516,8 @@ HRRR_FIELD_NAMES: tuple[str, ...] = (
     "hrrr_current_temp_minus_current_temp",
     "hrrr_remaining_max_minus_selected_lower",
     "hrrr_remaining_max_minus_selected_upper",
+    "hrrr_remaining_min_minus_selected_lower",
+    "hrrr_remaining_min_minus_selected_upper",
     "hrrr_temp_next_3h_max",
     "hrrr_temp_next_3h_mean",
     "hrrr_remaining_min",

@@ -324,6 +324,8 @@ class PredictionSnapshot:
     hrrr_current_temp_minus_current_temp: float | None = None
     hrrr_remaining_max_minus_selected_lower: float | None = None
     hrrr_remaining_max_minus_selected_upper: float | None = None
+    hrrr_remaining_min_minus_selected_lower: float | None = None
+    hrrr_remaining_min_minus_selected_upper: float | None = None
     hrrr_temp_next_3h_max: float | None = None
     hrrr_temp_next_3h_mean: float | None = None
     hrrr_remaining_min: float | None = None
@@ -428,6 +430,8 @@ class ResearchPolicyPosition:
     hrrr_remaining_max: float | None = None
     hrrr_remaining_max_minus_selected_lower: float | None = None
     hrrr_remaining_max_minus_selected_upper: float | None = None
+    hrrr_remaining_min_minus_selected_lower: float | None = None
+    hrrr_remaining_min_minus_selected_upper: float | None = None
     hrrr_temp_next_3h_max: float | None = None
     hrrr_temp_next_3h_mean: float | None = None
     hrrr_remaining_min: float | None = None

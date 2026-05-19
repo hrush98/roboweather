@@ -212,7 +212,7 @@ def test_tune_bucket_model_parser_dispatches(monkeypatch) -> None:
 
     cli.main()
 
-    assert captured["args"] == ("data/raw/sample.csv", "data/reports/bucket_tuning.csv", 2025, True, None)
+    assert captured["args"] == ("data/raw/sample.csv", "data/reports/bucket_tuning.csv", 2025, True, None, "high")
 
 
 def test_train_bucket_model_accepts_hour_local_max(monkeypatch) -> None:
@@ -242,7 +242,7 @@ def test_train_bucket_model_accepts_hour_local_max(monkeypatch) -> None:
 
     cli.main()
 
-    assert captured["args"] == ("data/raw/sample.csv", "data/models/early.joblib", 2025, None, False, 10, "current_sigmoid")
+    assert captured["args"] == ("data/raw/sample.csv", "data/models/early.joblib", 2025, None, False, 10, "current_sigmoid", "high")
 
 
 def test_catboost_bucket_model_parser_dispatches(monkeypatch) -> None:

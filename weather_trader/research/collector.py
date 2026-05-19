@@ -358,6 +358,14 @@ def build_prediction_snapshot(
             weather.hrrr_remaining_max,
             selected_context.market.upper_f if selected_context else None,
         ),
+        hrrr_remaining_min_minus_selected_lower=_diff(
+            weather.hrrr_remaining_min,
+            selected_context.market.lower_f if selected_context else None,
+        ),
+        hrrr_remaining_min_minus_selected_upper=_diff(
+            weather.hrrr_remaining_min,
+            selected_context.market.upper_f if selected_context else None,
+        ),
         strategy_bucket=selection.trace.selected_strategy_bucket,
         selected_market_id=selected_market_id,
         selected_bucket=str(selected_candidate.get("bucket")) if selected_candidate else None,

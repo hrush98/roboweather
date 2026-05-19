@@ -21,9 +21,11 @@ FEATURE_COLUMNS = [
     "day_of_year",
     "current_temp",
     "max_temp_so_far",
+    "min_temp_so_far",
     "threshold",
     "threshold_minus_current_temp",
     "threshold_minus_max_so_far",
+    "threshold_minus_min_so_far",
     "temp_change_1h",
     "temp_change_3h",
     "dewpoint",
@@ -33,7 +35,9 @@ FEATURE_COLUMNS = [
     "cloud_cover_code",
     "hrrr_current_temp",
     "hrrr_remaining_max",
+    "hrrr_remaining_min",
     "hrrr_remaining_max_minus_threshold",
+    "hrrr_remaining_min_minus_threshold",
     "hrrr_current_temp_minus_current_temp",
 ]
 CAT_COLUMNS = ["station"]
@@ -47,6 +51,7 @@ class TrainingArtifacts:
     validation_rows: int
     metrics: dict[str, float]
     feature_columns: list[str]
+    temperature_metric: str = "HIGH_TEMP"
 
 
 @dataclass(frozen=True)
@@ -76,8 +81,10 @@ def train_and_calibrate(
     dataset: pd.DataFrame,
     validation_year: int = 2025,
     config: ModelConfig = DEFAULT_MODEL_CONFIG,
+    temperature_metric: str = "high",
 ) -> TrainingArtifacts:
-    frame = dataset.copy()
+    metric = _normalize_temperature_metric(temperature_metric)
+    frame = prepare_temperature_metric_dataset(dataset, metric)
     frame["local_date"] = pd.to_datetime(frame["local_date"])
     frame = _ensure_optional_columns(frame)
 
@@ -125,6 +132,7 @@ def train_and_calibrate(
         validation_rows=len(validation),
         metrics=metrics,
         feature_columns=active_feature_columns,
+        temperature_metric=_artifact_metric(metric),
     )
 
 
@@ -132,10 +140,11 @@ def tune_model_configs(
     dataset: pd.DataFrame,
     validation_year: int = 2025,
     configs: list[ModelConfig] | None = None,
+    temperature_metric: str = "high",
 ) -> pd.DataFrame:
     results = []
     for config in configs or TUNING_CONFIGS:
-        artifacts = train_and_calibrate(dataset=dataset, validation_year=validation_year, config=config)
+        artifacts = train_and_calibrate(dataset=dataset, validation_year=validation_year, config=config, temperature_metric=temperature_metric)
         results.append(
             {
                 "config": config.name,
@@ -162,6 +171,8 @@ def save_artifacts(artifacts: TrainingArtifacts, output_path: Path) -> None:
             "validation_rows": artifacts.validation_rows,
             "metrics": artifacts.metrics,
             "feature_columns": artifacts.feature_columns,
+            "market_family": artifacts.temperature_metric,
+            "temperature_metric": artifacts.temperature_metric,
         },
         output_path,
     )
@@ -176,8 +187,9 @@ def build_validation_predictions(
     model,
     feature_columns: list[str],
     validation_year: int,
+    temperature_metric: str = "high",
 ) -> pd.DataFrame:
-    frame = dataset.copy()
+    frame = prepare_temperature_metric_dataset(dataset, temperature_metric)
     frame["local_date"] = pd.to_datetime(frame["local_date"])
     frame = _ensure_optional_columns(frame)
     validation = frame.loc[frame["local_date"].dt.year == validation_year].copy()
@@ -191,12 +203,16 @@ def build_validation_predictions(
         "hour_local",
         "current_temp",
         "max_temp_so_far",
+        "min_temp_so_far",
         "threshold",
         "threshold_minus_current_temp",
         "threshold_minus_max_so_far",
+        "threshold_minus_min_so_far",
         "hrrr_current_temp",
         "hrrr_remaining_max",
+        "hrrr_remaining_min",
         "hrrr_remaining_max_minus_threshold",
+        "hrrr_remaining_min_minus_threshold",
         "target",
     ]
     for column in keep_columns:
@@ -295,6 +311,42 @@ def _ensure_optional_columns(frame: pd.DataFrame) -> pd.DataFrame:
         if column not in frame.columns:
             frame[column] = np.nan
     return frame
+
+
+def prepare_temperature_metric_dataset(dataset: pd.DataFrame, temperature_metric: str = "high") -> pd.DataFrame:
+    metric = _normalize_temperature_metric(temperature_metric)
+    frame = dataset.copy()
+    if metric == "high":
+        if "target" not in frame and {"final_high_tmpf", "threshold"} <= set(frame.columns):
+            frame["target"] = (frame["final_high_tmpf"].astype(float) >= frame["threshold"].astype(float)).astype(int)
+        return frame
+
+    if "final_low_tmpf" not in frame:
+        raise ValueError("--temperature-metric low requires final_low_tmpf")
+    if "min_temp_so_far" not in frame:
+        if "low_so_far" in frame:
+            frame["min_temp_so_far"] = frame["low_so_far"]
+        else:
+            raise ValueError("--temperature-metric low requires min_temp_so_far or low_so_far")
+    frame["target"] = (frame["final_low_tmpf"].astype(float) <= frame["threshold"].astype(float)).astype(int)
+    frame["threshold_minus_current_temp"] = frame["threshold"].astype(float) - frame["current_temp"].astype(float)
+    frame["threshold_minus_min_so_far"] = frame["threshold"].astype(float) - frame["min_temp_so_far"].astype(float)
+    if "threshold_minus_max_so_far" not in frame and "max_temp_so_far" in frame:
+        frame["threshold_minus_max_so_far"] = frame["threshold"].astype(float) - frame["max_temp_so_far"].astype(float)
+    if "hrrr_remaining_min" in frame:
+        frame["hrrr_remaining_min_minus_threshold"] = frame["hrrr_remaining_min"].astype(float) - frame["threshold"].astype(float)
+    return frame
+
+
+def _normalize_temperature_metric(value: str) -> str:
+    text = str(value).lower()
+    if text not in {"high", "low"}:
+        raise ValueError("temperature_metric must be 'high' or 'low'")
+    return text
+
+
+def _artifact_metric(metric: str) -> str:
+    return "LOW_TEMP" if metric == "low" else "HIGH_TEMP"
 
 
 def _select_active_feature_columns(frame: pd.DataFrame) -> list[str]:

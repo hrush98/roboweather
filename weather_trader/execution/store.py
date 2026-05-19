@@ -37,6 +37,8 @@ HRRR_POLICY_CONTEXT_COLUMNS: dict[str, str] = {
     "hrrr_current_temp_minus_current_temp": "real",
     "hrrr_remaining_max_minus_selected_lower": "real",
     "hrrr_remaining_max_minus_selected_upper": "real",
+    "hrrr_remaining_min_minus_selected_lower": "real",
+    "hrrr_remaining_min_minus_selected_upper": "real",
     "hrrr_temp_next_3h_max": "real",
     "hrrr_temp_next_3h_mean": "real",
     "hrrr_remaining_min": "real",
@@ -240,6 +242,8 @@ class ExecutionStore:
                 hrrr_current_temp_minus_current_temp real,
                 hrrr_remaining_max_minus_selected_lower real,
                 hrrr_remaining_max_minus_selected_upper real,
+                hrrr_remaining_min_minus_selected_lower real,
+                hrrr_remaining_min_minus_selected_upper real,
                 hrrr_temp_next_3h_max real,
                 hrrr_temp_next_3h_mean real,
                 hrrr_remaining_min real,
@@ -359,6 +363,8 @@ class ExecutionStore:
                 hrrr_current_temp_minus_current_temp real,
                 hrrr_remaining_max_minus_selected_lower real,
                 hrrr_remaining_max_minus_selected_upper real,
+                hrrr_remaining_min_minus_selected_lower real,
+                hrrr_remaining_min_minus_selected_upper real,
                 hrrr_temp_next_3h_max real,
                 hrrr_temp_next_3h_mean real,
                 hrrr_remaining_min real,
@@ -615,6 +621,8 @@ class ExecutionStore:
                 hrrr_current_temp_minus_current_temp real,
                 hrrr_remaining_max_minus_selected_lower real,
                 hrrr_remaining_max_minus_selected_upper real,
+                hrrr_remaining_min_minus_selected_lower real,
+                hrrr_remaining_min_minus_selected_upper real,
                 hrrr_temp_next_3h_max real,
                 hrrr_temp_next_3h_mean real,
                 hrrr_remaining_min real,
@@ -949,6 +957,7 @@ class ExecutionStore:
                 obs_delay_bucket, current_temp, high_so_far, hrrr_remaining_max,
                 hrrr_current_temp, hrrr_current_temp_minus_current_temp,
                 hrrr_remaining_max_minus_selected_lower, hrrr_remaining_max_minus_selected_upper,
+                hrrr_remaining_min_minus_selected_lower, hrrr_remaining_min_minus_selected_upper,
                 hrrr_temp_next_3h_max, hrrr_temp_next_3h_mean, hrrr_remaining_min,
                 hrrr_wind_speed_current, hrrr_wind_speed_next_3h_mean,
                 hrrr_wind_speed_remaining_max, hrrr_gust_remaining_max,
@@ -973,7 +982,7 @@ class ExecutionStore:
                 selected_bid_ladder_min_edge, selected_bid_ladder_max_edge,
                 high_conviction, skip_reason, candidate_count, model_name, market_family, low_so_far, raw_json
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 snapshot.timestamp,
@@ -992,6 +1001,8 @@ class ExecutionStore:
                 snapshot.hrrr_current_temp_minus_current_temp,
                 snapshot.hrrr_remaining_max_minus_selected_lower,
                 snapshot.hrrr_remaining_max_minus_selected_upper,
+                snapshot.hrrr_remaining_min_minus_selected_lower,
+                snapshot.hrrr_remaining_min_minus_selected_upper,
                 snapshot.hrrr_temp_next_3h_max,
                 snapshot.hrrr_temp_next_3h_mean,
                 snapshot.hrrr_remaining_min,
@@ -1147,6 +1158,7 @@ class ExecutionStore:
                 selected_bucket, entry_price, entry_edge, entry_fair,
                 hrrr_remaining_max, hrrr_current_temp, hrrr_current_temp_minus_current_temp,
                 hrrr_remaining_max_minus_selected_lower, hrrr_remaining_max_minus_selected_upper,
+                hrrr_remaining_min_minus_selected_lower, hrrr_remaining_min_minus_selected_upper,
                 hrrr_temp_next_3h_max, hrrr_temp_next_3h_mean, hrrr_remaining_min,
                 hrrr_wind_speed_current, hrrr_wind_speed_next_3h_mean,
                 hrrr_wind_speed_remaining_max, hrrr_gust_remaining_max,
@@ -1169,7 +1181,7 @@ class ExecutionStore:
                 selected_bid_ladder_min_edge, selected_bid_ladder_max_edge,
                 market_family, source_prediction_snapshot_ids, raw_json
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 position.timestamp,
@@ -1191,6 +1203,8 @@ class ExecutionStore:
                 position.hrrr_current_temp_minus_current_temp,
                 position.hrrr_remaining_max_minus_selected_lower,
                 position.hrrr_remaining_max_minus_selected_upper,
+                position.hrrr_remaining_min_minus_selected_lower,
+                position.hrrr_remaining_min_minus_selected_upper,
                 position.hrrr_temp_next_3h_max,
                 position.hrrr_temp_next_3h_mean,
                 position.hrrr_remaining_min,
@@ -1290,6 +1304,7 @@ class ExecutionStore:
                 rpp.entry_price,
                 rpp.entry_edge,
                 rpp.entry_fair,
+                rpp.market_family,
                 rpp.source_prediction_snapshot_ids,
                 rpp.raw_json,
                 m.yes_token_id,

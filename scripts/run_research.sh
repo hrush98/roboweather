@@ -14,7 +14,7 @@ auto-resolves prior station/date outcomes, and does not submit paper trades.
 Environment overrides:
   MODEL=data/models/dynamic_bucket_tuned_pm_active_us12_obs_2022_2025.joblib
   THRESHOLD_MODEL=data/models/mvp_pm_active_us12_obs_2022_2025.joblib
-  EXTRA_MODELS="data/models/dynamic_bucket_pm_active_us12_obs_2022_2025.joblib data/models/high_regression_pm_active_us12_obs_2022_2025.joblib data/models/ngboost_normal_pm_active_us12_obs_2022_2025.joblib data/models/catboost_bucket_pm_active_us12_obs_2022_2025.joblib"
+  EXTRA_MODELS="data/models/dynamic_bucket_pm_active_us12_obs_2022_2025.joblib data/models/high_regression_pm_active_us12_obs_2022_2025.joblib data/models/ngboost_normal_pm_active_us12_obs_2022_2025.joblib data/models/catboost_bucket_pm_active_us12_obs_2022_2025.joblib data/models/low_dynamic_bucket_obs_2022_2025.joblib data/models/low_mvp_obs_2022_2025.joblib"
   DB=data/paper/research_2026-05-08_multimodel.sqlite
   ALLOW_SYNCED_SQLITE=0
   MARKET_LIMIT=50000
@@ -55,7 +55,7 @@ fi
 
 MODEL="${MODEL:-data/models/dynamic_bucket_tuned_pm_active_us12_obs_2022_2025.joblib}"
 THRESHOLD_MODEL="${THRESHOLD_MODEL:-data/models/mvp_pm_active_us12_obs_2022_2025.joblib}"
-EXTRA_MODELS="${EXTRA_MODELS:-data/models/dynamic_bucket_pm_active_us12_obs_2022_2025.joblib data/models/high_regression_pm_active_us12_obs_2022_2025.joblib data/models/ngboost_normal_pm_active_us12_obs_2022_2025.joblib data/models/catboost_bucket_pm_active_us12_obs_2022_2025.joblib}"
+EXTRA_MODELS="${EXTRA_MODELS:-data/models/dynamic_bucket_pm_active_us12_obs_2022_2025.joblib data/models/high_regression_pm_active_us12_obs_2022_2025.joblib data/models/ngboost_normal_pm_active_us12_obs_2022_2025.joblib data/models/catboost_bucket_pm_active_us12_obs_2022_2025.joblib data/models/low_dynamic_bucket_obs_2022_2025.joblib data/models/low_mvp_obs_2022_2025.joblib}"
 DB="${DB:-data/paper/research_2026-05-08_multimodel.sqlite}"
 MARKET_LIMIT="${MARKET_LIMIT:-50000}"
 BANKROLL="${BANKROLL:-1000}"

@@ -10,6 +10,7 @@ from typing import Any, Protocol
 from weather_trader.execution.books import RestBookClient
 from weather_trader.execution.contracts import (
     BookSnapshot,
+    MarketFamily,
     PaperPolicyEventType,
     PaperPolicyFinalState,
     PaperPolicyOrderAttempt,
@@ -278,8 +279,10 @@ class PaperPolicyTrader:
     def settle_resolved_positions(self) -> int:
         rows = self.store.connection.execute(
             """
-            select p.*, o.final_high_tmpf
+            select p.*, o.final_high_tmpf, o.final_low_tmpf, rpp.market_family
             from paper_policy_positions p
+            join research_policy_positions rpp
+                on rpp.id = p.research_policy_position_id
             join station_date_outcomes o
                 on o.station = p.station
                 and o.market_date = p.market_date
@@ -297,7 +300,11 @@ class PaperPolicyTrader:
                 ).fetchone()
                 lower = None if market is None else market["lower_f"]
                 upper = None if market is None else market["upper_f"]
-            winning = winning_side_for_bucket(float(row["final_high_tmpf"]), lower, upper)
+            market_family = MarketFamily(str(row["market_family"] or MarketFamily.HIGH_TEMP))
+            final_temp = row["final_low_tmpf"] if market_family == MarketFamily.LOW_TEMP else row["final_high_tmpf"]
+            if final_temp is None:
+                continue
+            winning = winning_side_for_bucket(float(final_temp), lower, upper, market_family=market_family)
             shares = float(row["filled_shares"] or 0.0)
             cost = float(row["cost_usd"] or 0.0)
             payout = shares if TradeAction(str(row["selected_side"])) == winning else 0.0
@@ -308,14 +315,20 @@ class PaperPolicyTrader:
                 state=PaperPolicyFinalState.SETTLED,
                 realized_pnl=pnl,
                 realized_rr=rr,
-                raw_patch={"final_high_tmpf": row["final_high_tmpf"], "winning_side": str(winning), "payout": payout},
+                raw_patch={
+                    "market_family": str(market_family),
+                    "final_high_tmpf": row["final_high_tmpf"],
+                    "final_low_tmpf": row["final_low_tmpf"],
+                    "winning_side": str(winning),
+                    "payout": payout,
+                },
             )
             self._event(
                 int(row["id"]),
                 int(row["research_policy_position_id"]),
                 PaperPolicyEventType.RESOLVED,
-                "settled from station high",
-                {"realized_pnl": pnl, "realized_rr": rr, "winning_side": str(winning)},
+                "settled from station outcome",
+                {"realized_pnl": pnl, "realized_rr": rr, "winning_side": str(winning), "market_family": str(market_family)},
             )
             settled += 1
         return settled

@@ -218,6 +218,43 @@ def test_station_date_group_records_all_research_strategies() -> None:
     assert max_so_far_candidate["edge_yes"] == pytest.approx(0.09)
 
 
+def test_low_station_date_group_max_so_far_uses_low_so_far() -> None:
+    first = _replace_market(
+        _market(lower=60, upper=61),
+        market_family=MarketFamily.LOW_TEMP,
+    )
+    second = _replace_market(
+        _market(lower=70, upper=71),
+        market_id="m2",
+        yes_token_id="yes2",
+        no_token_id="no2",
+        market_family=MarketFamily.LOW_TEMP,
+    )
+    contexts = [
+        GroupMarketContext(
+            market=first,
+            signal=_replace_signal(_signal_for_market(first, fair_yes=0.2, fair_no=0.8, yes_ask=0.1, no_ask=0.9), high_so_far=71, low_so_far=60),
+            yes_book=_book("yes", ask=0.1),
+            no_book=_book("no", ask=0.9),
+        ),
+        GroupMarketContext(
+            market=second,
+            signal=_replace_signal(_signal_for_market(second, fair_yes=0.9, fair_no=0.1, yes_ask=0.1, no_ask=0.9), high_so_far=71, low_so_far=60),
+            yes_book=_book("yes2", ask=0.1),
+            no_book=_book("no2", ask=0.9),
+        ),
+    ]
+
+    selection = StationDateDecisionEngine(DecisionEngine()).select_strategy(
+        contexts,
+        bankroll_usd=1000,
+        strategy_bucket=StrategyBucket.MAX_SO_FAR,
+    )
+
+    assert selection.selected_decision is not None
+    assert selection.selected_decision.market_id == "m1"
+
+
 def test_mark_position_uses_current_bid_for_unrealized_pnl() -> None:
     position = _position(side=TradeAction.BUY_NO, shares=10, cost=5, avg_entry_price=0.5)
     book = BookSnapshot(token_id="no", bids=[BookLevel(0.7, 100)], asks=[BookLevel(0.72, 100)], timestamp="now")
