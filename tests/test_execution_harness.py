@@ -11,6 +11,7 @@ from weather_trader.execution.contracts import (
     BookSnapshot,
     Decision,
     EffectiveStatus,
+    MarketFamily,
     MarketSnapshot,
     Position,
     StrategyBucket,
@@ -250,6 +251,25 @@ def test_effective_status_for_bounded_bucket_overshoot() -> None:
     assert effective_status_for_position(TradeAction.BUY_YES, lower_f=66, upper_f=67, high_so_far=66) == EffectiveStatus.LIVE
 
 
+def test_low_effective_status_for_downward_crossing() -> None:
+    assert effective_status_for_position(
+        TradeAction.BUY_YES,
+        lower_f=None,
+        upper_f=72,
+        high_so_far=None,
+        low_so_far=72,
+        market_family=MarketFamily.LOW_TEMP,
+    ) == EffectiveStatus.EFFECTIVELY_WON
+    assert effective_status_for_position(
+        TradeAction.BUY_YES,
+        lower_f=68,
+        upper_f=69,
+        high_so_far=None,
+        low_so_far=67,
+        market_family=MarketFamily.LOW_TEMP,
+    ) == EffectiveStatus.EFFECTIVELY_LOST
+
+
 def test_station_date_group_selects_one_best_candidate() -> None:
     first = _market(lower=56, upper=57)
     second = _replace_market(_market(lower=58, upper=59), market_id="m2", yes_token_id="yes2", no_token_id="no2")
@@ -396,6 +416,7 @@ def _weather(high_so_far: float) -> StationWeatherState:
         latest_obs_age_minutes=5,
         current_temp=high_so_far,
         high_so_far=high_so_far,
+        low_so_far=high_so_far - 5,
         hour_local=12,
         day_of_year=125,
         temp_change_1h=1,
@@ -407,6 +428,7 @@ def _weather(high_so_far: float) -> StationWeatherState:
         cloud_cover_code=0,
         hrrr_current_temp=None,
         hrrr_remaining_max=None,
+        hrrr_remaining_min=None,
         stale=False,
     )
 

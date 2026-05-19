@@ -8,6 +8,7 @@ import time
 
 import requests
 
+from weather_trader.execution.contracts import MarketFamily
 from weather_trader.stations.metadata import load_station_table
 
 
@@ -34,17 +35,20 @@ class WeatherMarket:
     yes_token_id: str | None = None
     no_token_id: str | None = None
     market_date: date | None = None
+    market_family: MarketFamily = MarketFamily.HIGH_TEMP
 
 
 @dataclass(frozen=True)
 class WeatherEventTarget:
     city_slug: str
     market_date: date
+    market_family: MarketFamily = MarketFamily.HIGH_TEMP
 
     @property
     def event_slug(self) -> str:
         month = _MONTH_NAMES[self.market_date.month]
-        return f"highest-temperature-in-{self.city_slug}-on-{month}-{self.market_date.day}-{self.market_date.year}"
+        prefix = "lowest-temperature" if self.market_family == MarketFamily.LOW_TEMP else "highest-temperature"
+        return f"{prefix}-in-{self.city_slug}-on-{month}-{self.market_date.day}-{self.market_date.year}"
 
 
 class PolymarketReader:
@@ -149,7 +153,11 @@ class PolymarketReader:
         city = next((city for city in self.city_map if city in question_lower), None)
         if city is None:
             return None
-        if "highest temperature" not in question_lower:
+        if "lowest temperature" in question_lower:
+            market_family = MarketFamily.LOW_TEMP
+        elif "highest temperature" in question_lower:
+            market_family = MarketFamily.HIGH_TEMP
+        else:
             return None
         lower_f, upper_f = _parse_temperature_bucket(question_lower)
         if lower_f is None and upper_f is None:
@@ -181,6 +189,7 @@ class PolymarketReader:
             yes_token_id=token_ids[0] if len(token_ids) >= 1 else None,
             no_token_id=token_ids[1] if len(token_ids) >= 2 else None,
             market_date=_parse_market_date(item),
+            market_family=market_family,
         )
 
     def _with_clob_prices(self, market: WeatherMarket) -> WeatherMarket:
@@ -215,6 +224,7 @@ class PolymarketReader:
             yes_token_id=market.yes_token_id,
             no_token_id=market.no_token_id,
             market_date=market.market_date,
+            market_family=market.market_family,
         )
 
     def _fetch_book(self, token_id: str) -> dict:

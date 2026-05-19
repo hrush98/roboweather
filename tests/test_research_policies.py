@@ -171,7 +171,16 @@ def test_research_policy_registry_tracks_expected_policies() -> None:
         "broad_hrrr_v2_three_model_consensus_high_conviction_first",
         "broad_max_so_far_first",
     } <= names
-    assert not any("_15m_" in name or "_10m_" in name or "_entry_" in name for name in names)
+    assert not any(
+        ("_15m_" in name or "_10m_" in name or "_entry_" in name) and not name.startswith("low_")
+        for name in names
+    )
+    assert {
+        "low_pm_us12_consensus_hc_first",
+        "low_pm_us12_consensus_hc_10m_first",
+        "low_pm_us12_dynamic_hc_15m_first",
+        "low_min_so_far_first",
+    } <= names
 
 
 def test_broad_consensus_policies_are_registered_and_idempotent(tmp_path) -> None:

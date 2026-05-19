@@ -9,6 +9,7 @@ from weather_trader.execution.contracts import (
     BookSnapshot,
     Decision,
     MarketSnapshot,
+    MarketFamily,
     Signal,
     StationDateDecisionTrace,
     StationDateOutcome,
@@ -44,6 +45,23 @@ def test_due_delay_buckets_require_obs_inside_entry_window() -> None:
     assert due_delay_buckets(_weather("2026-05-06T13:30:00+00:00"), datetime(2026, 5, 6, 13, 36, tzinfo=timezone.utc), config) == []
 
 
+def test_low_due_delay_buckets_use_midnight_to_10am_window() -> None:
+    config = ResearchConfig(entry_start_local=time(10, 0), entry_end_local=time(15, 0))
+
+    assert due_delay_buckets(
+        _weather("2026-05-06T08:00:00+00:00"),
+        datetime(2026, 5, 6, 8, 6, tzinfo=timezone.utc),
+        config,
+        market_family=str(MarketFamily.LOW_TEMP),
+    ) == ["5m"]
+    assert due_delay_buckets(
+        _weather("2026-05-06T16:00:00+00:00"),
+        datetime(2026, 5, 6, 16, 6, tzinfo=timezone.utc),
+        config,
+        market_family=str(MarketFamily.LOW_TEMP),
+    ) == []
+
+
 def test_score_snapshot_scores_selected_side_against_final_high() -> None:
     snapshot = {
         "id": 10,
@@ -72,6 +90,37 @@ def test_score_snapshot_scores_selected_side_against_final_high() -> None:
     assert result.correct is True
     assert result.entry_price == 0.4
     assert result.paper_pnl == 0.6
+
+
+def test_score_snapshot_scores_low_family_against_final_low() -> None:
+    snapshot = {
+        "id": 11,
+        "market_family": "LOW_TEMP",
+        "obs_delay_bucket": "5m",
+        "selected_market_id": "m1",
+        "selected_bucket": "<=72F",
+        "selected_side": "BUY_YES",
+        "selected_yes_ask": 0.4,
+        "selected_no_ask": 0.7,
+        "decision_time_local": "2026-05-06T05:05:00-04:00",
+        "obs_age_minutes": 5.0,
+    }
+    outcome = StationDateOutcome(
+        timestamp="now",
+        station="KATL",
+        market_date=date(2026, 5, 6),
+        final_high_tmpf=81.0,
+        final_low_tmpf=71.0,
+        source="IEM_ASOS",
+        resolved_at="later",
+    )
+
+    result = score_snapshot(snapshot, outcome)
+
+    assert result.market_family == MarketFamily.LOW_TEMP
+    assert result.final_low_tmpf == 71.0
+    assert result.winning_side == TradeAction.BUY_YES
+    assert result.correct is True
 
 
 def test_research_collector_records_discovery_timeout_without_crashing(tmp_path) -> None:
@@ -187,6 +236,35 @@ def test_build_prediction_snapshot_persists_buy_yes_liquidity(tmp_path) -> None:
     assert row["selected_depth_ask_plus_0_05"] == 160
 
 
+def test_prediction_snapshots_keep_high_and_low_families_separate(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+    high_snapshot = build_prediction_snapshot(
+        selection=_selection(TradeAction.BUY_YES),
+        contexts=[_context()],
+        weather=_weather("2026-05-06T16:00:00+00:00"),
+        market_date=date(2026, 5, 6),
+        as_of_utc=datetime(2026, 5, 6, 16, 1, tzinfo=timezone.utc),
+        obs_delay_bucket="instant",
+        model_name="model",
+    )
+    low_context = _context(market_family=MarketFamily.LOW_TEMP)
+    low_snapshot = build_prediction_snapshot(
+        selection=_selection(TradeAction.BUY_YES),
+        contexts=[low_context],
+        weather=_weather("2026-05-06T16:00:00+00:00"),
+        market_date=date(2026, 5, 6),
+        as_of_utc=datetime(2026, 5, 6, 16, 1, tzinfo=timezone.utc),
+        obs_delay_bucket="instant",
+        model_name="model",
+    )
+
+    assert store.insert_prediction_snapshot(high_snapshot) is not None
+    assert store.insert_prediction_snapshot(low_snapshot) is not None
+    rows = store.connection.execute("select market_family, low_so_far from prediction_snapshots order by id").fetchall()
+    assert [row["market_family"] for row in rows] == ["HIGH_TEMP", "LOW_TEMP"]
+    assert rows[1]["low_so_far"] == 72
+
+
 def test_build_prediction_snapshot_persists_sweep_and_bid_ladder(tmp_path) -> None:
     store = ExecutionStore(tmp_path / "research.sqlite")
 
@@ -278,8 +356,8 @@ def _selection(side: TradeAction, expected_value: float = 0.1, fair_yes: float =
     return GroupSelection(decisions={"m1": decision}, selected_decision=decision, trace=trace)
 
 
-def _context() -> GroupMarketContext:
-    market = _market()
+def _context(market_family: MarketFamily = MarketFamily.HIGH_TEMP) -> GroupMarketContext:
+    market = _market(market_family=market_family)
     signal = Signal(
         timestamp="2026-05-06T16:00:00+00:00",
         market_id="m1",
@@ -325,7 +403,7 @@ def _context() -> GroupMarketContext:
     )
 
 
-def _market(market_date: date = date(2026, 5, 6)) -> MarketSnapshot:
+def _market(market_date: date = date(2026, 5, 6), market_family: MarketFamily = MarketFamily.HIGH_TEMP) -> MarketSnapshot:
     return MarketSnapshot(
         market_id="m1",
         condition_id=None,
@@ -341,6 +419,7 @@ def _market(market_date: date = date(2026, 5, 6)) -> MarketSnapshot:
         end_date="2026-05-06",
         resolution_source="test",
         discovered_at="2026-05-06T15:00:00+00:00",
+        market_family=market_family,
     )
 
 
@@ -352,6 +431,7 @@ def _weather(latest_obs_time: str) -> StationWeatherState:
         latest_obs_age_minutes=0,
         current_temp=75,
         high_so_far=80,
+        low_so_far=72,
         hour_local=12,
         day_of_year=126,
         temp_change_1h=0,
@@ -363,5 +443,6 @@ def _weather(latest_obs_time: str) -> StationWeatherState:
         cloud_cover_code=0,
         hrrr_current_temp=74,
         hrrr_remaining_max=82,
+        hrrr_remaining_min=70,
         stale=False,
     )

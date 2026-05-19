@@ -89,15 +89,15 @@ def parse_bucket(bucket: str | None) -> tuple[float | None, float | None]:
     return None, None
 
 
-def bucket_won(final_high: float, bucket: str | None) -> bool:
+def bucket_won(final_temp: float, bucket: str | None) -> bool:
     low, high = parse_bucket(bucket)
     if low is None and high is None:
         return False
     if low is None:
-        return final_high <= float(high)
+        return final_temp <= float(high)
     if high is None:
-        return final_high >= float(low)
-    return float(low) <= final_high <= float(high)
+        return final_temp >= float(low)
+    return float(low) <= final_temp <= float(high)
 
 
 def prelim_ready(row: sqlite3.Row, as_of_utc: datetime) -> bool:
@@ -112,20 +112,27 @@ def prelim_ready(row: sqlite3.Row, as_of_utc: datetime) -> bool:
 
 
 def score_position(row: sqlite3.Row, as_of_utc: datetime) -> dict[str, Any]:
-    final_high = row["final_high_tmpf"]
-    high_so_far = row["high_so_far"]
-    high = final_high
-    source = "official" if final_high is not None else None
-    if high is None and high_so_far is not None and prelim_ready(row, as_of_utc):
-        high = high_so_far
-        source = "prelim_high_so_far"
-    if high is None:
-        return {"resolved": False, "correct": None, "ret": None, "high": None, "source": None}
-    yes_won = bucket_won(float(high), row["selected_bucket"])
+    market_family = row["market_family"] if "market_family" in row.keys() else "HIGH_TEMP"
+    if market_family == "LOW_TEMP":
+        final_temp = row["final_low_tmpf"]
+        progress_temp = row["low_so_far"]
+        label = "low"
+    else:
+        final_temp = row["final_high_tmpf"]
+        progress_temp = row["high_so_far"]
+        label = "high"
+    temp = final_temp
+    source = "official" if final_temp is not None else None
+    if temp is None and progress_temp is not None and prelim_ready(row, as_of_utc):
+        temp = progress_temp
+        source = f"prelim_{label}_so_far"
+    if temp is None:
+        return {"resolved": False, "correct": None, "ret": None, "temp": None, "source": None}
+    yes_won = bucket_won(float(temp), row["selected_bucket"])
     correct = yes_won if row["selected_side"] == "BUY_YES" else not yes_won
     entry = float(row["entry_price"])
     ret = (1.0 - entry) if correct else -entry
-    return {"resolved": True, "correct": bool(correct), "ret": ret, "high": float(high), "source": source}
+    return {"resolved": True, "correct": bool(correct), "ret": ret, "temp": float(temp), "source": source}
 
 
 def mean(values: list[float]) -> float | None:
@@ -253,14 +260,16 @@ def research_status(resolved: int, pending: int, rr: float | None, p_sharpe: flo
 def rows_for_range(db: sqlite3.Connection, start_date: str, end_date: str) -> list[sqlite3.Row]:
     return db.execute(
         """
-        with station_highs as (
+        with station_progress as (
             select
                 station,
                 market_date,
+                coalesce(market_family, 'HIGH_TEMP') as market_family,
                 max(high_so_far) as high_so_far,
+                min(low_so_far) as low_so_far,
                 max(timestamp) as latest_snapshot_at
             from prediction_snapshots
-            group by station, market_date
+            group by station, market_date, coalesce(market_family, 'HIGH_TEMP')
         )
         select
             rpp.id,
@@ -270,23 +279,27 @@ def rows_for_range(db: sqlite3.Connection, start_date: str, end_date: str) -> li
             rpp.market_date,
             rpp.strategy_bucket,
             rpp.obs_delay_bucket,
+            coalesce(rpp.market_family, 'HIGH_TEMP') as market_family,
             rpp.selected_side,
             rpp.selected_bucket,
             rpp.entry_price,
             rpp.entry_edge,
             rpp.entry_fair,
             sdo.final_high_tmpf,
+            sdo.final_low_tmpf,
             sdo.source as outcome_source,
             sdo.resolved_at,
             highs.high_so_far,
+            highs.low_so_far,
             highs.latest_snapshot_at
         from research_policy_positions rpp
         left join station_date_outcomes sdo
           on sdo.station = rpp.station
          and sdo.market_date = rpp.market_date
-        left join station_highs highs
+        left join station_progress highs
           on highs.station = rpp.station
          and highs.market_date = rpp.market_date
+         and highs.market_family = coalesce(rpp.market_family, 'HIGH_TEMP')
         where rpp.market_date between ? and ?
         order by rpp.policy_name, rpp.station, rpp.id
         """,
@@ -456,7 +469,7 @@ def compute_leaderboard(
                 "bucket": row["selected_bucket"],
                 "entry": entry,
                 "edge": edge,
-                "final_high": score["high"],
+                "final_high": score["temp"],
                 "outcome_source": score["source"],
                 "correct": score["correct"],
             }

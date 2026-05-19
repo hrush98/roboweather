@@ -98,6 +98,7 @@ class ExecutionStore:
                 resolution_source text,
                 discovered_at text not null,
                 active integer not null,
+                market_family text not null default 'HIGH_TEMP',
                 raw_json text not null
             );
 
@@ -296,8 +297,10 @@ class ExecutionStore:
                 skip_reason text,
                 candidate_count integer not null,
                 model_name text not null default '',
+                market_family text not null default 'HIGH_TEMP',
+                low_so_far real,
                 raw_json text not null,
-                unique(station, market_date, latest_obs_time_utc, obs_delay_bucket, strategy_bucket, model_name)
+                unique(station, market_date, market_family, latest_obs_time_utc, obs_delay_bucket, strategy_bucket, model_name)
             );
 
             create table if not exists station_date_outcomes (
@@ -305,6 +308,7 @@ class ExecutionStore:
                 market_date text not null,
                 timestamp text not null,
                 final_high_tmpf real not null,
+                final_low_tmpf real,
                 source text not null,
                 resolved_at text not null,
                 raw_json text not null,
@@ -321,6 +325,8 @@ class ExecutionStore:
                 selected_bucket text,
                 selected_side text not null,
                 final_high_tmpf real not null,
+                final_low_tmpf real,
+                market_family text not null default 'HIGH_TEMP',
                 winning_side text,
                 correct integer,
                 entry_price real,
@@ -397,9 +403,10 @@ class ExecutionStore:
                 selected_bid_ladder_top_improvement_over_best_bid real,
                 selected_bid_ladder_min_edge real,
                 selected_bid_ladder_max_edge real,
+                market_family text not null default 'HIGH_TEMP',
                 source_prediction_snapshot_ids text not null,
                 raw_json text not null,
-                unique(policy_name, station, market_date, scope_key)
+                unique(policy_name, station, market_date, market_family, scope_key)
             );
 
             create table if not exists paper_policy_positions (
@@ -517,6 +524,8 @@ class ExecutionStore:
                 "selected_bid_ladder_top_improvement_over_best_bid": "real",
                 "selected_bid_ladder_min_edge": "real",
                 "selected_bid_ladder_max_edge": "real",
+                "market_family": "text not null default 'HIGH_TEMP'",
+                "low_so_far": "real",
             },
         )
         self._add_nullable_columns(
@@ -551,8 +560,12 @@ class ExecutionStore:
                 "selected_bid_ladder_top_improvement_over_best_bid": "real",
                 "selected_bid_ladder_min_edge": "real",
                 "selected_bid_ladder_max_edge": "real",
+                "market_family": "text not null default 'HIGH_TEMP'",
             },
         )
+        self._add_nullable_columns("markets", {"market_family": "text not null default 'HIGH_TEMP'"})
+        self._add_nullable_columns("station_date_outcomes", {"final_low_tmpf": "real"})
+        self._add_nullable_columns("prediction_results", {"market_family": "text not null default 'HIGH_TEMP'", "final_low_tmpf": "real"})
         self.connection.commit()
 
     def _add_nullable_columns(self, table: str, columns: dict[str, str]) -> None:
@@ -631,8 +644,10 @@ class ExecutionStore:
                 skip_reason text,
                 candidate_count integer not null,
                 model_name text not null default '',
+                market_family text not null default 'HIGH_TEMP',
+                low_so_far real,
                 raw_json text not null,
-                unique(station, market_date, latest_obs_time_utc, obs_delay_bucket, strategy_bucket, model_name)
+                unique(station, market_date, market_family, latest_obs_time_utc, obs_delay_bucket, strategy_bucket, model_name)
             );
             """
         )
@@ -644,7 +659,7 @@ class ExecutionStore:
                 obs_delay_bucket, current_temp, high_so_far, hrrr_remaining_max,
                 strategy_bucket, selected_market_id, selected_bucket, selected_side, selected_edge,
                 selected_fair_yes, selected_fair_no, selected_yes_ask, selected_no_ask,
-                high_conviction, skip_reason, candidate_count, model_name, raw_json
+                high_conviction, skip_reason, candidate_count, model_name, market_family, low_so_far, raw_json
             )
             select
                 id, timestamp, station, market_date, decision_time_utc, decision_time_local,
@@ -652,7 +667,7 @@ class ExecutionStore:
                 obs_delay_bucket, current_temp, high_so_far, hrrr_remaining_max,
                 {strategy_expr}, selected_market_id, selected_bucket, selected_side, selected_edge,
                 selected_fair_yes, selected_fair_no, selected_yes_ask, selected_no_ask,
-                high_conviction, skip_reason, candidate_count, '', raw_json
+                high_conviction, skip_reason, candidate_count, '', 'HIGH_TEMP', null, raw_json
             from prediction_snapshots_old
             """
         )
@@ -665,9 +680,9 @@ class ExecutionStore:
             insert into markets (
                 market_id, condition_id, question, slug, city, station, market_date,
                 lower_f, upper_f, yes_token_id, no_token_id, end_date,
-                resolution_source, discovered_at, active, raw_json
+                resolution_source, discovered_at, active, market_family, raw_json
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(market_id) do update set
                 condition_id=excluded.condition_id,
                 question=excluded.question,
@@ -683,6 +698,7 @@ class ExecutionStore:
                 resolution_source=excluded.resolution_source,
                 discovered_at=excluded.discovered_at,
                 active=excluded.active,
+                market_family=excluded.market_family,
                 raw_json=excluded.raw_json
             """,
             (
@@ -701,6 +717,7 @@ class ExecutionStore:
                 market.resolution_source,
                 market.discovered_at,
                 int(market.active),
+                str(market.market_family),
                 json.dumps(data, sort_keys=True),
             ),
         )
@@ -954,9 +971,9 @@ class ExecutionStore:
                 selected_bid_ladder_top_distance_from_ask,
                 selected_bid_ladder_top_improvement_over_best_bid,
                 selected_bid_ladder_min_edge, selected_bid_ladder_max_edge,
-                high_conviction, skip_reason, candidate_count, model_name, raw_json
+                high_conviction, skip_reason, candidate_count, model_name, market_family, low_so_far, raw_json
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 snapshot.timestamp,
@@ -1032,6 +1049,8 @@ class ExecutionStore:
                 snapshot.skip_reason,
                 snapshot.candidate_count,
                 snapshot.model_name,
+                str(snapshot.market_family),
+                snapshot.low_so_far,
                 json.dumps(data, sort_keys=True),
             ),
         )
@@ -1045,12 +1064,13 @@ class ExecutionStore:
         self.connection.execute(
             """
             insert into station_date_outcomes (
-                station, market_date, timestamp, final_high_tmpf, source, resolved_at, raw_json
+                station, market_date, timestamp, final_high_tmpf, final_low_tmpf, source, resolved_at, raw_json
             )
-            values (?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(station, market_date) do update set
                 timestamp=excluded.timestamp,
                 final_high_tmpf=excluded.final_high_tmpf,
+                final_low_tmpf=excluded.final_low_tmpf,
                 source=excluded.source,
                 resolved_at=excluded.resolved_at,
                 raw_json=excluded.raw_json
@@ -1060,6 +1080,7 @@ class ExecutionStore:
                 data["market_date"],
                 outcome.timestamp,
                 outcome.final_high_tmpf,
+                outcome.final_low_tmpf,
                 outcome.source,
                 outcome.resolved_at,
                 json.dumps(data, sort_keys=True),
@@ -1074,13 +1095,15 @@ class ExecutionStore:
             insert into prediction_results (
                 prediction_snapshot_id, timestamp, station, market_date, obs_delay_bucket,
                 selected_market_id, selected_bucket, selected_side, final_high_tmpf,
-                winning_side, correct, entry_price, paper_pnl, edge,
+                final_low_tmpf, market_family, winning_side, correct, entry_price, paper_pnl, edge,
                 decision_time_local, obs_age_minutes, resolved_at, raw_json
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(prediction_snapshot_id) do update set
                 timestamp=excluded.timestamp,
                 final_high_tmpf=excluded.final_high_tmpf,
+                final_low_tmpf=excluded.final_low_tmpf,
+                market_family=excluded.market_family,
                 winning_side=excluded.winning_side,
                 correct=excluded.correct,
                 entry_price=excluded.entry_price,
@@ -1099,6 +1122,8 @@ class ExecutionStore:
                 result.selected_bucket,
                 str(result.selected_side),
                 result.final_high_tmpf,
+                result.final_low_tmpf,
+                str(result.market_family),
                 str(result.winning_side) if result.winning_side is not None else None,
                 None if result.correct is None else int(result.correct),
                 result.entry_price,
@@ -1142,9 +1167,9 @@ class ExecutionStore:
                 selected_bid_ladder_top_distance_from_ask,
                 selected_bid_ladder_top_improvement_over_best_bid,
                 selected_bid_ladder_min_edge, selected_bid_ladder_max_edge,
-                source_prediction_snapshot_ids, raw_json
+                market_family, source_prediction_snapshot_ids, raw_json
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 position.timestamp,
@@ -1210,6 +1235,7 @@ class ExecutionStore:
                 position.selected_bid_ladder_top_improvement_over_best_bid,
                 position.selected_bid_ladder_min_edge,
                 position.selected_bid_ladder_max_edge,
+                str(position.market_family),
                 json.dumps(position.source_prediction_snapshot_ids),
                 json.dumps(data, sort_keys=True),
             ),

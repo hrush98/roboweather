@@ -17,6 +17,8 @@ CATBOOST_MODEL = "catboost_bucket_pm_active_us12_obs_2022_2025"
 MVP_MODEL = "mvp_pm_active_us12_obs_2022_2025"
 HIGH_REGRESSION_MODEL = "high_regression_pm_active_us12_obs_2022_2025"
 NGBOOST_MODEL = "ngboost_normal_pm_active_us12_obs_2022_2025"
+LOW_DYNAMIC_MODEL = "low_dynamic_bucket_obs_2022_2025"
+LOW_MVP_MODEL = "low_mvp_obs_2022_2025"
 
 DYNAMIC_HRRR_V2_MODEL = "dynamic_bucket_hrrr_v2_obs_2022_2025"
 DYNAMIC_TUNED_HRRR_V2_MODEL = "dynamic_bucket_tuned_hrrr_v2_obs_2022_2025"
@@ -78,6 +80,11 @@ for _group_name, _model_names in CONSENSUS_GROUPS.items():
         CONSENSUS_GROUPS_BY_MODEL.setdefault(_model_name, ())
         CONSENSUS_GROUPS_BY_MODEL[_model_name] = (*CONSENSUS_GROUPS_BY_MODEL[_model_name], _group_name)
 
+CONSENSUS_GROUPS["low_pm_active_us12_dynamic_mvp"] = (LOW_DYNAMIC_MODEL, LOW_MVP_MODEL)
+for _model_name in CONSENSUS_GROUPS["low_pm_active_us12_dynamic_mvp"]:
+    CONSENSUS_GROUPS_BY_MODEL.setdefault(_model_name, ())
+    CONSENSUS_GROUPS_BY_MODEL[_model_name] = (*CONSENSUS_GROUPS_BY_MODEL[_model_name], "low_pm_active_us12_dynamic_mvp")
+
 
 @dataclass(frozen=True)
 class ResearchPolicySpec:
@@ -136,7 +143,27 @@ def _broad_policy_specs() -> tuple[ResearchPolicySpec, ...]:
     return tuple(specs)
 
 
-POLICIES: tuple[ResearchPolicySpec, ...] = _broad_policy_specs()
+LOW_POLICIES: tuple[ResearchPolicySpec, ...] = (
+    ResearchPolicySpec("low_pm_us12_consensus_hc_first", "consensus", StrategyBucket.HIGH_CONVICTION, model_group="low_pm_active_us12_dynamic_mvp"),
+    ResearchPolicySpec("low_pm_us12_consensus_hc_by_bucket_side_delay_first", "consensus", StrategyBucket.HIGH_CONVICTION, model_group="low_pm_active_us12_dynamic_mvp", uniqueness_key_mode="station_date_bucket_side_obs_delay"),
+    ResearchPolicySpec("low_pm_us12_consensus_hc_10m_first", "consensus", StrategyBucket.HIGH_CONVICTION, model_group="low_pm_active_us12_dynamic_mvp", obs_delay_bucket="10m"),
+    ResearchPolicySpec("low_pm_us12_consensus_hc_15m_first", "consensus", StrategyBucket.HIGH_CONVICTION, model_group="low_pm_active_us12_dynamic_mvp", obs_delay_bucket="15m"),
+    ResearchPolicySpec("low_pm_us12_consensus_hc_15m_by_bucket_side_delay_first", "consensus", StrategyBucket.HIGH_CONVICTION, model_group="low_pm_active_us12_dynamic_mvp", obs_delay_bucket="15m", uniqueness_key_mode="station_date_bucket_side_obs_delay"),
+    ResearchPolicySpec("low_pm_us12_mvp_hc_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LOW_MVP_MODEL),
+    ResearchPolicySpec("low_pm_us12_mvp_hc_10m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LOW_MVP_MODEL, obs_delay_bucket="10m"),
+    ResearchPolicySpec("low_pm_us12_mvp_hc_15m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LOW_MVP_MODEL, obs_delay_bucket="15m"),
+    ResearchPolicySpec("low_pm_us12_mvp_best_15m_first", "model", StrategyBucket.BEST_BUCKET, model_name=LOW_MVP_MODEL, obs_delay_bucket="15m"),
+    ResearchPolicySpec("low_pm_us12_dynamic_hc_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LOW_DYNAMIC_MODEL),
+    ResearchPolicySpec("low_pm_us12_dynamic_hc_10m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LOW_DYNAMIC_MODEL, obs_delay_bucket="10m"),
+    ResearchPolicySpec("low_pm_us12_dynamic_hc_15m_first", "model", StrategyBucket.HIGH_CONVICTION, model_name=LOW_DYNAMIC_MODEL, obs_delay_bucket="15m"),
+    ResearchPolicySpec("low_pm_us12_dynamic_best_15m_first", "model", StrategyBucket.BEST_BUCKET, model_name=LOW_DYNAMIC_MODEL, obs_delay_bucket="15m"),
+    ResearchPolicySpec("low_min_so_far_first", "max_so_far", StrategyBucket.MAX_SO_FAR),
+    ResearchPolicySpec("low_min_so_far_10m_first", "max_so_far", StrategyBucket.MAX_SO_FAR, obs_delay_bucket="10m"),
+    ResearchPolicySpec("low_min_so_far_15m_first", "max_so_far", StrategyBucket.MAX_SO_FAR, obs_delay_bucket="15m"),
+)
+
+
+POLICIES: tuple[ResearchPolicySpec, ...] = (*_broad_policy_specs(), *LOW_POLICIES)
 
 
 class ResearchPolicyEvaluator:
@@ -185,6 +212,7 @@ class ResearchPolicyEvaluator:
             for group_name in group_names:
                 key = (
                     group_name,
+                    item.get("market_family") or "HIGH_TEMP",
                     item.get("station"),
                     item.get("market_date"),
                     item.get("obs_delay_bucket"),
@@ -295,6 +323,7 @@ class ResearchPolicyEvaluator:
             policy_name=policy.name,
             station=str(station),
             market_date=date.fromisoformat(str(market_date)),
+            market_family=candidate.get("market_family") or "HIGH_TEMP",
             scope_key=scope_key,
             model_group=str(candidate.get("model_name") or policy.model_name or policy.source),
             strategy_bucket=strategy_bucket,
@@ -423,7 +452,7 @@ def _parse_hhmm(value: str | None) -> time:
 
 
 def _uniqueness_key(policy: ResearchPolicySpec, item: dict[str, Any]) -> tuple[object, ...]:
-    key = [item.get("station"), item.get("market_date")]
+    key = [item.get("station"), item.get("market_date"), item.get("market_family") or "HIGH_TEMP"]
     if policy.uniqueness_key_mode == "station_date_bucket_side":
         key.extend([item.get("selected_bucket"), item.get("selected_side")])
     elif policy.uniqueness_key_mode == "station_date_bucket_side_obs_delay":

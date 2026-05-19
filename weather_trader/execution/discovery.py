@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from weather_trader.execution.contracts import MarketSnapshot
+from weather_trader.execution.contracts import MarketFamily, MarketSnapshot
 from weather_trader.markets.polymarket_reader import PolymarketReader, WeatherEventTarget
 from weather_trader.stations.metadata import get_station
 
@@ -39,8 +39,9 @@ class MarketDiscoveryService:
         discovered_at = now.isoformat()
         self.last_warnings = []
         targets = [
-            WeatherEventTarget(config.city_slug, now.astimezone(ZoneInfo(config.timezone)).date())
+            WeatherEventTarget(config.city_slug, now.astimezone(ZoneInfo(config.timezone)).date(), family)
             for config in WEATHER_EVENT_CONFIGS
+            for family in (MarketFamily.HIGH_TEMP, MarketFamily.LOW_TEMP)
         ]
         event_items, missing_events = self.reader._fetch_weather_event_markets(targets)
         self.last_warnings.extend(f"missing_event:{slug}" for slug in missing_events)
@@ -103,6 +104,7 @@ class MarketDiscoveryService:
                     resolution_source=market.resolution_source,
                     discovered_at=discovered_at,
                     active=_active_flag(item),
+                    market_family=market.market_family,
                 )
             )
         return snapshots

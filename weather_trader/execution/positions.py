@@ -5,6 +5,7 @@ from dataclasses import replace
 from weather_trader.execution.contracts import (
     BookSnapshot,
     EffectiveStatus,
+    MarketFamily,
     MarketSnapshot,
     OrderState,
     PaperOrder,
@@ -76,7 +77,13 @@ class PositionTracker:
         return updated
 
 
-def mark_position(position: Position, book: BookSnapshot | None, high_so_far: float | None) -> PositionMark:
+def mark_position(
+    position: Position,
+    book: BookSnapshot | None,
+    high_so_far: float | None,
+    market_family: MarketFamily = MarketFamily.HIGH_TEMP,
+    low_so_far: float | None = None,
+) -> PositionMark:
     current_bid = book.best_bid if book else None
     if current_bid is None:
         mark_value = None
@@ -94,6 +101,8 @@ def mark_position(position: Position, book: BookSnapshot | None, high_so_far: fl
         lower_f=position.lower_f,
         upper_f=position.upper_f,
         high_so_far=high_so_far,
+        market_family=market_family,
+        low_so_far=low_so_far,
     )
     reason = mark_reason if effective_status == EffectiveStatus.LIVE else f"{mark_reason},{effective_status.value}"
     return PositionMark(
@@ -116,6 +125,8 @@ def mark_position(position: Position, book: BookSnapshot | None, high_so_far: fl
         high_so_far=high_so_far,
         effective_status=effective_status,
         reason=reason,
+        market_family=market_family,
+        low_so_far=low_so_far,
     )
 
 
@@ -124,11 +135,18 @@ def effective_status_for_position(
     lower_f: float | None,
     upper_f: float | None,
     high_so_far: float | None,
+    market_family: MarketFamily = MarketFamily.HIGH_TEMP,
+    low_so_far: float | None = None,
 ) -> EffectiveStatus:
-    if high_so_far is None:
+    progress = low_so_far if market_family == MarketFamily.LOW_TEMP else high_so_far
+    if progress is None:
         return EffectiveStatus.UNKNOWN
 
-    yes_outcome = _definitive_yes_outcome(high_so_far=high_so_far, lower_f=lower_f, upper_f=upper_f)
+    yes_outcome = (
+        _definitive_low_yes_outcome(low_so_far=progress, lower_f=lower_f, upper_f=upper_f)
+        if market_family == MarketFamily.LOW_TEMP
+        else _definitive_yes_outcome(high_so_far=progress, lower_f=lower_f, upper_f=upper_f)
+    )
     if yes_outcome is None:
         return EffectiveStatus.LIVE
     if side == TradeAction.BUY_YES:
@@ -154,11 +172,38 @@ def _definitive_yes_outcome(high_so_far: float, lower_f: float | None, upper_f: 
     return None
 
 
-def winning_side_for_bucket(final_high: float, lower_f: float | None, upper_f: float | None) -> TradeAction:
+def _definitive_low_yes_outcome(low_so_far: float, lower_f: float | None, upper_f: float | None) -> bool | None:
     if lower_f is not None and upper_f is not None:
-        return TradeAction.BUY_YES if lower_f <= final_high <= upper_f else TradeAction.BUY_NO
+        if low_so_far < lower_f:
+            return False
+        return None
     if lower_f is not None:
-        return TradeAction.BUY_YES if final_high >= lower_f else TradeAction.BUY_NO
+        if low_so_far < lower_f:
+            return False
+        return None
     if upper_f is not None:
-        return TradeAction.BUY_YES if final_high <= upper_f else TradeAction.BUY_NO
+        if low_so_far <= upper_f:
+            return True
+        return None
+    return None
+
+
+def winning_side_for_bucket(
+    final_high: float,
+    lower_f: float | None,
+    upper_f: float | None,
+    market_family: MarketFamily = MarketFamily.HIGH_TEMP,
+) -> TradeAction:
+    if market_family == MarketFamily.LOW_TEMP:
+        return _winning_side_for_temperature(final_high, lower_f, upper_f)
+    return _winning_side_for_temperature(final_high, lower_f, upper_f)
+
+
+def _winning_side_for_temperature(final_temp: float, lower_f: float | None, upper_f: float | None) -> TradeAction:
+    if lower_f is not None and upper_f is not None:
+        return TradeAction.BUY_YES if lower_f <= final_temp <= upper_f else TradeAction.BUY_NO
+    if lower_f is not None:
+        return TradeAction.BUY_YES if final_temp >= lower_f else TradeAction.BUY_NO
+    if upper_f is not None:
+        return TradeAction.BUY_YES if final_temp <= upper_f else TradeAction.BUY_NO
     return TradeAction.BUY_NO

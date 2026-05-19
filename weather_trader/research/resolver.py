@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from weather_trader.execution.contracts import (
     PredictionResult,
     StationDateOutcome,
+    MarketFamily,
     TradeAction,
     utc_now_iso,
 )
@@ -92,6 +93,7 @@ class ResearchResolver:
         if day.empty:
             raise ValueError(f"No IEM observations for {station.station} on {market_date}")
         final_high = float(day["tmpf"].max())
+        final_low = float(day["tmpf"].min())
         resolved_at = utc_now_iso()
         return StationDateOutcome(
             timestamp=resolved_at,
@@ -100,20 +102,27 @@ class ResearchResolver:
             final_high_tmpf=final_high,
             source=self.config.source,
             resolved_at=resolved_at,
+            final_low_tmpf=final_low,
         )
 
 
 def score_snapshot(snapshot: dict, outcome: StationDateOutcome) -> PredictionResult:
     selected_side = TradeAction(str(snapshot.get("selected_side") or TradeAction.SKIP))
+    market_family = MarketFamily(str(snapshot.get("market_family") or MarketFamily.HIGH_TEMP))
     lower, upper = _parse_bucket(snapshot.get("selected_bucket"))
     winning_side = None
     correct = None
     entry_price = _entry_price(snapshot, selected_side)
     paper_pnl = None
+    final_temp = outcome.final_low_tmpf if market_family == MarketFamily.LOW_TEMP else outcome.final_high_tmpf
     if selected_side != TradeAction.SKIP and (lower is not None or upper is not None):
-        winning_side = winning_side_for_bucket(outcome.final_high_tmpf, lower, upper)
-        correct = selected_side == winning_side
-        if entry_price is not None:
+        if final_temp is None:
+            winning_side = None
+            correct = None
+        else:
+            winning_side = winning_side_for_bucket(final_temp, lower, upper, market_family=market_family)
+            correct = selected_side == winning_side
+        if entry_price is not None and correct is not None:
             paper_pnl = (1.0 - entry_price) if correct else -entry_price
     return PredictionResult(
         timestamp=utc_now_iso(),
@@ -133,6 +142,8 @@ def score_snapshot(snapshot: dict, outcome: StationDateOutcome) -> PredictionRes
         decision_time_local=str(snapshot.get("decision_time_local", "")),
         obs_age_minutes=float(snapshot.get("obs_age_minutes") or 0.0),
         resolved_at=outcome.resolved_at,
+        market_family=market_family,
+        final_low_tmpf=outcome.final_low_tmpf,
     )
 
 

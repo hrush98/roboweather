@@ -42,6 +42,11 @@ class EffectiveStatus(StringEnum):
     UNKNOWN = "UNKNOWN"
 
 
+class MarketFamily(StringEnum):
+    HIGH_TEMP = "HIGH_TEMP"
+    LOW_TEMP = "LOW_TEMP"
+
+
 class PaperPolicyOrderMode(StringEnum):
     FOK = "FOK"
     FAK = "FAK"
@@ -88,6 +93,7 @@ class MarketSnapshot:
     resolution_source: str
     discovered_at: str
     active: bool = True
+    market_family: MarketFamily = MarketFamily.HIGH_TEMP
 
 
 @dataclass(frozen=True)
@@ -152,6 +158,9 @@ class Signal:
     reason_codes: list[str]
     model_name: str
     model_features_hash: str
+    market_family: MarketFamily = MarketFamily.HIGH_TEMP
+    low_so_far: float | None = None
+    hrrr_remaining_min: float | None = None
 
 
 @dataclass(frozen=True)
@@ -225,6 +234,8 @@ class PositionMark:
     high_so_far: float | None
     effective_status: EffectiveStatus
     reason: str
+    market_family: MarketFamily = MarketFamily.HIGH_TEMP
+    low_so_far: float | None = None
 
 
 @dataclass(frozen=True)
@@ -241,6 +252,7 @@ class StationDateDecisionTrace:
     skip_reason: str | None
     distribution: list[dict[str, Any]]
     candidates: list[dict[str, Any]]
+    market_family: MarketFamily = MarketFamily.HIGH_TEMP
 
 
 @dataclass(frozen=True)
@@ -253,6 +265,7 @@ class Resolution:
     source: str
     resolved_at: str
     discrepancy_flag: bool = False
+    market_family: MarketFamily = MarketFamily.HIGH_TEMP
 
 
 @dataclass(frozen=True)
@@ -305,6 +318,8 @@ class PredictionSnapshot:
     skip_reason: str | None
     candidate_count: int
     candidate_distribution: list[dict[str, Any]]
+    market_family: MarketFamily = MarketFamily.HIGH_TEMP
+    low_so_far: float | None = None
     hrrr_current_temp: float | None = None
     hrrr_current_temp_minus_current_temp: float | None = None
     hrrr_remaining_max_minus_selected_lower: float | None = None
@@ -363,6 +378,7 @@ class StationDateOutcome:
     final_high_tmpf: float
     source: str
     resolved_at: str
+    final_low_tmpf: float | None = None
 
 
 @dataclass(frozen=True)
@@ -384,6 +400,8 @@ class PredictionResult:
     decision_time_local: str
     obs_age_minutes: float
     resolved_at: str
+    market_family: MarketFamily = MarketFamily.HIGH_TEMP
+    final_low_tmpf: float | None = None
 
 
 @dataclass(frozen=True)
@@ -404,6 +422,7 @@ class ResearchPolicyPosition:
     entry_fair: float | None
     source_prediction_snapshot_ids: list[int]
     raw_policy: dict[str, Any]
+    market_family: MarketFamily = MarketFamily.HIGH_TEMP
     hrrr_current_temp: float | None = None
     hrrr_current_temp_minus_current_temp: float | None = None
     hrrr_remaining_max: float | None = None

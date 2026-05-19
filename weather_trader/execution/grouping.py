@@ -31,8 +31,8 @@ class GroupSelection:
     trace: StationDateDecisionTrace
 
 
-def group_key(market: MarketSnapshot) -> tuple[str, date | None]:
-    return (market.station, market.market_date)
+def group_key(market: MarketSnapshot) -> tuple[str, date | None, str]:
+    return (market.station, market.market_date, str(market.market_family))
 
 
 class StationDateDecisionEngine:
@@ -110,6 +110,7 @@ class StationDateDecisionEngine:
             skip_reason=None if selected else "NO_GROUP_CANDIDATE",
             distribution=distribution,
             candidates=trace_candidates,
+            market_family=first.market_family,
         )
         return GroupSelection(decisions=final_decisions, selected_decision=selected, trace=trace)
 
@@ -217,6 +218,7 @@ class StationDateDecisionEngine:
             skip_reason=None if selected else "NO_GROUP_CANDIDATE",
             distribution=distribution,
             candidates=candidates,
+            market_family=first.market_family,
         )
         return GroupSelection(decisions=decisions, selected_decision=selected, trace=trace)
 

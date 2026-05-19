@@ -5,6 +5,7 @@ from datetime import date
 import requests
 
 from weather_trader.markets.polymarket_reader import PolymarketReader, WeatherEventTarget
+from weather_trader.execution.contracts import MarketFamily
 
 
 class FakeResponse:
@@ -41,6 +42,27 @@ def test_market_parser_extracts_city_and_threshold() -> None:
     assert market.upper_f == 85.0
     assert market.yes_token_id == "yes-token"
     assert str(market.market_date) == "2026-05-05"
+    assert market.market_family == MarketFamily.HIGH_TEMP
+
+
+def test_market_parser_extracts_lowest_temperature_market() -> None:
+    reader = PolymarketReader()
+    market = reader._parse_weather_market(
+        {
+            "id": "low-1",
+            "question": "Will the lowest temperature in Miami be 72°F or below on May 23?",
+            "slug": "lowest-temperature-in-miami-on-may-23-2026-72f-or-below",
+            "bestBid": "0.42",
+            "bestAsk": "0.47",
+            "clobTokenIds": '["yes-token", "no-token"]',
+            "resolutionSource": "ASOS",
+        }
+    )
+
+    assert market is not None
+    assert market.station == "KMIA"
+    assert market.upper_f == 72.0
+    assert market.market_family == MarketFamily.LOW_TEMP
 
 
 def test_market_parser_maps_seattle_and_houston() -> None:
@@ -121,6 +143,12 @@ def test_weather_event_target_builds_rolling_slug() -> None:
     target = WeatherEventTarget("seattle", date(2026, 5, 14))
 
     assert target.event_slug == "highest-temperature-in-seattle-on-may-14-2026"
+
+
+def test_low_weather_event_target_builds_rolling_slug() -> None:
+    target = WeatherEventTarget("miami", date(2026, 5, 23), MarketFamily.LOW_TEMP)
+
+    assert target.event_slug == "lowest-temperature-in-miami-on-may-23-2026"
 
 
 def test_weather_event_fetch_returns_open_nested_markets(monkeypatch) -> None:

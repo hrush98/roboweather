@@ -21,6 +21,7 @@ class StationWeatherState:
     latest_obs_age_minutes: float
     current_temp: float
     high_so_far: float
+    low_so_far: float
     hour_local: int
     day_of_year: int
     temp_change_1h: float
@@ -32,6 +33,7 @@ class StationWeatherState:
     cloud_cover_code: float
     hrrr_current_temp: float | None
     hrrr_remaining_max: float | None
+    hrrr_remaining_min: float | None
     stale: bool
 
 
@@ -84,6 +86,7 @@ class WeatherFeatureService:
         latest = valid_temp.iloc[-1]
         today = valid_temp
         high_so_far = float(today["tmpf"].max())
+        low_so_far = float(today["tmpf"].min())
         latest_obs_time = latest["valid"].to_pydatetime()
         if latest_obs_time.tzinfo is None:
             latest_obs_time = latest_obs_time.replace(tzinfo=timezone.utc)
@@ -91,11 +94,13 @@ class WeatherFeatureService:
 
         hrrr_current = np.nan
         hrrr_remaining = np.nan
+        hrrr_remaining_min = np.nan
         if self.hrrr_available:
             try:
                 hrrr = self.hrrr_client.fetch_remaining_day_features(station=station, as_of_utc=as_of_utc)
                 hrrr_current = hrrr.get("hrrr_current_temp", np.nan)
                 hrrr_remaining = hrrr.get("hrrr_remaining_max", np.nan)
+                hrrr_remaining_min = hrrr.get("hrrr_remaining_min", np.nan)
             except Exception:
                 pass
 
@@ -106,6 +111,7 @@ class WeatherFeatureService:
             latest_obs_age_minutes=age_minutes,
             current_temp=float(latest["tmpf"]),
             high_so_far=high_so_far,
+            low_so_far=low_so_far,
             hour_local=int(latest["hour_local"]),
             day_of_year=int(latest["doy"]),
             temp_change_1h=_float_or_nan(latest.get("temp_change_1h", np.nan)),
@@ -117,6 +123,7 @@ class WeatherFeatureService:
             cloud_cover_code=_float_or_nan(latest.get("cloud_cover_code", np.nan)),
             hrrr_current_temp=_none_if_nan(hrrr_current),
             hrrr_remaining_max=_none_if_nan(hrrr_remaining),
+            hrrr_remaining_min=_none_if_nan(hrrr_remaining_min),
             stale=age_minutes > self.max_obs_age_minutes,
         )
         self._cache[key] = state

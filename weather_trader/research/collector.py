@@ -108,14 +108,16 @@ class ResearchCollector:
             self.store.insert_book_snapshot(book)
 
         weather_by_station = self._fetch_weather_by_station(markets, now, errors)
-        markets_by_group: dict[tuple[str, date | None], list[MarketSnapshot]] = {}
+        markets_by_group: dict[tuple[str, date | None, str], list[MarketSnapshot]] = {}
         for market in markets:
             markets_by_group.setdefault(group_key(market), []).append(market)
 
         for engine in self.fair_value_engines:
-            contexts_by_group: dict[tuple[str, date | None], list[GroupMarketContext]] = {}
+            contexts_by_group: dict[tuple[str, date | None, str], list[GroupMarketContext]] = {}
             for key, group_markets in markets_by_group.items():
-                station_id, _ = key
+                station_id, _, market_family = key
+                if not engine.supports_market_family(market_family):
+                    continue
                 try:
                     weather = weather_by_station.get(station_id)
                     if weather is None:
@@ -135,7 +137,7 @@ class ResearchCollector:
                     errors.append(f"model:{engine.model_name}:group:{station_id}: {exc}")
 
             for key, contexts in contexts_by_group.items():
-                station_id, market_date = key
+                station_id, market_date, market_family = key
                 if market_date is None:
                     skipped += len(contexts)
                     continue
@@ -147,6 +149,7 @@ class ResearchCollector:
                     weather=weather,
                     as_of_utc=now,
                     config=self.config,
+                    market_family=market_family,
                 )
                 if not due_buckets:
                     skipped += len(contexts)
@@ -244,6 +247,9 @@ class ResearchCollector:
             reason_codes=fair.reason_codes,
             model_name=fair.model_name,
             model_features_hash=fair.model_features_hash,
+            market_family=market.market_family,
+            low_so_far=weather.low_so_far,
+            hrrr_remaining_min=weather.hrrr_remaining_min,
         )
 
 
@@ -251,6 +257,7 @@ def due_delay_buckets(
     weather: StationWeatherState,
     as_of_utc: datetime,
     config: ResearchConfig,
+    market_family: str = "HIGH_TEMP",
 ) -> list[str]:
     station = get_station(weather.station)
     zone = ZoneInfo(station.timezone)
@@ -259,7 +266,9 @@ def due_delay_buckets(
         latest_obs_utc = latest_obs_utc.replace(tzinfo=timezone.utc)
     latest_obs_local = latest_obs_utc.astimezone(zone)
     decision_local = as_of_utc.astimezone(zone)
-    if not _time_in_window(latest_obs_local.time(), config.entry_start_local, config.entry_end_local):
+    start = day_time(0, 0) if market_family == "LOW_TEMP" else config.entry_start_local
+    end = day_time(10, 0) if market_family == "LOW_TEMP" else config.entry_end_local
+    if not _time_in_window(latest_obs_local.time(), start, end):
         return []
     if decision_local.date() != latest_obs_local.date():
         return []
@@ -336,7 +345,9 @@ def build_prediction_snapshot(
         obs_delay_bucket=obs_delay_bucket,
         current_temp=weather.current_temp,
         high_so_far=weather.high_so_far,
+        low_so_far=weather.low_so_far,
         hrrr_remaining_max=weather.hrrr_remaining_max,
+        hrrr_remaining_min=weather.hrrr_remaining_min,
         hrrr_current_temp=weather.hrrr_current_temp,
         hrrr_current_temp_minus_current_temp=_diff(weather.hrrr_current_temp, weather.current_temp),
         hrrr_remaining_max_minus_selected_lower=_diff(
@@ -389,6 +400,7 @@ def build_prediction_snapshot(
         selected_bid_ladder_top_improvement_over_best_bid=bid_ladder.get("top_improvement_over_best_bid"),
         selected_bid_ladder_min_edge=bid_ladder.get("min_edge"),
         selected_bid_ladder_max_edge=bid_ladder.get("max_edge"),
+        market_family=selected_context.market.market_family if selected_context else contexts[0].market.market_family,
     )
 
 

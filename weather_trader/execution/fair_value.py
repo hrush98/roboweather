@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from weather_trader.execution.contracts import MarketSnapshot
+from weather_trader.execution.contracts import MarketFamily, MarketSnapshot
 from weather_trader.execution.weather import StationWeatherState
 from weather_trader.models.train_classifier import load_artifacts
 
@@ -32,13 +32,18 @@ class FairValueEngine:
         self.residuals = bundle.get("residuals")
         self.residual_scope = str(bundle.get("residual_scope") or "window")
         self.model_name = model_path.stem
+        self.market_family = _artifact_market_family(bundle, self.model_name)
         self.model_features_hash = hashlib.sha256(json.dumps(self.feature_columns, sort_keys=True).encode()).hexdigest()[:16]
+
+    def supports_market_family(self, market_family: str | MarketFamily) -> bool:
+        return str(self.market_family) == str(market_family)
 
     def price_market(self, market: MarketSnapshot, weather: StationWeatherState) -> FairValueResult:
         reason_codes = ["MODEL_PROBABILITY"]
         if weather.stale:
             reason_codes.append("STALE_OBS_BLOCKED")
-        if weather.hrrr_remaining_max is None:
+        hrrr_remaining = _hrrr_remaining_for_market(market, weather)
+        if hrrr_remaining is None:
             reason_codes.append("HRRR_MISSING_LOG")
         else:
             reason_codes.append("HRRR_AVAILABLE_LOG")
@@ -93,7 +98,8 @@ class FairValueEngine:
         reason_codes = ["MODEL_PROBABILITY"]
         if weather.stale:
             reason_codes.append("STALE_OBS_BLOCKED")
-        if weather.hrrr_remaining_max is None:
+        hrrr_remaining = _hrrr_remaining_for_market(market, weather)
+        if hrrr_remaining is None:
             reason_codes.append("HRRR_MISSING_LOG")
         else:
             reason_codes.append("HRRR_AVAILABLE_LOG")
@@ -106,6 +112,8 @@ class FairValueEngine:
         weather: StationWeatherState,
         reason_codes: list[str],
     ) -> float:
+        if market.market_family == MarketFamily.LOW_TEMP:
+            return self._low_bucket_probability(market, weather, reason_codes)
         high_so_far = weather.high_so_far
         lower = market.lower_f
         upper = market.upper_f
@@ -138,23 +146,66 @@ class FairValueEngine:
         reason_codes.append("UNPARSEABLE_BUCKET_BLOCKED")
         return 0.0
 
+    def _low_bucket_probability(
+        self,
+        market: MarketSnapshot,
+        weather: StationWeatherState,
+        reason_codes: list[str],
+    ) -> float:
+        low_so_far = weather.low_so_far
+        lower = market.lower_f
+        upper = market.upper_f
+
+        if lower is not None and upper is not None:
+            if low_so_far < lower:
+                reason_codes.append("LOW_SO_FAR_BELOW_BUCKET")
+                return 0.0
+            return max(
+                0.0,
+                self._probability_at_threshold(market, weather, upper)
+                - self._probability_at_threshold(market, weather, lower - 1.0),
+            )
+
+        if lower is not None:
+            if low_so_far < lower:
+                reason_codes.append("LOW_SO_FAR_BELOW_BUCKET")
+                return 0.0
+            return 1.0 - self._probability_at_threshold(market, weather, lower - 1.0)
+
+        if upper is not None:
+            if low_so_far <= upper:
+                reason_codes.append("OR_LOWER_ALREADY_CROSSED")
+                return 1.0
+            return self._probability_at_threshold(market, weather, upper)
+
+        reason_codes.append("UNPARSEABLE_BUCKET_BLOCKED")
+        return 0.0
+
     def _probability_at_threshold(
         self,
         market: MarketSnapshot,
         weather: StationWeatherState,
         threshold: float,
     ) -> float:
-        hrrr_remaining = weather.hrrr_remaining_max if weather.hrrr_remaining_max is not None else np.nan
+        is_low = market.market_family == MarketFamily.LOW_TEMP
+        hrrr_remaining = _hrrr_remaining_for_market(market, weather)
+        hrrr_remaining = hrrr_remaining if hrrr_remaining is not None else np.nan
         hrrr_current = weather.hrrr_current_temp if weather.hrrr_current_temp is not None else np.nan
+        temp_so_far_key = "min_temp_so_far" if is_low else "max_temp_so_far"
+        temp_so_far = weather.low_so_far if is_low else weather.high_so_far
+        threshold_gap_key = "threshold_minus_min_so_far" if is_low else "threshold_minus_max_so_far"
+        hrrr_gap_key = "hrrr_remaining_min_minus_threshold" if is_low else "hrrr_remaining_max_minus_threshold"
         features = {
             "station": weather.station,
             "hour_local": weather.hour_local,
             "day_of_year": weather.day_of_year,
             "current_temp": weather.current_temp,
             "max_temp_so_far": weather.high_so_far,
+            "min_temp_so_far": weather.low_so_far,
             "threshold": threshold,
             "threshold_minus_current_temp": threshold - weather.current_temp,
             "threshold_minus_max_so_far": threshold - weather.high_so_far,
+            "threshold_minus_min_so_far": threshold - weather.low_so_far,
             "temp_change_1h": weather.temp_change_1h,
             "temp_change_3h": weather.temp_change_3h,
             "dewpoint": weather.dewpoint,
@@ -164,8 +215,13 @@ class FairValueEngine:
             "cloud_cover_code": weather.cloud_cover_code,
             "hrrr_current_temp": hrrr_current,
             "hrrr_remaining_max": hrrr_remaining,
+            "hrrr_remaining_min": hrrr_remaining,
             "hrrr_remaining_max_minus_threshold": hrrr_remaining - threshold,
+            "hrrr_remaining_min_minus_threshold": hrrr_remaining - threshold,
             "hrrr_current_temp_minus_current_temp": hrrr_current - weather.current_temp,
+            temp_so_far_key: temp_so_far,
+            threshold_gap_key: threshold - temp_so_far,
+            hrrr_gap_key: hrrr_remaining - threshold,
         }
         frame = pd.DataFrame([{column: features.get(column, np.nan) for column in self.feature_columns}])
         return float(self.model.predict_proba(frame)[:, 1][0])
@@ -173,7 +229,9 @@ class FairValueEngine:
     def _bucket_feature_row(self, market: MarketSnapshot, weather: StationWeatherState) -> dict[str, object]:
         lower = market.lower_f
         upper = _exclusive_upper(market.upper_f)
-        hrrr_remaining = weather.hrrr_remaining_max if weather.hrrr_remaining_max is not None else np.nan
+        is_low = market.market_family == MarketFamily.LOW_TEMP
+        hrrr_remaining = _hrrr_remaining_for_market(market, weather)
+        hrrr_remaining = hrrr_remaining if hrrr_remaining is not None else np.nan
         hrrr_current = weather.hrrr_current_temp if weather.hrrr_current_temp is not None else np.nan
         return {
             "station": weather.station,
@@ -181,6 +239,7 @@ class FairValueEngine:
             "day_of_year": weather.day_of_year,
             "current_temp": weather.current_temp,
             "max_temp_so_far": weather.high_so_far,
+            "min_temp_so_far": weather.low_so_far,
             "temp_change_1h": weather.temp_change_1h,
             "temp_change_3h": weather.temp_change_3h,
             "dewpoint": weather.dewpoint,
@@ -195,15 +254,20 @@ class FairValueEngine:
             "upper_minus_current_temp": upper - weather.current_temp if upper is not None else np.nan,
             "lower_minus_max_so_far": lower - weather.high_so_far if lower is not None else np.nan,
             "upper_minus_max_so_far": upper - weather.high_so_far if upper is not None else np.nan,
+            "lower_minus_min_so_far": lower - weather.low_so_far if lower is not None else np.nan,
+            "upper_minus_min_so_far": upper - weather.low_so_far if upper is not None else np.nan,
             "is_left_tail": int(lower is None),
             "is_right_tail": int(upper is None),
             "hrrr_current_temp": hrrr_current,
             "hrrr_remaining_max": hrrr_remaining,
+            "hrrr_remaining_min": hrrr_remaining,
             "hrrr_current_temp_minus_current_temp": hrrr_current - weather.current_temp,
             "hrrr_lower_minus_current_temp": lower - hrrr_current if lower is not None else np.nan,
             "hrrr_upper_minus_current_temp": upper - hrrr_current if upper is not None else np.nan,
             "hrrr_remaining_max_minus_lower": hrrr_remaining - lower if lower is not None else np.nan,
             "hrrr_remaining_max_minus_upper": hrrr_remaining - upper if upper is not None else np.nan,
+            "hrrr_remaining_min_minus_lower": hrrr_remaining - lower if lower is not None else np.nan,
+            "hrrr_remaining_min_minus_upper": hrrr_remaining - upper if upper is not None else np.nan,
         }
 
     def _dynamic_bucket_probability_override(
@@ -213,7 +277,11 @@ class FairValueEngine:
         probability: float,
         reason_codes: list[str],
     ) -> float:
-        if market.upper_f is not None and weather.high_so_far > market.upper_f:
+        if market.market_family == MarketFamily.LOW_TEMP:
+            if market.lower_f is not None and weather.low_so_far < market.lower_f:
+                reason_codes.append("LOW_SO_FAR_BELOW_BUCKET")
+                return 0.0
+        elif market.upper_f is not None and weather.high_so_far > market.upper_f:
             reason_codes.append("HIGH_SO_FAR_ABOVE_BUCKET")
             return 0.0
         return probability
@@ -327,6 +395,8 @@ class FairValueEngine:
 
 
 def _hrrr_market_context_codes(market: MarketSnapshot, weather: StationWeatherState) -> list[str]:
+    if market.market_family == MarketFamily.LOW_TEMP:
+        return _low_hrrr_market_context_codes(market, weather)
     assert weather.hrrr_remaining_max is not None
     hrrr_max = weather.hrrr_remaining_max
     high_so_far = weather.high_so_far
@@ -342,6 +412,39 @@ def _hrrr_market_context_codes(market: MarketSnapshot, weather: StationWeatherSt
     if market.upper_f is not None and market.lower_f is None and hrrr_max <= market.upper_f:
         codes.append("HRRR_SUPPORTS_OR_BELOW_LOG")
     return codes
+
+
+def _low_hrrr_market_context_codes(market: MarketSnapshot, weather: StationWeatherState) -> list[str]:
+    assert weather.hrrr_remaining_min is not None
+    hrrr_min = weather.hrrr_remaining_min
+    low_so_far = weather.low_so_far
+    codes: list[str] = []
+    if market.lower_f is not None and low_so_far >= market.lower_f and hrrr_min < market.lower_f:
+        codes.append("HRRR_REMAINING_BELOW_LOWER_LOG")
+    if market.upper_f is not None and low_so_far > market.upper_f and hrrr_min > market.upper_f:
+        codes.append("HRRR_REMAINING_ABOVE_UPPER_LOG")
+    if market.lower_f is not None and market.upper_f is not None and market.lower_f <= low_so_far <= market.upper_f and hrrr_min >= market.lower_f:
+        codes.append("HRRR_SUPPORTS_CURRENT_BUCKET_LOG")
+    if market.lower_f is not None and market.upper_f is None and hrrr_min >= market.lower_f:
+        codes.append("HRRR_SUPPORTS_OR_HIGHER_LOG")
+    if market.upper_f is not None and market.lower_f is None and (low_so_far <= market.upper_f or hrrr_min <= market.upper_f):
+        codes.append("HRRR_SUPPORTS_OR_BELOW_LOG")
+    return codes
+
+
+def _hrrr_remaining_for_market(market: MarketSnapshot, weather: StationWeatherState) -> float | None:
+    return weather.hrrr_remaining_min if market.market_family == MarketFamily.LOW_TEMP else weather.hrrr_remaining_max
+
+
+def _artifact_market_family(bundle: dict[str, object], model_name: str) -> MarketFamily:
+    value = bundle.get("market_family") or bundle.get("temperature_metric")
+    if value is not None:
+        text = str(value).upper()
+        if text in {"LOW", "LOW_TEMP"}:
+            return MarketFamily.LOW_TEMP
+        if text in {"HIGH", "HIGH_TEMP"}:
+            return MarketFamily.HIGH_TEMP
+    return MarketFamily.LOW_TEMP if model_name.startswith("low_") else MarketFamily.HIGH_TEMP
 
 
 def _exclusive_upper(upper_f: float | None) -> float | None:

@@ -107,6 +107,7 @@ def _weather(high_so_far: float) -> StationWeatherState:
         latest_obs_age_minutes=15,
         current_temp=70,
         high_so_far=high_so_far,
+        low_so_far=65,
         hour_local=12,
         day_of_year=127,
         temp_change_1h=1.0,
@@ -118,5 +119,6 @@ def _weather(high_so_far: float) -> StationWeatherState:
         cloud_cover_code=0.0,
         hrrr_current_temp=None,
         hrrr_remaining_max=None,
+        hrrr_remaining_min=None,
         stale=False,
     )
