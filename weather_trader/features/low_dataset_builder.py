@@ -1,0 +1,40 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date
+
+import pandas as pd
+
+from weather_trader.features.build_low_temp_features import build_low_temp_threshold_examples
+from weather_trader.stations.iem_asos_client import IEMASOSClient
+from weather_trader.stations.metadata import Station, get_station, list_stations
+
+
+@dataclass
+class LowDatasetBuilder:
+    client: IEMASOSClient
+
+    def build_for_station(self, station: Station, start: date, end: date) -> pd.DataFrame:
+        observations = self.client.fetch_observations(station=station.station, start=start, end=end)
+        return build_low_temp_threshold_examples(observations=observations, station=station)
+
+    def build_for_stations(self, stations: list[Station], start: date, end: date) -> pd.DataFrame:
+        frames = []
+        for station in stations:
+            frame = self.build_for_station(station=station, start=start, end=end)
+            if not frame.empty:
+                frames.append(frame)
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+
+def build_default_low_dataset(
+    start: date,
+    end: date,
+    initial_only: bool = True,
+    station_ids: list[str] | None = None,
+) -> pd.DataFrame:
+    builder = LowDatasetBuilder(client=IEMASOSClient())
+    stations = [get_station(station_id) for station_id in station_ids] if station_ids is not None else list_stations(initial_only=initial_only)
+    return builder.build_for_stations(stations=stations, start=start, end=end)
