@@ -508,7 +508,23 @@ def best_recorded_execution_policies(
     return {
         "Highest Sharpe": sorted(rows, key=execution_sharpe_rank)[:top_n],
         "Highest Win Rate": sorted(rows, key=execution_win_rate_rank)[:top_n],
+        "Highest R/R": sorted(rows, key=execution_rr_rank)[:top_n],
     }
+
+
+def execution_rr_rank(row: dict[str, Any]) -> tuple[float, int, float, float, str, str, str]:
+    rr = row.get("rr")
+    sharpe_value = row.get("sharpe")
+    win_rate = row.get("win_rate")
+    return (
+        -(rr if rr is not None else -math.inf),
+        -int(row.get("resolved") or 0),
+        -(sharpe_value if sharpe_value is not None else -math.inf),
+        -(win_rate if win_rate is not None else -math.inf),
+        str(row.get("mode") or ""),
+        str(row.get("table") or ""),
+        str(row.get("label") or ""),
+    )
 
 
 def execution_sharpe_rank(row: dict[str, Any]) -> tuple[float, float, int, float, str, str, str]:

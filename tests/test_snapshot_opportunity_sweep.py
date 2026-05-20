@@ -107,6 +107,7 @@ def test_cli_smoke_emits_all_modes(tmp_path: Path) -> None:
     assert "## Best Recorded Execution Policies" in output
     assert "### Highest Sharpe" in output
     assert "### Highest Win Rate" in output
+    assert "### Highest R/R" in output
 
 
 def _row(
