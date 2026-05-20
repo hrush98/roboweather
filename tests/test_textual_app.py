@@ -8,7 +8,7 @@ import pytest
 from textual.widgets import Button, DataTable
 
 from weather_trader.ui.process_supervisor import ProcessSpec, ProcessSupervisor
-from weather_trader.ui.textual_app import RoboWeatherTUI
+from weather_trader.ui.textual_app import RoboWeatherTUI, _live_start_label
 from weather_trader.ui.dashboard_rollups import _build_live_policy_view, _build_policy_view, _build_position_view, _bucket_label
 from weather_trader.execution.contracts import (
     BookLevel,
@@ -395,6 +395,12 @@ def test_tui_process_supervisor_tab_mounts(tmp_path) -> None:
             assert app.query_one("#stop-live", Button).disabled is True
 
     asyncio.run(scenario())
+
+
+def test_live_start_label_reflects_supervisor_live_mode() -> None:
+    assert _live_start_label({}) == "Start Live Dry Run"
+    assert _live_start_label({"LIVE_MODE": "dry-run"}) == "Start Live Dry Run"
+    assert _live_start_label({"LIVE_MODE": "live"}) == "Start Live Run"
 
 
 def test_tui_process_actions_start_and_stop_supervised_process(tmp_path) -> None:

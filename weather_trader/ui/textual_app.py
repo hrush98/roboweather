@@ -142,6 +142,10 @@ def _fmt_uptime(seconds: float | None) -> str:
     return f"{minutes:d}:{secs:02d}"
 
 
+def _live_start_label(env: dict[str, str]) -> str:
+    return "Start Live Run" if env.get("LIVE_MODE", "dry-run").strip().lower() == "live" else "Start Live Dry Run"
+
+
 class RoboWeatherTUI(App):
     CSS = """
     Screen {
@@ -292,7 +296,7 @@ class RoboWeatherTUI(App):
                     with Horizontal(classes="process-controls"):
                         yield Button("Start Research", id="start-research", variant="success")
                         yield Button("Stop Research", id="stop-research", variant="warning")
-                        yield Button("Start Live Dry Run", id="start-live", variant="success")
+                        yield Button(_live_start_label(self.process_supervisor.env), id="start-live", variant="success")
                         yield Button("Stop Live", id="stop-live", variant="warning")
                     yield DataTable(id="process-table")
                     with Horizontal(classes="split"):
