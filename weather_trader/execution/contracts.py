@@ -66,6 +66,34 @@ class PaperPolicyFinalState(StringEnum):
     SETTLED = "SETTLED"
 
 
+class LiveOrderMode(StringEnum):
+    FAK = "FAK"
+    FOK = "FOK"
+    GTC = "GTC"
+
+
+class LivePositionState(StringEnum):
+    RESERVED = "RESERVED"
+    SUBMITTED = "SUBMITTED"
+    FILLED = "FILLED"
+    PARTIAL = "PARTIAL"
+    REJECTED = "REJECTED"
+    DELAYED = "DELAYED"
+    UNKNOWN = "UNKNOWN"
+    CANCELLED = "CANCELLED"
+    SETTLED = "SETTLED"
+
+
+class LiveTradeEventType(StringEnum):
+    STRATEGY_REGISTERED = "STRATEGY_REGISTERED"
+    ENTRY_RESERVED = "ENTRY_RESERVED"
+    ENTRY_SUBMIT = "ENTRY_SUBMIT"
+    ENTRY_CONFIRMED = "ENTRY_CONFIRMED"
+    ENTRY_REJECTED = "ENTRY_REJECTED"
+    MARK = "MARK"
+    RESOLVED = "RESOLVED"
+
+
 class PaperPolicyEventType(StringEnum):
     ENTRY_RESERVED = "ENTRY_RESERVED"
     ENTRY_SUBMIT = "ENTRY_SUBMIT"
@@ -546,6 +574,86 @@ class PaperPolicyTradeEvent:
 class PaperPolicyRiskSnapshot:
     timestamp: str
     bankroll_usd: float
+    open_positions: int
+    open_risk_usd: float
+    station_date_exposure_usd: dict[str, float]
+    raw_payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class LiveStrategy:
+    name: str
+    active: bool
+    source: str
+    model_group: str
+    model_names: list[str]
+    strategy_bucket: StrategyBucket
+    market_family: MarketFamily
+    local_decision_start: str
+    local_decision_end: str
+    entry_price_min: float
+    uniqueness_key_mode: str
+    max_notional_usd: float
+    raw_payload: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LivePolicyPosition:
+    timestamp: str
+    strategy_name: str
+    station: str
+    market_date: date
+    market_family: MarketFamily
+    scope_key: str
+    selected_market_id: str
+    selected_token_id: str
+    selected_side: TradeAction
+    selected_bucket: str | None
+    obs_delay_bucket: str
+    entry_price: float
+    entry_fair: float | None
+    entry_edge: float | None
+    target_notional_usd: float
+    target_shares: float
+    state: LivePositionState
+    source_prediction_snapshot_ids: list[int]
+    raw_json: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LiveOrderAttempt:
+    timestamp: str
+    live_position_id: int
+    attempt_seq: int
+    token_id: str
+    side: TradeAction
+    order_mode: LiveOrderMode
+    limit_price: float
+    target_notional_usd: float
+    target_shares: float
+    external_order_id: str | None
+    external_status: str | None
+    final_state: LivePositionState
+    final_reason: str
+    filled_shares: float
+    avg_price: float | None
+    cost_usd: float
+    raw_payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class LiveTradeEvent:
+    timestamp: str
+    live_position_id: int | None
+    strategy_name: str | None
+    event_type: LiveTradeEventType
+    message: str
+    raw_payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class LiveRiskSnapshot:
+    timestamp: str
     open_positions: int
     open_risk_usd: float
     station_date_exposure_usd: dict[str, float]

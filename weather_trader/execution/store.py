@@ -11,6 +11,11 @@ from weather_trader.execution.contracts import (
     BookSnapshot,
     Decision,
     EngineState,
+    LiveOrderAttempt,
+    LivePolicyPosition,
+    LiveRiskSnapshot,
+    LiveStrategy,
+    LiveTradeEvent,
     MarketSnapshot,
     PaperOrder,
     PaperPolicyFinalState,
@@ -478,6 +483,92 @@ class ExecutionStore:
                 id integer primary key autoincrement,
                 timestamp text not null,
                 bankroll_usd real not null,
+                open_positions integer not null,
+                open_risk_usd real not null,
+                station_date_exposure_usd text not null,
+                raw_payload text not null
+            );
+
+            create table if not exists live_strategies (
+                name text primary key,
+                active integer not null,
+                source text not null,
+                model_group text not null,
+                model_names text not null,
+                strategy_bucket text not null,
+                market_family text not null,
+                local_decision_start text not null,
+                local_decision_end text not null,
+                entry_price_min real not null,
+                uniqueness_key_mode text not null,
+                max_notional_usd real not null,
+                raw_json text not null
+            );
+
+            create table if not exists live_policy_positions (
+                id integer primary key autoincrement,
+                timestamp text not null,
+                strategy_name text not null,
+                station text not null,
+                market_date text not null,
+                market_family text not null,
+                scope_key text not null,
+                selected_market_id text not null,
+                selected_token_id text not null,
+                selected_side text not null,
+                selected_bucket text,
+                obs_delay_bucket text not null,
+                entry_price real not null,
+                entry_fair real,
+                entry_edge real,
+                target_notional_usd real not null,
+                target_shares real not null,
+                filled_shares real not null default 0,
+                avg_entry_price real,
+                cost_usd real not null default 0,
+                mark_value real,
+                unrealized_pnl real,
+                state text not null,
+                source_prediction_snapshot_ids text not null,
+                raw_json text not null,
+                unique(strategy_name, station, market_date, market_family, scope_key)
+            );
+
+            create table if not exists live_order_attempts (
+                id integer primary key autoincrement,
+                timestamp text not null,
+                live_position_id integer not null,
+                attempt_seq integer not null,
+                token_id text not null,
+                side text not null,
+                order_mode text not null,
+                limit_price real not null,
+                target_notional_usd real not null,
+                target_shares real not null,
+                external_order_id text,
+                external_status text,
+                final_state text not null,
+                final_reason text not null,
+                filled_shares real not null,
+                avg_price real,
+                cost_usd real not null,
+                raw_payload text not null,
+                unique(live_position_id, attempt_seq)
+            );
+
+            create table if not exists live_trade_events (
+                id integer primary key autoincrement,
+                timestamp text not null,
+                live_position_id integer,
+                strategy_name text,
+                event_type text not null,
+                message text not null,
+                raw_payload text not null
+            );
+
+            create table if not exists live_risk_snapshots (
+                id integer primary key autoincrement,
+                timestamp text not null,
                 open_positions integer not null,
                 open_risk_usd real not null,
                 station_date_exposure_usd text not null,
@@ -1559,6 +1650,225 @@ class ExecutionStore:
         )
         self.connection.commit()
         return int(cursor.lastrowid)
+
+    def upsert_live_strategy(self, strategy: LiveStrategy) -> None:
+        data = dataclass_to_jsonable(strategy)
+        self.connection.execute(
+            """
+            insert into live_strategies (
+                name, active, source, model_group, model_names, strategy_bucket,
+                market_family, local_decision_start, local_decision_end,
+                entry_price_min, uniqueness_key_mode, max_notional_usd, raw_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(name) do update set
+                active=excluded.active,
+                source=excluded.source,
+                model_group=excluded.model_group,
+                model_names=excluded.model_names,
+                strategy_bucket=excluded.strategy_bucket,
+                market_family=excluded.market_family,
+                local_decision_start=excluded.local_decision_start,
+                local_decision_end=excluded.local_decision_end,
+                entry_price_min=excluded.entry_price_min,
+                uniqueness_key_mode=excluded.uniqueness_key_mode,
+                max_notional_usd=excluded.max_notional_usd,
+                raw_json=excluded.raw_json
+            """,
+            (
+                strategy.name,
+                int(strategy.active),
+                strategy.source,
+                strategy.model_group,
+                json.dumps(strategy.model_names),
+                str(strategy.strategy_bucket),
+                str(strategy.market_family),
+                strategy.local_decision_start,
+                strategy.local_decision_end,
+                strategy.entry_price_min,
+                strategy.uniqueness_key_mode,
+                strategy.max_notional_usd,
+                json.dumps(data, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+
+    def live_strategies(self, active_only: bool = True) -> list[dict[str, Any]]:
+        where = "where active = 1" if active_only else ""
+        rows = self.connection.execute(f"select * from live_strategies {where} order by name").fetchall()
+        return [dict(row) for row in rows]
+
+    def insert_live_policy_position(self, position: LivePolicyPosition) -> int | None:
+        data = dataclass_to_jsonable(position)
+        cursor = self.connection.execute(
+            """
+            insert or ignore into live_policy_positions (
+                timestamp, strategy_name, station, market_date, market_family, scope_key,
+                selected_market_id, selected_token_id, selected_side, selected_bucket,
+                obs_delay_bucket, entry_price, entry_fair, entry_edge,
+                target_notional_usd, target_shares, state,
+                source_prediction_snapshot_ids, raw_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                position.timestamp,
+                position.strategy_name,
+                position.station,
+                data["market_date"],
+                str(position.market_family),
+                position.scope_key,
+                position.selected_market_id,
+                position.selected_token_id,
+                str(position.selected_side),
+                position.selected_bucket,
+                position.obs_delay_bucket,
+                position.entry_price,
+                position.entry_fair,
+                position.entry_edge,
+                position.target_notional_usd,
+                position.target_shares,
+                str(position.state),
+                json.dumps(position.source_prediction_snapshot_ids),
+                json.dumps(data, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+        if cursor.rowcount == 0:
+            return None
+        return int(cursor.lastrowid)
+
+    def update_live_policy_position_execution(
+        self,
+        live_position_id: int,
+        *,
+        state: str,
+        filled_shares: float = 0.0,
+        avg_entry_price: float | None = None,
+        cost_usd: float = 0.0,
+        raw_patch: dict[str, Any] | None = None,
+    ) -> None:
+        row = self.connection.execute("select raw_json from live_policy_positions where id = ?", (live_position_id,)).fetchone()
+        raw_json = json.loads(row["raw_json"]) if row is not None else {}
+        if raw_patch:
+            raw_json.update(raw_patch)
+        raw_json.update({"state": state, "filled_shares": filled_shares, "avg_entry_price": avg_entry_price, "cost_usd": cost_usd})
+        self.connection.execute(
+            """
+            update live_policy_positions
+            set state = ?, filled_shares = ?, avg_entry_price = ?, cost_usd = ?, raw_json = ?
+            where id = ?
+            """,
+            (state, filled_shares, avg_entry_price, cost_usd, json.dumps(raw_json, sort_keys=True), live_position_id),
+        )
+        self.connection.commit()
+
+    def insert_live_order_attempt(self, attempt: LiveOrderAttempt) -> int | None:
+        data = dataclass_to_jsonable(attempt)
+        cursor = self.connection.execute(
+            """
+            insert or ignore into live_order_attempts (
+                timestamp, live_position_id, attempt_seq, token_id, side, order_mode,
+                limit_price, target_notional_usd, target_shares, external_order_id,
+                external_status, final_state, final_reason, filled_shares,
+                avg_price, cost_usd, raw_payload
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                attempt.timestamp,
+                attempt.live_position_id,
+                attempt.attempt_seq,
+                attempt.token_id,
+                str(attempt.side),
+                str(attempt.order_mode),
+                attempt.limit_price,
+                attempt.target_notional_usd,
+                attempt.target_shares,
+                attempt.external_order_id,
+                attempt.external_status,
+                str(attempt.final_state),
+                attempt.final_reason,
+                attempt.filled_shares,
+                attempt.avg_price,
+                attempt.cost_usd,
+                json.dumps(data, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+        if cursor.rowcount == 0:
+            return None
+        return int(cursor.lastrowid)
+
+    def insert_live_trade_event(self, event: LiveTradeEvent) -> int:
+        data = dataclass_to_jsonable(event)
+        cursor = self.connection.execute(
+            """
+            insert into live_trade_events (
+                timestamp, live_position_id, strategy_name, event_type, message, raw_payload
+            )
+            values (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.timestamp,
+                event.live_position_id,
+                event.strategy_name,
+                str(event.event_type),
+                event.message,
+                json.dumps(data, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+        return int(cursor.lastrowid)
+
+    def insert_live_risk_snapshot(self, snapshot: LiveRiskSnapshot) -> int:
+        data = dataclass_to_jsonable(snapshot)
+        cursor = self.connection.execute(
+            """
+            insert into live_risk_snapshots (
+                timestamp, open_positions, open_risk_usd, station_date_exposure_usd, raw_payload
+            )
+            values (?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot.timestamp,
+                snapshot.open_positions,
+                snapshot.open_risk_usd,
+                json.dumps(snapshot.station_date_exposure_usd, sort_keys=True),
+                json.dumps(data, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+        return int(cursor.lastrowid)
+
+    def live_open_positions(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            select *
+            from live_policy_positions
+            where state in ('RESERVED', 'SUBMITTED', 'FILLED', 'PARTIAL', 'DELAYED', 'UNKNOWN')
+            order by id
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def live_exposure_summary(self) -> dict[str, Any]:
+        rows = self.live_open_positions()
+        station_date: dict[str, float] = {}
+        total = 0.0
+        for row in rows:
+            risk = float(row["cost_usd"] or row["target_notional_usd"] or 0.0)
+            total += risk
+            key = f"{row['station']}:{row['market_date']}"
+            station_date[key] = station_date.get(key, 0.0) + risk
+        return {"open_positions": len(rows), "open_risk_usd": total, "station_date_exposure_usd": station_date}
+
+    def next_live_attempt_seq(self, live_position_id: int) -> int:
+        row = self.connection.execute(
+            "select max(attempt_seq) seq from live_order_attempts where live_position_id = ?",
+            (live_position_id,),
+        ).fetchone()
+        return int(row["seq"] or 0) + 1
 
     def paper_policy_open_positions(self, policy_name: str | None = None) -> list[dict[str, Any]]:
         policy_filter = "and policy_name = ?" if policy_name is not None else ""

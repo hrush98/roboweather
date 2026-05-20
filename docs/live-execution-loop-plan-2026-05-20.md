@@ -8,13 +8,13 @@ The live loop should not be a thin wrapper around the current paper policy promo
 
 ## High-Level Decision
 
-Run live execution as a separate process from the research loop.
+Run live execution as a separate process from the research loop, backed by a separate live SQLite database.
 
 Reasons:
 
 - Research should stay broad and durable. It can continue collecting every model/strategy snapshot without being constrained by production trading policy gates.
 - Execution needs different failure semantics. A trading process needs kill switch checks, order cooldowns, allowance failures, explicit idempotency, and order reconciliation. Those should not risk wedging the research collector.
-- Both processes can share the same SQLite database for markets, books, prediction snapshots, and audit state. SQLite is acceptable if each process keeps transactions short and the live process does not hold long write locks.
+- The live process should use `/home/maxrush/.local/state/roboweather/live_trading.sqlite` by default. Research can keep using the active research database, while real order reservations, venue order ids, fills, and live risk live in the separate live ledger.
 - The live process can be restarted or paused independently without interrupting the research evidence stream.
 
 ## Source Of Truth Boundaries
@@ -27,6 +27,9 @@ Reasons:
 
 New live tables
 : Durable execution ledger for idempotency, order attempts, reconciliation, fills, marks, and settlement. These should be separate from `paper_policy_*` tables so real money state is unmistakable.
+
+First live strategy
+: `pm_us12_bucket_consensus_hc_late_no_tiny_by_bucket_side_delay_first`
 
 In-memory cycle state
 : The live process should discover markets, fetch books, fetch weather, run active model(s), build policy candidates, select trades, and submit orders within one cycle.
@@ -46,7 +49,7 @@ Required live settings:
 - `polymarket_keyfile_path`, default should point to the existing SleeperService key path unless overridden
 - `polymarket_token_decimals`, default `6`
 - `live_kill_switch_path`, default should match the existing SleeperService stop file unless overridden
-- `live_max_usd_per_order`
+- `live_max_usd_per_order`, default 3.00 for the first live strategy
 - `live_max_total_open_risk`
 - `live_max_exposure_per_station_date`
 - `live_min_seconds_between_orders`
@@ -113,7 +116,17 @@ Cycle flow:
 7. Apply only allowlisted live policies.
 8. Attach live execution metadata from `selected_side_execution_modes`.
 
-For the first live version, use the same consensus policy family that research found strongest. Avoid expanding to every paper policy just because the paper ledger can represent it.
+For the first live version, trade only:
+
+- universe: PM-active US12 high-temp markets;
+- source: `consensus`;
+- model group: `obs_bucket_consensus`;
+- models: `dynamic_bucket_tuned_pm_active_us12_obs_2022_2025` and `catboost_bucket_pm_active_us12_obs_2022_2025`;
+- strategy: `HIGH_CONVICTION`;
+- local decision window: `12:00 <= t < 15:00`;
+- entry filter: side-aware entry price `>= 0.05`;
+- uniqueness: first per station/date/bucket/side/obs-delay;
+- sides: both `BUY_YES` and `BUY_NO` are allowed when both models agree.
 
 ### 5. Risk And Idempotency
 
@@ -124,14 +137,12 @@ Initial hard gates:
 - live mode must default to dry run unless explicitly passed `--mode live`;
 - kill switch file blocks order submission;
 - require configured promoted policies;
-- require selected side to be BUY_NO for the first live rollout unless intentionally widened;
+- allow both `BUY_YES` and `BUY_NO`, but require both consensus models to agree on side, market, bucket, delay, station, date, and strategy;
 - require book age under the configured max;
 - require post-fill edge above the configured floor;
 - require min ask depth for the target stake;
 - block duplicate station/date/family exposure unless explicitly allowed;
-- cap per-order notional;
-- cap station/date exposure;
-- cap total open risk;
+- cap each initial entry at 3.00 USD notional;
 - enforce min seconds between submitted live orders;
 - optionally require allowance check before order placement.
 
@@ -148,7 +159,7 @@ Use one strategy path with swappable final submit behavior.
 : Use the same live candidate/risk path, but fill through a simulated adapter. This replaces the old DB-promotion paper loop for launch rehearsal.
 
 `live`
-: Submit through `ClobExecutor`.
+: Submit through `ClobExecutor`. V1 is live-first, but live orders still require explicit `--mode live`.
 
 Initial live order type should be conservative. Use FAK for ask sweeps when liquidity is visible and the price cap preserves the required edge. Save passive bid ladder geometry for later unless there is a clear operational reason to post live GTC bids on day one.
 
@@ -176,11 +187,11 @@ Add CLI commands:
 Suggested defaults:
 
 - `--mode dry-run`
-- `--db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite`
+- `--live-db /home/maxrush/.local/state/roboweather/live_trading.sqlite`
 - `--interval-seconds 60`
 - `--max-book-age-seconds 10`
 - `--max-obs-age-minutes 30`
-- `--max-usd-per-order 5`
+- `--max-notional-usd 3`
 
 The research loop can keep running in its existing process. The live loop should use the same DB path by default but should not depend on the research loop being up.
 

@@ -10,7 +10,7 @@ import json
 import numpy as np
 import pandas as pd
 
-from weather_trader.config import CACHE_DIR, PROCESSED_DIR, RAW_DIR, ensure_directories
+from weather_trader.config import CACHE_DIR, DEFAULT_LIVE_DB, PROCESSED_DIR, RAW_DIR, ensure_directories
 from weather_trader.config import PAPER_DIR
 from weather_trader.execution.engine import PaperTradingEngine
 from weather_trader.execution.fair_value import FairValueEngine
@@ -30,6 +30,7 @@ from weather_trader.features.build_same_day_features import build_synthetic_thre
 from weather_trader.forecasts.hrrr_client import HRRRClient
 from weather_trader.live.scanner import LiveScanner
 from weather_trader.live.next_day_scanner import NextDayScanner
+from weather_trader.live.execution import LiveExecutionConfig, LiveExecutionEngine
 from weather_trader.models.train_classifier import (
     build_bucket_reports,
     build_reliability_report,
@@ -260,6 +261,28 @@ def main() -> None:
     paper_loop.add_argument("--max-cycles", type=int, default=None)
     paper_loop.add_argument("--max-obs-age-minutes", type=int, default=30)
 
+    live_cycle = subparsers.add_parser("live-cycle", help="Run one live execution cycle")
+    live_cycle.add_argument("--live-db", default=str(DEFAULT_LIVE_DB))
+    live_cycle.add_argument("--mode", choices=["dry-run", "live"], default="dry-run")
+    live_cycle.add_argument("--market-limit", type=int, default=50000)
+    live_cycle.add_argument("--max-obs-age-minutes", type=int, default=30)
+    live_cycle.add_argument("--max-book-age-seconds", type=float, default=10.0)
+    live_cycle.add_argument("--max-notional-usd", type=float, default=3.0)
+    live_cycle.add_argument("--model", dest="model_paths", action="append", default=[])
+    live_cycle.add_argument("--skip-allowance-check", action="store_true")
+
+    live_loop = subparsers.add_parser("live-loop", help="Run repeated live execution cycles")
+    live_loop.add_argument("--live-db", default=str(DEFAULT_LIVE_DB))
+    live_loop.add_argument("--mode", choices=["dry-run", "live"], default="dry-run")
+    live_loop.add_argument("--market-limit", type=int, default=50000)
+    live_loop.add_argument("--interval-seconds", type=int, default=60)
+    live_loop.add_argument("--max-cycles", type=int, default=None)
+    live_loop.add_argument("--max-obs-age-minutes", type=int, default=30)
+    live_loop.add_argument("--max-book-age-seconds", type=float, default=10.0)
+    live_loop.add_argument("--max-notional-usd", type=float, default=3.0)
+    live_loop.add_argument("--model", dest="model_paths", action="append", default=[])
+    live_loop.add_argument("--skip-allowance-check", action="store_true")
+
     research_loop = subparsers.add_parser("research-loop", help="Run headless research snapshot collection and auto-resolution")
     research_loop.add_argument("--model", required=True)
     research_loop.add_argument("--threshold-model", default=None)
@@ -442,6 +465,32 @@ def main() -> None:
             submit_paper_orders=args.submit_paper_orders,
             max_cycles=args.max_cycles,
             max_obs_age_minutes=args.max_obs_age_minutes,
+        )
+        return
+    if args.command == "live-cycle":
+        live_cycle_command(
+            live_db_path=args.live_db,
+            mode=args.mode,
+            market_limit=args.market_limit,
+            max_obs_age_minutes=args.max_obs_age_minutes,
+            max_book_age_seconds=args.max_book_age_seconds,
+            max_notional_usd=args.max_notional_usd,
+            model_paths=args.model_paths,
+            require_allowance_check=not args.skip_allowance_check,
+        )
+        return
+    if args.command == "live-loop":
+        live_loop_command(
+            live_db_path=args.live_db,
+            mode=args.mode,
+            market_limit=args.market_limit,
+            interval_seconds=args.interval_seconds,
+            max_cycles=args.max_cycles,
+            max_obs_age_minutes=args.max_obs_age_minutes,
+            max_book_age_seconds=args.max_book_age_seconds,
+            max_notional_usd=args.max_notional_usd,
+            model_paths=args.model_paths,
+            require_allowance_check=not args.skip_allowance_check,
         )
         return
     if args.command == "research-loop":
@@ -1458,6 +1507,104 @@ def paper_loop_command(
             time.sleep(sleep_seconds)
     except KeyboardInterrupt:
         print("paper-loop stopped")
+    finally:
+        store.close()
+
+
+def live_cycle_command(
+    live_db_path: str,
+    mode: str,
+    market_limit: int,
+    max_obs_age_minutes: int,
+    max_book_age_seconds: float,
+    max_notional_usd: float,
+    model_paths: list[str] | None,
+    require_allowance_check: bool,
+) -> None:
+    store = ExecutionStore(Path(live_db_path))
+    try:
+        config = LiveExecutionConfig(
+            live_db_path=Path(live_db_path),
+            model_paths=tuple(Path(path) for path in model_paths) if model_paths else LiveExecutionConfig().model_paths,
+            mode=mode,
+            market_limit=market_limit,
+            max_obs_age_minutes=max_obs_age_minutes,
+            max_book_age_seconds=max_book_age_seconds,
+            max_notional_usd=max_notional_usd,
+            require_allowance_check=require_allowance_check,
+        )
+        result = LiveExecutionEngine(store, config).run_once()
+        print(
+            json.dumps(
+                {
+                    "live_db": live_db_path,
+                    "mode": mode,
+                    "candidates": result.candidates,
+                    "reserved": result.reserved,
+                    "submitted": result.submitted,
+                    "rejected": result.rejected,
+                    "skipped": result.skipped,
+                    "errors": result.errors[:10],
+                },
+                indent=2,
+            )
+        )
+    finally:
+        store.close()
+
+
+def live_loop_command(
+    live_db_path: str,
+    mode: str,
+    market_limit: int,
+    interval_seconds: int,
+    max_cycles: int | None,
+    max_obs_age_minutes: int,
+    max_book_age_seconds: float,
+    max_notional_usd: float,
+    model_paths: list[str] | None,
+    require_allowance_check: bool,
+) -> None:
+    store = ExecutionStore(Path(live_db_path))
+    try:
+        config = LiveExecutionConfig(
+            live_db_path=Path(live_db_path),
+            model_paths=tuple(Path(path) for path in model_paths) if model_paths else LiveExecutionConfig().model_paths,
+            mode=mode,
+            market_limit=market_limit,
+            max_obs_age_minutes=max_obs_age_minutes,
+            max_book_age_seconds=max_book_age_seconds,
+            max_notional_usd=max_notional_usd,
+            require_allowance_check=require_allowance_check,
+        )
+        engine = LiveExecutionEngine(store, config)
+        cycle = 0
+        while True:
+            cycle += 1
+            started = time.time()
+            result = engine.run_once()
+            print(
+                json.dumps(
+                    {
+                        "cycle": cycle,
+                        "live_db": live_db_path,
+                        "mode": mode,
+                        "candidates": result.candidates,
+                        "reserved": result.reserved,
+                        "submitted": result.submitted,
+                        "rejected": result.rejected,
+                        "skipped": result.skipped,
+                        "errors": result.errors[:10],
+                    },
+                    indent=2,
+                ),
+                flush=True,
+            )
+            if max_cycles is not None and cycle >= max_cycles:
+                break
+            time.sleep(max(1.0, interval_seconds - (time.time() - started)))
+    except KeyboardInterrupt:
+        print("live-loop stopped")
     finally:
         store.close()
 

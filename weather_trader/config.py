@@ -12,6 +12,8 @@ MODELS_DIR = DATA_DIR / "models"
 REPORTS_DIR = DATA_DIR / "reports"
 PAPER_DIR = DATA_DIR / "paper"
 CACHE_DIR = DATA_DIR / "cache"
+DEFAULT_STATE_DIR = Path.home() / ".local" / "state" / "roboweather"
+DEFAULT_LIVE_DB = DEFAULT_STATE_DIR / "live_trading.sqlite"
 
 
 @dataclass(frozen=True)
@@ -22,5 +24,5 @@ class TrainingWindow:
 
 
 def ensure_directories() -> None:
-    for directory in (DATA_DIR, RAW_DIR, PROCESSED_DIR, MODELS_DIR, REPORTS_DIR, PAPER_DIR, CACHE_DIR):
+    for directory in (DATA_DIR, RAW_DIR, PROCESSED_DIR, MODELS_DIR, REPORTS_DIR, PAPER_DIR, CACHE_DIR, DEFAULT_STATE_DIR):
         directory.mkdir(parents=True, exist_ok=True)

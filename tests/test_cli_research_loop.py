@@ -142,6 +142,38 @@ def test_paper_policy_cycle_accepts_execution_options(monkeypatch) -> None:
     assert captured["max_attempts"] == 2
 
 
+def test_live_cycle_accepts_execution_options(monkeypatch) -> None:
+    captured = {}
+
+    def fake_live_cycle_command(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli, "ensure_directories", lambda: None)
+    monkeypatch.setattr(cli, "live_cycle_command", fake_live_cycle_command)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "roboweather",
+            "live-cycle",
+            "--live-db",
+            "/tmp/live.sqlite",
+            "--mode",
+            "live",
+            "--max-notional-usd",
+            "3",
+            "--skip-allowance-check",
+        ],
+    )
+
+    cli.main()
+
+    assert captured["live_db_path"] == "/tmp/live.sqlite"
+    assert captured["mode"] == "live"
+    assert captured["max_notional_usd"] == 3.0
+    assert captured["require_allowance_check"] is False
+
+
 def test_research_loop_hook_runs_paper_promotion_after_policy_evaluation(monkeypatch) -> None:
     calls = []
 
