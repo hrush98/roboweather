@@ -6,10 +6,12 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/run_research.sh [loop|resolve|tui]
+  ./scripts/run_research.sh [loop|resolve|tui|live-loop|live-tui]
 
 Runs the headless research collector by default. It writes prediction snapshots,
 auto-resolves prior station/date outcomes, and does not submit paper trades.
+
+Live modes use the live execution ledger and live kill-switch path.
 
 Environment overrides:
   MODEL=data/models/dynamic_bucket_tuned_pm_active_us12_obs_2022_2025.joblib
@@ -26,6 +28,12 @@ Environment overrides:
   ENTRY_END_LOCAL=15:00
   RESOLVER_INTERVAL_SECONDS=3600
   RESOLVE_AFTER_LOCAL_HOUR=6
+  LIVE_MODE=dry-run          # set to live for real order submission
+  LIVE_DB=$HOME/.local/state/roboweather/live_trading.sqlite
+  LIVE_MODELS=               # optional space-separated model override list
+  MAX_BOOK_AGE_SECONDS=10
+  MAX_NOTIONAL_USD=3
+  SKIP_ALLOWANCE_CHECK=0
   PYTHON=.venv/bin/python # auto-detected if unset
 
 Examples:
@@ -34,6 +42,8 @@ Examples:
   MAX_CYCLES=10 ./scripts/run_research.sh loop
   ./scripts/run_research.sh resolve
   ./scripts/run_research.sh tui
+  ./scripts/run_research.sh live-loop
+  ./scripts/run_research.sh live-tui
 EOF
 }
 
@@ -57,6 +67,7 @@ MODEL="${MODEL:-data/models/dynamic_bucket_tuned_pm_active_us12_obs_2022_2025.jo
 THRESHOLD_MODEL="${THRESHOLD_MODEL:-data/models/mvp_pm_active_us12_obs_2022_2025.joblib}"
 EXTRA_MODELS="${EXTRA_MODELS:-data/models/dynamic_bucket_pm_active_us12_obs_2022_2025.joblib data/models/high_regression_pm_active_us12_obs_2022_2025.joblib data/models/ngboost_normal_pm_active_us12_obs_2022_2025.joblib data/models/catboost_bucket_pm_active_us12_obs_2022_2025.joblib data/models/low_dynamic_bucket_obs_2022_2025.joblib data/models/low_mvp_obs_2022_2025.joblib}"
 DB="${DB:-data/paper/research_2026-05-08_multimodel.sqlite}"
+LIVE_DB="${LIVE_DB:-$HOME/.local/state/roboweather/live_trading.sqlite}"
 MARKET_LIMIT="${MARKET_LIMIT:-50000}"
 BANKROLL="${BANKROLL:-1000}"
 INTERVAL_SECONDS="${INTERVAL_SECONDS:-360}"
@@ -94,9 +105,10 @@ if [[ -n "${EXTRA_MODELS}" && "${mode}" == "loop" ]]; then
   done
 fi
 
-mkdir -p "$(dirname "${DB}")" data/logs
+mkdir -p "$(dirname "${DB}")" "$(dirname "${LIVE_DB}")" data/logs
 
 db_dir="$(dirname "${DB}")"
+live_db_dir="$(dirname "${LIVE_DB}")"
 find_syncthing_root() {
   local path="$1"
   while [[ "${path}" != "/" && -n "${path}" ]]; do
@@ -109,21 +121,37 @@ find_syncthing_root() {
   return 1
 }
 
-if [[ ! -w "${db_dir}" ]]; then
-  echo "DB directory is not writable by $(id -un): ${db_dir}" >&2
-  ls -ld "${db_dir}" >&2 || true
-  exit 1
+if [[ "${mode}" != live-* ]]; then
+  if [[ ! -w "${db_dir}" ]]; then
+    echo "DB directory is not writable by $(id -un): ${db_dir}" >&2
+    ls -ld "${db_dir}" >&2 || true
+    exit 1
+  fi
+  if [[ -e "${DB}" && ! -w "${DB}" ]]; then
+    echo "DB file is not writable by $(id -un): ${DB}" >&2
+    ls -ld "${db_dir}" "${DB}" >&2 || true
+    echo "Fix ownership/permissions or set DB=/path/to/a writable sqlite file." >&2
+    exit 1
+  fi
 fi
-if [[ -e "${DB}" && ! -w "${DB}" ]]; then
-  echo "DB file is not writable by $(id -un): ${DB}" >&2
-  ls -ld "${db_dir}" "${DB}" >&2 || true
-  echo "Fix ownership/permissions or set DB=/path/to/a writable sqlite file." >&2
-  exit 1
+if [[ "${mode}" == live-* ]]; then
+  if [[ ! -w "${live_db_dir}" ]]; then
+    echo "Live DB directory is not writable by $(id -un): ${live_db_dir}" >&2
+    ls -ld "${live_db_dir}" >&2 || true
+    exit 1
+  fi
+  if [[ -e "${LIVE_DB}" && ! -w "${LIVE_DB}" ]]; then
+    echo "Live DB file is not writable by $(id -un): ${LIVE_DB}" >&2
+    ls -ld "${live_db_dir}" "${LIVE_DB}" >&2 || true
+    echo "Fix ownership/permissions or set LIVE_DB=/path/to/a writable sqlite file." >&2
+    exit 1
+  fi
 fi
 db_dir_real="$(cd "${db_dir}" && pwd -P)"
-if syncthing_root="$(find_syncthing_root "${db_dir_real}")"; then
+live_db_dir_real="$(cd "${live_db_dir}" && pwd -P)"
+if [[ "${mode}" != live-* ]] && syncthing_root="$(find_syncthing_root "${db_dir_real}")"; then
   if [[ "${ALLOW_SYNCED_SQLITE:-0}" != "1" ]]; then
-    echo "Refusing to run live SQLite DB inside a Syncthing folder:" >&2
+    echo "Refusing to run research SQLite DB inside a Syncthing folder:" >&2
     echo "  DB=${DB}" >&2
     echo "  Syncthing root=${syncthing_root}" >&2
     echo "" >&2
@@ -136,9 +164,25 @@ if syncthing_root="$(find_syncthing_root "${db_dir_real}")"; then
     exit 1
   fi
 fi
+if [[ "${mode}" == live-* ]] && syncthing_root="$(find_syncthing_root "${live_db_dir_real}")"; then
+  if [[ "${ALLOW_SYNCED_SQLITE:-0}" != "1" ]]; then
+    echo "Refusing to run live SQLite DB inside a Syncthing folder:" >&2
+    echo "  LIVE_DB=${LIVE_DB}" >&2
+    echo "  Syncthing root=${syncthing_root}" >&2
+    echo "" >&2
+    echo "SQLite needs stable local ownership and journal files during the live loop." >&2
+    echo "Use a non-synced live DB path, for example:" >&2
+    echo '  mkdir -p "$HOME/.local/state/roboweather"' >&2
+    echo '  LIVE_DB="$HOME/.local/state/roboweather/live_trading.sqlite" ./scripts/run_research.sh live-loop' >&2
+    echo "" >&2
+    echo "To bypass this guard intentionally, set ALLOW_SYNCED_SQLITE=1." >&2
+    exit 1
+  fi
+fi
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 log_path="data/logs/research_${mode}_${timestamp}.log"
+live_log_path="data/logs/live_${mode}_${timestamp}.log"
 
 echo "mode=${mode}"
 echo "model=${MODEL}"
@@ -146,6 +190,7 @@ if [[ -n "${EXTRA_MODELS}" ]]; then
   echo "extra_models=${EXTRA_MODELS}"
 fi
 echo "db=${DB}"
+echo "live_db=${LIVE_DB}"
 echo "log=${log_path}"
 
 case "${mode}" in
@@ -186,6 +231,37 @@ case "${mode}" in
     ;;
   tui)
     "${PYTHON}" -m weather_trader.cli tui --db "${DB}"
+    ;;
+  live-loop)
+    command=(nice -n 10 "${PYTHON}" -u -m weather_trader.cli live-loop --live-db "${LIVE_DB}" --market-limit "${MARKET_LIMIT}")
+    if [[ -n "${MAX_CYCLES}" ]]; then
+      command+=(--max-cycles "${MAX_CYCLES}")
+    fi
+    if [[ -n "${INTERVAL_SECONDS}" ]]; then
+      command+=(--interval-seconds "${INTERVAL_SECONDS}")
+    fi
+    if [[ "${MAX_OBS_AGE_MINUTES}" != "" ]]; then
+      command+=(--max-obs-age-minutes "${MAX_OBS_AGE_MINUTES}")
+    fi
+    if [[ -n "${MAX_BOOK_AGE_SECONDS:-}" ]]; then
+      command+=(--max-book-age-seconds "${MAX_BOOK_AGE_SECONDS}")
+    fi
+    if [[ -n "${MAX_NOTIONAL_USD:-}" ]]; then
+      command+=(--max-notional-usd "${MAX_NOTIONAL_USD}")
+    fi
+    if [[ "${LIVE_MODE:-dry-run}" != "dry-run" ]]; then
+      command+=(--mode "${LIVE_MODE}")
+    fi
+    if [[ "${SKIP_ALLOWANCE_CHECK:-0}" == "1" || "${SKIP_ALLOWANCE_CHECK:-false}" == "true" ]]; then
+      command+=(--skip-allowance-check)
+    fi
+    for live_model_path in ${LIVE_MODELS:-}; do
+      command+=(--model "${live_model_path}")
+    done
+    "${command[@]}" 2>&1 | tee "${live_log_path}"
+    ;;
+  live-tui)
+    "${PYTHON}" -m weather_trader.cli tui --db "${LIVE_DB}"
     ;;
   *)
     usage >&2

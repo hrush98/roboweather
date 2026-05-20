@@ -137,6 +137,8 @@ session:
 
 ```bash
 ./scripts/run_research.sh tui
+./scripts/run_research.sh live-loop
+./scripts/run_research.sh live-tui
 ```
 
 ## Current status
