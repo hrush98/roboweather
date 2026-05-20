@@ -21,6 +21,7 @@ from weather_trader.ui.dashboard_rollups import (
     _money_text,
     _status_text,
 )
+from weather_trader.ui.process_supervisor import ProcessSpec, ProcessSupervisor
 
 
 CONFIG_STATIONS = {"KATL", "KBKF", "KDAL", "KDEN", "KHOU", "KLAX", "KLGA", "KMIA", "KORD", "KSEA", "KSFO"}
@@ -33,6 +34,7 @@ class TableSort:
 
 
 OVERVIEW_TABLE_IDS = {"live-summary", "live-strategies", "live-stations", "live-positions"}
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 DEFAULT_DESC_SORT_COLUMNS = {
     "attempts",
@@ -118,6 +120,28 @@ def _default_target_date(db_path: Path) -> str:
     return latest or datetime.now(ZoneInfo("America/Los_Angeles")).date().isoformat()
 
 
+def _default_process_supervisor() -> ProcessSupervisor:
+    runner = REPO_ROOT / "scripts" / "run_research.sh"
+    return ProcessSupervisor(
+        [
+            ProcessSpec("research", "Research Loop", (str(runner), "loop")),
+            ProcessSpec("live", "Live Loop", (str(runner), "live-loop")),
+        ],
+        cwd=REPO_ROOT,
+    )
+
+
+def _fmt_uptime(seconds: float | None) -> str:
+    if seconds is None:
+        return ""
+    total = int(seconds)
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:d}:{secs:02d}"
+
+
 class RoboWeatherTUI(App):
     CSS = """
     Screen {
@@ -190,6 +214,26 @@ class RoboWeatherTUI(App):
         height: 1fr;
     }
 
+    #process-table {
+        height: 7;
+    }
+
+    #research-log {
+        height: 1fr;
+    }
+
+    #live-log {
+        height: 1fr;
+    }
+
+    .process-controls {
+        height: 3;
+    }
+
+    .process-controls Button {
+        margin: 0 1;
+    }
+
     #engine {
         height: 8;
     }
@@ -209,13 +253,14 @@ class RoboWeatherTUI(App):
         ("q", "quit", "Quit"),
     ]
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, process_supervisor: ProcessSupervisor | None = None) -> None:
         super().__init__()
         self.db_path = db_path
         self.actionable_only = False
         self.target_date = _default_target_date(db_path)
         self.kill_switch_path = Path(load_live_settings().live_kill_switch_path).expanduser()
         self.table_sorts: dict[str, TableSort] = {}
+        self.process_supervisor = process_supervisor or _default_process_supervisor()
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -242,6 +287,21 @@ class RoboWeatherTUI(App):
                     yield DataTable(id="live-orders")
                     yield Static("Live Trade Events", classes="section-title")
                     yield DataTable(id="live-events")
+                with TabPane("Processes", id="processes-tab"):
+                    yield Static("Process Supervisor", classes="section-title")
+                    with Horizontal(classes="process-controls"):
+                        yield Button("Start Research", id="start-research", variant="success")
+                        yield Button("Stop Research", id="stop-research", variant="warning")
+                        yield Button("Start Live Dry Run", id="start-live", variant="success")
+                        yield Button("Stop Live", id="stop-live", variant="warning")
+                    yield DataTable(id="process-table")
+                    with Horizontal(classes="split"):
+                        with Vertical(classes="stack"):
+                            yield Static("Research Log", classes="section-title")
+                            yield DataTable(id="research-log")
+                        with Vertical(classes="stack"):
+                            yield Static("Live Log", classes="section-title")
+                            yield DataTable(id="live-log")
                 with TabPane("Diagnostics", id="diagnostics-tab"):
                     yield Static("Engine Cycles", classes="section-title")
                     yield DataTable(id="engine")
@@ -326,6 +386,18 @@ class RoboWeatherTUI(App):
         live_events.cursor_type = "row"
         live_events.add_columns("time", "strategy", "type", "message", "position")
 
+        process_table = self.query_one("#process-table", DataTable)
+        process_table.cursor_type = "row"
+        process_table.add_columns("process", "status", "pid", "uptime", "exit", "restarts", "latest")
+
+        research_log = self.query_one("#research-log", DataTable)
+        research_log.cursor_type = "row"
+        research_log.add_columns("line")
+
+        live_log = self.query_one("#live-log", DataTable)
+        live_log.cursor_type = "row"
+        live_log.add_columns("line")
+
         engine = self.query_one("#engine", DataTable)
         engine.cursor_type = "row"
         engine.add_columns("time", "mode", "markets", "actionable", "orders", "skipped", "errors", "first error")
@@ -339,11 +411,24 @@ class RoboWeatherTUI(App):
         signals.add_columns("time", "station", "bucket", "fair yes", "yes ask", "fair no", "no ask", "edge", "signal", "reason")
 
         self.refresh_table()
+        self.refresh_processes()
         self.set_interval(10.0, self.refresh_table)
+        self.set_interval(1.0, self.refresh_processes)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "kill-button":
             self.action_activate_kill_switch()
+        elif event.button.id == "start-research":
+            await self._start_process("research")
+        elif event.button.id == "stop-research":
+            await self._stop_process("research")
+        elif event.button.id == "start-live":
+            await self._start_process("live")
+        elif event.button.id == "stop-live":
+            await self._stop_process("live")
+
+    async def on_unmount(self) -> None:
+        await self.process_supervisor.stop_all()
 
     def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
         table = event.data_table
@@ -379,6 +464,44 @@ class RoboWeatherTUI(App):
             self.kill_switch_path.write_text(f"activated_at={datetime.now(timezone.utc).isoformat()}\n")
         self.notify(f"Live trading kill switch active: {self.kill_switch_path}", severity="error")
         self.refresh_table()
+
+    async def _start_process(self, name: str) -> None:
+        snapshot = await self.process_supervisor.start(name)
+        self.notify(f"{snapshot.label} {snapshot.status.lower()}.")
+        self.refresh_processes()
+
+    async def _stop_process(self, name: str) -> None:
+        snapshot = await self.process_supervisor.stop(name)
+        self.notify(f"{snapshot.label} {snapshot.status.lower()}.")
+        self.refresh_processes()
+
+    def refresh_processes(self) -> None:
+        process_table = self.query_one("#process-table", DataTable)
+        process_table.clear()
+        snapshots = {snapshot.name: snapshot for snapshot in self.process_supervisor.snapshots()}
+        for snapshot in snapshots.values():
+            process_table.add_row(
+                snapshot.label,
+                _status_text(snapshot.status),
+                str(snapshot.pid or ""),
+                _fmt_uptime(snapshot.uptime_seconds),
+                "" if snapshot.exit_code is None else str(snapshot.exit_code),
+                str(snapshot.restart_count),
+                snapshot.latest_log[:100],
+            )
+
+        self.query_one("#start-research", Button).disabled = snapshots["research"].status == "RUNNING"
+        self.query_one("#stop-research", Button).disabled = snapshots["research"].status != "RUNNING"
+        self.query_one("#start-live", Button).disabled = snapshots["live"].status == "RUNNING"
+        self.query_one("#stop-live", Button).disabled = snapshots["live"].status != "RUNNING"
+        self._refresh_process_log("research", "#research-log")
+        self._refresh_process_log("live", "#live-log")
+
+    def _refresh_process_log(self, name: str, table_id: str) -> None:
+        table = self.query_one(table_id, DataTable)
+        table.clear()
+        for line in self.process_supervisor.logs(name)[-200:]:
+            table.add_row(line[:240])
 
     def refresh_table(self) -> None:
         store = ExecutionStore(self.db_path)

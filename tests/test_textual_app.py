@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import sys
 from datetime import date, datetime, timezone
 
 import pytest
+from textual.widgets import Button, DataTable
 
+from weather_trader.ui.process_supervisor import ProcessSpec, ProcessSupervisor
+from weather_trader.ui.textual_app import RoboWeatherTUI
 from weather_trader.ui.dashboard_rollups import _build_live_policy_view, _build_policy_view, _build_position_view, _bucket_label
 from weather_trader.execution.contracts import (
     BookLevel,
@@ -369,6 +374,52 @@ def test_live_policy_view_handles_empty_input() -> None:
     assert view["unique_count"] == 0
     assert view["policy_rows"] == []
     assert view["rows"] == []
+
+
+def test_tui_process_supervisor_tab_mounts(tmp_path) -> None:
+    async def scenario() -> None:
+        supervisor = ProcessSupervisor(
+            [
+                ProcessSpec("research", "Research Loop", (sys.executable, "-c", "print('research')")),
+                ProcessSpec("live", "Live Loop", (sys.executable, "-c", "print('live')")),
+            ],
+            cwd=tmp_path,
+        )
+        app = RoboWeatherTUI(tmp_path / "tui.sqlite", process_supervisor=supervisor)
+        async with app.run_test(size=(140, 40)):
+            process_table = app.query_one("#process-table", DataTable)
+            assert process_table.row_count == 2
+            assert app.query_one("#start-research", Button).disabled is False
+            assert app.query_one("#stop-research", Button).disabled is True
+            assert app.query_one("#start-live", Button).disabled is False
+            assert app.query_one("#stop-live", Button).disabled is True
+
+    asyncio.run(scenario())
+
+
+def test_tui_process_actions_start_and_stop_supervised_process(tmp_path) -> None:
+    async def scenario() -> None:
+        supervisor = ProcessSupervisor(
+            [
+                ProcessSpec("research", "Research Loop", (sys.executable, "-u", "-c", "import time; print('research ready'); time.sleep(60)")),
+                ProcessSpec("live", "Live Loop", (sys.executable, "-c", "print('live')")),
+            ],
+            cwd=tmp_path,
+            stop_timeout_seconds=1.0,
+        )
+        app = RoboWeatherTUI(tmp_path / "tui.sqlite", process_supervisor=supervisor)
+        async with app.run_test(size=(140, 40)):
+            await app._start_process("research")
+            assert supervisor.snapshot("research").status == "RUNNING"
+            assert app.query_one("#start-research", Button).disabled is True
+            assert app.query_one("#stop-research", Button).disabled is False
+
+            await app._stop_process("research")
+            assert supervisor.snapshot("research").status in {"EXITED", "FAILED"}
+            assert app.query_one("#start-research", Button).disabled is False
+            assert app.query_one("#stop-research", Button).disabled is True
+
+    asyncio.run(scenario())
 
 
 def test_live_research_policy_positions_can_be_scoped_to_market_date(tmp_path) -> None:

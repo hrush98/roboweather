@@ -108,11 +108,11 @@ def _book_status(mark_pct: float | None) -> str:
 
 def _status_text(value: Any) -> Text:
     text = str(value or "")
-    if text in {"DONE", "ITM", "LIVE_STRONG", "PROMISING", "PRELIM_WIN", "OFFICIAL_WIN", "MARKED"}:
+    if text in {"DONE", "ITM", "LIVE_STRONG", "PROMISING", "PRELIM_WIN", "OFFICIAL_WIN", "MARKED", "RUNNING", "EXITED"}:
         return Text(text, style="green")
     if text in {"LIVE", "MIXED", "WATCH", "TOO_EARLY"}:
         return Text(text, style="yellow")
-    if text in {"BOOK_GAPS", "NO_BOOK_MARK", "LIVE_STRESS", "WEAK", "PRELIM_LOSS", "OFFICIAL_LOSS"}:
+    if text in {"BOOK_GAPS", "NO_BOOK_MARK", "LIVE_STRESS", "WEAK", "PRELIM_LOSS", "OFFICIAL_LOSS", "FAILED"}:
         return Text(text, style="red")
     return Text(text)
 
