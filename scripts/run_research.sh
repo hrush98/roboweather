@@ -64,6 +64,11 @@ MAX_CYCLES="${MAX_CYCLES:-}"
 MAX_OBS_AGE_MINUTES="${MAX_OBS_AGE_MINUTES:-30}"
 ENTRY_START_LOCAL="${ENTRY_START_LOCAL:-10:00}"
 ENTRY_END_LOCAL="${ENTRY_END_LOCAL:-15:00}"
+SNAPSHOT_START_LOCAL="${SNAPSHOT_START_LOCAL:-07:00}"
+SNAPSHOT_END_LOCAL="${SNAPSHOT_END_LOCAL:-18:00}"
+LOW_SNAPSHOT_START_LOCAL="${LOW_SNAPSHOT_START_LOCAL:-00:00}"
+LOW_SNAPSHOT_END_LOCAL="${LOW_SNAPSHOT_END_LOCAL:-23:59}"
+EVALUATE_POLICIES="${EVALUATE_POLICIES:-0}"
 RESOLVER_INTERVAL_SECONDS="${RESOLVER_INTERVAL_SECONDS:-3600}"
 RESOLVE_AFTER_LOCAL_HOUR="${RESOLVE_AFTER_LOCAL_HOUR:-6}"
 
@@ -156,12 +161,19 @@ case "${mode}" in
       --max-obs-age-minutes "${MAX_OBS_AGE_MINUTES}"
       --entry-start-local "${ENTRY_START_LOCAL}"
       --entry-end-local "${ENTRY_END_LOCAL}"
+      --snapshot-start-local "${SNAPSHOT_START_LOCAL}"
+      --snapshot-end-local "${SNAPSHOT_END_LOCAL}"
+      --low-snapshot-start-local "${LOW_SNAPSHOT_START_LOCAL}"
+      --low-snapshot-end-local "${LOW_SNAPSHOT_END_LOCAL}"
       --resolver-interval-seconds "${RESOLVER_INTERVAL_SECONDS}"
       --resolve-after-local-hour "${RESOLVE_AFTER_LOCAL_HOUR}"
     )
     for extra_model_path in "${extra_model_paths[@]}"; do
       command+=(--extra-model "${extra_model_path}")
     done
+    if [[ "${EVALUATE_POLICIES}" != "1" ]]; then
+      command+=(--disable-policy-evaluation)
+    fi
     if [[ -n "${MAX_CYCLES}" ]]; then
       command+=(--max-cycles "${MAX_CYCLES}")
     fi

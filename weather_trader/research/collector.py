@@ -33,6 +33,10 @@ from weather_trader.stations.metadata import get_station
 class ResearchConfig:
     entry_start_local: day_time = day_time(10, 0)
     entry_end_local: day_time = day_time(15, 0)
+    snapshot_start_local: day_time | None = None
+    snapshot_end_local: day_time | None = None
+    low_snapshot_start_local: day_time = day_time(0, 0)
+    low_snapshot_end_local: day_time = day_time(10, 0)
     delay_minutes: tuple[int, ...] = (0, 5, 10, 15, 30)
     instant_max_age_minutes: int = 3
     max_obs_age_minutes: int = 30
@@ -266,8 +270,12 @@ def due_delay_buckets(
         latest_obs_utc = latest_obs_utc.replace(tzinfo=timezone.utc)
     latest_obs_local = latest_obs_utc.astimezone(zone)
     decision_local = as_of_utc.astimezone(zone)
-    start = day_time(0, 0) if market_family == "LOW_TEMP" else config.entry_start_local
-    end = day_time(10, 0) if market_family == "LOW_TEMP" else config.entry_end_local
+    if market_family == "LOW_TEMP":
+        start = config.low_snapshot_start_local
+        end = config.low_snapshot_end_local
+    else:
+        start = config.snapshot_start_local or config.entry_start_local
+        end = config.snapshot_end_local or config.entry_end_local
     if not _time_in_window(latest_obs_local.time(), start, end):
         return []
     if decision_local.date() != latest_obs_local.date():

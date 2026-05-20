@@ -62,6 +62,33 @@ def test_low_due_delay_buckets_use_midnight_to_10am_window() -> None:
     ) == []
 
 
+
+def test_due_delay_buckets_can_use_wider_snapshot_window_than_entry_window() -> None:
+    config = ResearchConfig(
+        entry_start_local=time(10, 0),
+        entry_end_local=time(15, 0),
+        snapshot_start_local=time(7, 0),
+        snapshot_end_local=time(18, 0),
+    )
+
+    assert due_delay_buckets(_weather("2026-05-06T13:30:00+00:00"), datetime(2026, 5, 6, 13, 36, tzinfo=timezone.utc), config) == ["5m"]
+
+
+def test_low_due_delay_buckets_can_use_configured_snapshot_window() -> None:
+    config = ResearchConfig(
+        entry_start_local=time(10, 0),
+        entry_end_local=time(15, 0),
+        low_snapshot_start_local=time(0, 0),
+        low_snapshot_end_local=time(23, 59),
+    )
+
+    assert due_delay_buckets(
+        _weather("2026-05-06T16:00:00+00:00"),
+        datetime(2026, 5, 6, 16, 6, tzinfo=timezone.utc),
+        config,
+        market_family=str(MarketFamily.LOW_TEMP),
+    ) == ["5m"]
+
 def test_score_snapshot_scores_selected_side_against_final_high() -> None:
     snapshot = {
         "id": 10,

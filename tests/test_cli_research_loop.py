@@ -66,6 +66,43 @@ def test_research_loop_accepts_paper_policy_promotion_flag(monkeypatch) -> None:
     assert captured["enable_paper_policy_promotion"] is True
 
 
+
+def test_research_loop_accepts_snapshot_collection_options(monkeypatch) -> None:
+    captured = {}
+
+    def fake_research_loop_command(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli, "ensure_directories", lambda: None)
+    monkeypatch.setattr(cli, "research_loop_command", fake_research_loop_command)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "roboweather",
+            "research-loop",
+            "--model",
+            "data/models/dynamic_bucket_obs_2022_2025.joblib",
+            "--snapshot-start-local",
+            "07:00",
+            "--snapshot-end-local",
+            "18:00",
+            "--low-snapshot-start-local",
+            "00:00",
+            "--low-snapshot-end-local",
+            "23:59",
+            "--disable-policy-evaluation",
+        ],
+    )
+
+    cli.main()
+
+    assert captured["snapshot_start_local"] == "07:00"
+    assert captured["snapshot_end_local"] == "18:00"
+    assert captured["low_snapshot_start_local"] == "00:00"
+    assert captured["low_snapshot_end_local"] == "23:59"
+    assert captured["disable_policy_evaluation"] is True
+
 def test_paper_policy_cycle_accepts_execution_options(monkeypatch) -> None:
     captured = {}
 

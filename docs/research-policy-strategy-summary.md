@@ -21,6 +21,41 @@ Other trained artifacts exist in `data/models`, but were not active in the May 7
 
 The current loop stores each model independently in `prediction_snapshots`. It does not blend model probabilities live. Consensus analysis means post-processing rows where both active models independently chose the same station/date/delay/strategy/side/bucket.
 
+## Terminology and DB Labels
+
+Use these names consistently when discussing research results:
+
+| Concept | Meaning | Primary DB labels |
+| --- | --- | --- |
+| Model | One trained forecasting artifact that emits probabilities for a station/date market ladder. Examples include `dynamic_bucket_pm_active_us12_obs_2022_2025`, `mvp_pm_active_us12_obs_2022_2025`, and `catboost_bucket_pm_active_us12_obs_2022_2025`. | `prediction_snapshots.model_name`; copied to `research_policy_positions.model_group` for single-model policies |
+| Model family | A comparable feature/training universe for a set of models. Current broad high-temperature families are `obs` and `hrrr_v2`. | Encoded in `policy_name` prefixes such as `broad_obs_*` and `broad_hrrr_v2_*`; defined in `weather_trader/research/policies.py` as `MODEL_FAMILIES` |
+| Consensus group | A fixed combination of models. A consensus row exists only when every model in the group independently selects the same station, market date, observation-delay bucket, strategy bucket, side, market id, and bucket. | `raw_json.source_prediction_snapshot_ids`; `raw_json.raw_policy.model_group`; `research_policy_positions.model_group` is `consensus` for these rows |
+| Strategy | The rule used to choose a candidate from a model's priced ladder. This is not a model and not a policy. Current broad strategies are `HIGH_CONVICTION`, `TAIL`, and `BEST_BUCKET`; `MAX_SO_FAR` is rule-based. | `prediction_snapshots.strategy_bucket`; `research_policy_positions.strategy_bucket` |
+| Opportunity | The selected tradable unit: station, market date, market family, selected bucket, selected side, and often observation-delay bucket. This is the level used for overlap and duplicate-exposure analysis. | `station`, `market_date`, `market_family`, `selected_bucket`, `selected_side`, `obs_delay_bucket`, `selected_market_id` |
+| Policy | A named research ledger rule that filters and de-duplicates candidates into hypothetical positions. Policies are analysis objects, not forecasting models. | `research_policy_positions.policy_name`; full policy settings are nested under `raw_json.raw_policy.policy` |
+| Policy scope | The uniqueness key that decides how many rows one policy may insert. `station_date` means first eligible row per station/date/family. `station_date_bucket_side` also separates bucket and side. `station_date_bucket_side_obs_delay` also separates observation-delay bucket. | `research_policy_positions.scope_key`; configured by `raw_json.raw_policy.policy.uniqueness_key_mode` for newer rows |
+| Gates | Optional filters applied by a policy, such as model, consensus group, strategy, observation delay, entry-price band, fair-probability band, edge band, bucket type, station allow/exclude set, or decision-time window. | Policy columns are materialized as position fields where relevant; configured under `raw_json.raw_policy.policy` |
+
+The `broad_*` high-temperature policies are intended as broad comparison policies across model family, model or consensus group, and strategy. They currently leave edge, entry-price, fair-probability, observation-delay, station, bucket-type, and decision-time gates open. Their names follow:
+
+```
+broad_{model_family}_{model_alias_or_consensus_group}_{strategy}_first
+```
+
+Examples:
+
+- `broad_obs_dynamic_tuned_high_conviction_first`: one `obs` family model, one strategy.
+- `broad_obs_dynamic_tuned_mvp_high_conviction_first`: consensus between the `obs` dynamic-tuned and MVP models, one strategy.
+- `broad_hrrr_v2_catboost_mvp_best_bucket_first`: consensus between the `hrrr_v2` catboost and MVP models, one strategy.
+
+Policy scopes should be chosen by analysis purpose:
+
+- `station_date` is the clean scorecard layer. It keeps one first eligible position per station/date/family/policy, which makes model, consensus-group, and strategy comparisons less sensitive to correlated multi-bucket fanout.
+- `station_date_bucket_side_obs_delay` is the preferred opportunity-capture research layer. It keeps one first eligible position per station/date/family/bucket/side/obs-delay/policy, which preserves enough breadth to later break results down by bucket, side, observation timing, model, consensus group, and strategy without repeatedly inserting the same position every loop.
+- `station_date_bucket_side` is useful when observation timing should be collapsed but bucket and side still need to be preserved.
+
+The generated `broad_*` specs currently use the default `station_date` scope. For deeper research on what is actually trading best, add or replay a parallel diagnostic family with `uniqueness_key_mode="station_date_bucket_side_obs_delay"` rather than trying to infer all opportunity-level behavior from the scorecard layer.
+
 ## Strategy Definitions
 
 `BEST_BUCKET` chooses the bucket with the highest model `fair_yes` for a station/date. It is a `BUY_YES` strategy and can act at lower probability thresholds.

@@ -272,6 +272,11 @@ def main() -> None:
     research_loop.add_argument("--max-obs-age-minutes", type=int, default=30)
     research_loop.add_argument("--entry-start-local", default="10:00")
     research_loop.add_argument("--entry-end-local", default="15:00")
+    research_loop.add_argument("--snapshot-start-local", default=None, help="Optional high-temp snapshot collection start, HH:MM. Defaults to entry start.")
+    research_loop.add_argument("--snapshot-end-local", default=None, help="Optional high-temp snapshot collection end, HH:MM. Defaults to entry end.")
+    research_loop.add_argument("--low-snapshot-start-local", default="00:00", help="Low-temp snapshot collection start, HH:MM.")
+    research_loop.add_argument("--low-snapshot-end-local", default="10:00", help="Low-temp snapshot collection end, HH:MM.")
+    research_loop.add_argument("--disable-policy-evaluation", action="store_true", help="Collect and resolve snapshots without materializing research policy positions.")
     research_loop.add_argument("--resolver-interval-seconds", type=int, default=3600)
     research_loop.add_argument("--resolve-after-local-hour", type=int, default=6)
     research_loop.add_argument("--enable-paper-policy-promotion", action="store_true")
@@ -452,6 +457,11 @@ def main() -> None:
             max_obs_age_minutes=args.max_obs_age_minutes,
             entry_start_local=args.entry_start_local,
             entry_end_local=args.entry_end_local,
+            snapshot_start_local=args.snapshot_start_local,
+            snapshot_end_local=args.snapshot_end_local,
+            low_snapshot_start_local=args.low_snapshot_start_local,
+            low_snapshot_end_local=args.low_snapshot_end_local,
+            disable_policy_evaluation=args.disable_policy_evaluation,
             resolver_interval_seconds=args.resolver_interval_seconds,
             resolve_after_local_hour=args.resolve_after_local_hour,
             enable_paper_policy_promotion=args.enable_paper_policy_promotion,
@@ -1464,6 +1474,11 @@ def research_loop_command(
     max_obs_age_minutes: int,
     entry_start_local: str,
     entry_end_local: str,
+    snapshot_start_local: str | None,
+    snapshot_end_local: str | None,
+    low_snapshot_start_local: str,
+    low_snapshot_end_local: str,
+    disable_policy_evaluation: bool,
     resolver_interval_seconds: int,
     resolve_after_local_hour: int,
     enable_paper_policy_promotion: bool = False,
@@ -1473,6 +1488,10 @@ def research_loop_command(
         config = ResearchConfig(
             entry_start_local=_parse_hhmm(entry_start_local),
             entry_end_local=_parse_hhmm(entry_end_local),
+            snapshot_start_local=_parse_hhmm(snapshot_start_local) if snapshot_start_local else None,
+            snapshot_end_local=_parse_hhmm(snapshot_end_local) if snapshot_end_local else None,
+            low_snapshot_start_local=_parse_hhmm(low_snapshot_start_local),
+            low_snapshot_end_local=_parse_hhmm(low_snapshot_end_local),
             max_obs_age_minutes=max_obs_age_minutes,
             bankroll_usd=bankroll,
             market_limit=market_limit,
@@ -1481,7 +1500,7 @@ def research_loop_command(
             store=store,
             config=ResolverConfig(resolve_after_local_hour=resolve_after_local_hour),
         )
-        policy_evaluator = ResearchPolicyEvaluator(store=store)
+        policy_evaluator = None if disable_policy_evaluation else ResearchPolicyEvaluator(store=store)
         model_paths = [Path(model_path)]
         if threshold_model_path:
             model_paths.append(Path(threshold_model_path))

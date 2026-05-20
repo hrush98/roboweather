@@ -19,6 +19,31 @@ The active local research database is usually:
 
 Repository SQLite copies under `data/paper/` may be stale and should be treated as snapshots or test artifacts unless explicitly known to be current.
 
+## Research Data Model
+
+Use the research tables as separate layers, not as interchangeable sources:
+
+| Layer | Role | Primary use |
+| --- | --- | --- |
+| `prediction_snapshots` | Raw opportunity tape from the research loop. Stores model, strategy, selected bucket/side, edge, market price, liquidity, execution diagnostics, and timing for each observed signal. | Broad discovery and retrospective analysis. |
+| `prediction_results` | Resolved outcome tape keyed by `prediction_snapshot_id`. Stores official weather outcome, selected-side correctness, entry price, and hypothetical snapshot PnL. | Snapshot-level scoring. |
+| `research_policy_positions` | Materialized policy views derived from snapshots or consensus rows after applying policy gates and a de-duplication scope. | Candidate policy replay and scorecards. |
+| `paper_policy_positions` | Paper execution ledger for allowlisted policies. | Execution rehearsal, order logging, fills/marks/settlement mechanics. |
+
+The active research loop should keep collecting broad `prediction_snapshots`. That is the most valuable source of truth and should not be narrowed prematurely. `research_policy_positions` are useful, but they are not the full research universe; they are saved hypotheses or scorecard views over the broader snapshot tape.
+
+Recommended analysis sequence:
+
+1. Collect broad snapshots and liquidity/execution diagnostics in the research loop.
+2. Resolve snapshots through `prediction_results` using official station outcomes.
+3. Analyze snapshots first by model, consensus group, strategy, side, bucket, obs-delay bucket, entry band, edge band, liquidity, station, and local time.
+4. Define candidate policy rules only after the broad snapshot analysis shows a stable pattern.
+5. Replay those rules into `research_policy_positions` with an explicit scope such as `station_date` for scorecards or `station_date_bucket_side_obs_delay` for opportunity-level diagnostics.
+6. Promote only a small number of explicit candidate policies to paper execution.
+7. Consider real-money execution only after paper trading validates both signal quality and execution mechanics.
+
+`station_date` policy scope is a clean comparison layer: one first eligible position per station/date/family/policy. `station_date_bucket_side_obs_delay` is the broader opportunity-capture layer: one first eligible position per station/date/family/bucket/side/obs-delay/policy. Both can be rebuilt retroactively from `prediction_snapshots` for current policy families, including consensus groups when the required model snapshots exist.
+
 ## Paper Execution Status
 
 The standalone paper-policy loop exists, but it is not the preferred long-term execution design. It scans `research_policy_positions` from SQLite, promotes allowlisted policy rows, then attempts simulated execution from those stored rows.
