@@ -72,6 +72,46 @@ def test_consensus_requires_all_models_and_uses_newest_liquidity() -> None:
     assert row["source_prediction_snapshot_ids"] == [1, 2]
 
 
+def test_policy_search_reconstructs_pm_us12_consensus_hc_late_entry_policy() -> None:
+    dynamic = _row(
+        1,
+        model_name=sweep.PM_ACTIVE_DYNAMIC_MODEL,
+        source=sweep.PM_ACTIVE_DYNAMIC_MODEL,
+        edge=0.12,
+        selected_fair_yes=0.72,
+        entry_price=0.60,
+        timestamp="2026-05-07T17:00:00+00:00",
+        decision_time_local="2026-05-07T13:00:00-04:00",
+    )
+    mvp = _row(
+        2,
+        model_name=sweep.PM_ACTIVE_MVP_MODEL,
+        source=sweep.PM_ACTIVE_MVP_MODEL,
+        edge=0.18,
+        selected_fair_yes=0.78,
+        entry_price=0.60,
+        timestamp="2026-05-07T17:01:00+00:00",
+        decision_time_local="2026-05-07T13:01:00-04:00",
+    )
+
+    policy_rows, policy_summaries = sweep.build_policy_search_rows([dynamic, mvp])
+
+    matching_rows = [
+        row for row in policy_rows if row["policy_name"] == "pm_us12_consensus_hc_late_entry_50_75_first"
+    ]
+    assert len(matching_rows) == 1
+    assert matching_rows[0]["source_prediction_snapshot_ids"] == [1, 2]
+    assert matching_rows[0]["selected_edge"] == pytest.approx(0.15)
+    assert matching_rows[0]["selected_fair"] == pytest.approx(0.75)
+
+    matching_summaries = [
+        row for row in policy_summaries if row["policy_name"] == "pm_us12_consensus_hc_late_entry_50_75_first"
+    ]
+    assert len(matching_summaries) == 1
+    assert matching_summaries[0]["resolved"] == 1
+    assert matching_summaries[0]["rr"] == pytest.approx((1.0 - 0.60) / 0.60)
+
+
 def test_cli_smoke_emits_all_modes(tmp_path: Path) -> None:
     db_path = tmp_path / "research.sqlite"
     db = sqlite3.connect(db_path)
@@ -105,6 +145,7 @@ def test_cli_smoke_emits_all_modes(tmp_path: Path) -> None:
         assert f"## {mode}" in output
     assert "## Promotion Candidates" in output
     assert "## Best Recorded Execution Policies" in output
+    assert "## Policy Search Candidates" in output
     assert "### Highest Sharpe" in output
     assert "### Highest Win Rate" in output
     assert "### Highest R/R" in output
@@ -129,6 +170,7 @@ def _row(
     paper_pnl: float | None = 0.60,
     correct: int | None = 1,
     timestamp: str = "2026-05-07T10:00:00+00:00",
+    decision_time_local: str = "2026-05-07T06:00:00-04:00",
     selected_sweep_fillable_50_usd: float | None = 100.0,
 ) -> dict:
     model = model_name or source
@@ -154,7 +196,7 @@ def _row(
         "entry_price": entry_price,
         "paper_pnl": paper_pnl,
         "correct": correct,
-        "decision_time_local": "2026-05-07T06:00:00-04:00",
+        "decision_time_local": decision_time_local,
         "selected_sweep_fillable_50_usd": selected_sweep_fillable_50_usd,
         "selected_book_age_seconds": 12.0,
     }

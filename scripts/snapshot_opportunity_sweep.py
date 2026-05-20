@@ -10,6 +10,7 @@ import sqlite3
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, time
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -18,7 +19,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.policy_leaderboard import bucket_type, edge_band, entry_band, probability_band, return_risk, sharpe
-from weather_trader.research.policies import CONSENSUS_GROUPS, CONSENSUS_GROUPS_BY_MODEL
+from weather_trader.research.policies import CONSENSUS_GROUPS
 
 ACTIVE_LOCAL_DB = Path.home() / ".local/state/roboweather/research_2026-05-08_multimodel.sqlite"
 
@@ -58,12 +59,83 @@ MODE_ORDER = (
     "hindsight_best",
 )
 
+PM_ACTIVE_DYNAMIC_MODEL = "dynamic_bucket_pm_active_us12_obs_2022_2025"
+PM_ACTIVE_MVP_MODEL = "mvp_pm_active_us12_obs_2022_2025"
+PM_ACTIVE_DYNAMIC_TUNED_MODEL = "dynamic_bucket_tuned_pm_active_us12_obs_2022_2025"
+PM_ACTIVE_CATBOOST_MODEL = "catboost_bucket_pm_active_us12_obs_2022_2025"
+PM_ACTIVE_HIGH_REGRESSION_MODEL = "high_regression_pm_active_us12_obs_2022_2025"
+PM_ACTIVE_NGBOOST_MODEL = "ngboost_normal_pm_active_us12_obs_2022_2025"
+
+POLICY_SEARCH_CONSENSUS_GROUPS: dict[str, tuple[str, ...]] = {
+    **CONSENSUS_GROUPS,
+    # Historical pm_us12 research policies used dynamic_default + mvp. The current
+    # live evaluator only registers dynamic_tuned + mvp, so the snapshot search
+    # must add this group explicitly to reconstruct the older policy families.
+    "pm_active_us12_dynamic_mvp": (PM_ACTIVE_DYNAMIC_MODEL, PM_ACTIVE_MVP_MODEL),
+}
+
+KNOWN_MODEL_ALIASES = {
+    PM_ACTIVE_DYNAMIC_MODEL: "pm_us12_dynamic",
+    PM_ACTIVE_MVP_MODEL: "pm_us12_mvp",
+    PM_ACTIVE_DYNAMIC_TUNED_MODEL: "pm_us12_dynamic_tuned",
+    PM_ACTIVE_CATBOOST_MODEL: "pm_us12_catboost",
+    PM_ACTIVE_HIGH_REGRESSION_MODEL: "pm_us12_high_regression",
+    PM_ACTIVE_NGBOOST_MODEL: "pm_us12_ngboost",
+    "low_dynamic_bucket_obs_2022_2025": "low_pm_us12_dynamic",
+    "low_mvp_obs_2022_2025": "low_pm_us12_mvp",
+}
+
+KNOWN_CONSENSUS_ALIASES = {
+    "pm_active_us12_dynamic_mvp": "pm_us12_consensus",
+    "obs_dynamic_tuned_mvp": "pm_us12_dynamic_tuned_mvp",
+    "obs_catboost_mvp": "pm_us12_catboost_mvp",
+    "obs_bucket_consensus": "pm_us12_bucket_consensus",
+    "obs_three_model_consensus": "pm_us12_three_model_consensus",
+    "low_pm_active_us12_dynamic_mvp": "low_pm_us12_consensus",
+}
+
+STRATEGY_ALIASES = {
+    "HIGH_CONVICTION": "hc",
+    "BEST_BUCKET": "best",
+    "TAIL": "tail",
+    "MAX_SO_FAR": "max_so_far",
+}
+
 
 @dataclass(frozen=True)
 class ModeResult:
     name: str
     rows: list[dict[str, Any]]
     hindsight_only: bool = False
+
+
+@dataclass(frozen=True)
+class EntryBandSpec:
+    slug: str | None
+    minimum: float | None
+    maximum: float | None
+
+
+@dataclass(frozen=True)
+class LocalWindowSpec:
+    slug: str | None
+    start: str | None
+    end: str | None
+
+
+@dataclass(frozen=True)
+class PolicySearchSpec:
+    name: str
+    source: str
+    strategy_bucket: str | None = None
+    model_name: str | None = None
+    model_group: str | None = None
+    obs_delay_bucket: str | None = None
+    entry_price_min: float | None = None
+    entry_price_max: float | None = None
+    local_decision_start: str | None = None
+    local_decision_end: str | None = None
+    uniqueness_key_mode: str = "station_date"
 
 
 def default_db_path() -> Path:
@@ -82,6 +154,11 @@ def load_snapshot_rows(
     end_date: str | None = None,
     market_family: str | None = None,
 ) -> list[dict[str, Any]]:
+    snapshot_columns = table_columns(db, "prediction_snapshots")
+
+    def ps_col(name: str, fallback: str = "null") -> str:
+        return f"ps.{name}" if name in snapshot_columns else fallback
+
     where = ["ps.selected_side != 'SKIP'", "ps.selected_market_id is not null"]
     params: list[Any] = []
     if start_date:
@@ -91,8 +168,11 @@ def load_snapshot_rows(
         where.append("ps.market_date <= ?")
         params.append(end_date)
     if market_family:
-        where.append("coalesce(ps.market_family, 'HIGH_TEMP') = ?")
-        params.append(market_family)
+        if "market_family" in snapshot_columns:
+            where.append("coalesce(ps.market_family, 'HIGH_TEMP') = ?")
+            params.append(market_family)
+        elif market_family != "HIGH_TEMP":
+            return []
 
     sql = f"""
         select
@@ -116,24 +196,24 @@ def load_snapshot_rows(
             ps.selected_yes_ask,
             ps.selected_no_ask,
             ps.model_name,
-            coalesce(ps.market_family, 'HIGH_TEMP') as market_family,
-            ps.selected_best_bid,
-            ps.selected_best_ask,
-            ps.selected_spread,
-            ps.selected_depth_at_ask,
-            ps.selected_depth_ask_plus_0_01,
-            ps.selected_depth_ask_plus_0_03,
-            ps.selected_depth_ask_plus_0_05,
-            ps.selected_book_timestamp,
-            ps.selected_book_age_seconds,
-            ps.selected_sweep_price_cap,
-            ps.selected_sweep_depth_to_cap,
-            ps.selected_sweep_fillable_25_usd,
-            ps.selected_sweep_fillable_50_usd,
-            ps.selected_sweep_fillable_100_usd,
-            ps.selected_sweep_vwap_25,
-            ps.selected_sweep_vwap_50,
-            ps.selected_sweep_vwap_100,
+            {ps_col("market_family", "'HIGH_TEMP'")} as market_family,
+            {ps_col("selected_best_bid")} as selected_best_bid,
+            {ps_col("selected_best_ask")} as selected_best_ask,
+            {ps_col("selected_spread")} as selected_spread,
+            {ps_col("selected_depth_at_ask")} as selected_depth_at_ask,
+            {ps_col("selected_depth_ask_plus_0_01")} as selected_depth_ask_plus_0_01,
+            {ps_col("selected_depth_ask_plus_0_03")} as selected_depth_ask_plus_0_03,
+            {ps_col("selected_depth_ask_plus_0_05")} as selected_depth_ask_plus_0_05,
+            {ps_col("selected_book_timestamp")} as selected_book_timestamp,
+            {ps_col("selected_book_age_seconds")} as selected_book_age_seconds,
+            {ps_col("selected_sweep_price_cap")} as selected_sweep_price_cap,
+            {ps_col("selected_sweep_depth_to_cap")} as selected_sweep_depth_to_cap,
+            {ps_col("selected_sweep_fillable_25_usd")} as selected_sweep_fillable_25_usd,
+            {ps_col("selected_sweep_fillable_50_usd")} as selected_sweep_fillable_50_usd,
+            {ps_col("selected_sweep_fillable_100_usd")} as selected_sweep_fillable_100_usd,
+            {ps_col("selected_sweep_vwap_25")} as selected_sweep_vwap_25,
+            {ps_col("selected_sweep_vwap_50")} as selected_sweep_vwap_50,
+            {ps_col("selected_sweep_vwap_100")} as selected_sweep_vwap_100,
             pr.correct,
             pr.entry_price,
             pr.paper_pnl,
@@ -153,11 +233,21 @@ def load_snapshot_rows(
     return rows
 
 
-def build_consensus_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def table_columns(db: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row["name"] if isinstance(row, sqlite3.Row) else row[1]) for row in db.execute(f"pragma table_info({table})")}
+
+
+def build_consensus_rows(
+    rows: list[dict[str, Any]],
+    *,
+    consensus_groups: dict[str, tuple[str, ...]] | None = None,
+) -> list[dict[str, Any]]:
+    groups = consensus_groups or CONSENSUS_GROUPS
+    groups_by_model = consensus_groups_by_model(groups)
     by_key: dict[tuple[Any, ...], dict[str, dict[str, Any]]] = {}
     for item in rows:
         model_name = str(item.get("model_name") or "")
-        group_names = CONSENSUS_GROUPS_BY_MODEL.get(model_name)
+        group_names = groups_by_model.get(model_name)
         if not group_names:
             continue
         for group_name in group_names:
@@ -167,7 +257,7 @@ def build_consensus_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     consensus: list[dict[str, Any]] = []
     for key, by_model in by_key.items():
         group_name = str(key[0])
-        required_models = CONSENSUS_GROUPS[group_name]
+        required_models = groups[group_name]
         participants = [by_model.get(model_name) for model_name in required_models]
         if any(item is None for item in participants):
             continue
@@ -188,6 +278,15 @@ def build_consensus_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         item["consensus_models"] = list(required_models)
         consensus.append(item)
     return sorted(consensus, key=sort_key)
+
+
+def consensus_groups_by_model(groups: dict[str, tuple[str, ...]]) -> dict[str, tuple[str, ...]]:
+    by_model: dict[str, tuple[str, ...]] = {}
+    for group_name, model_names in groups.items():
+        for model_name in model_names:
+            by_model.setdefault(model_name, ())
+            by_model[model_name] = (*by_model[model_name], group_name)
+    return by_model
 
 
 def consensus_key(group_name: str, item: dict[str, Any]) -> tuple[Any, ...]:
@@ -242,6 +341,222 @@ def apply_modes(rows: list[dict[str, Any]]) -> dict[str, ModeResult]:
         "best_liquidity": ModeResult("best_liquidity", best_by_key(rows, opportunity_key, best_liquidity_key)),
         "hindsight_best": ModeResult("hindsight_best", best_by_key(rows, opportunity_key, hindsight_key), True),
     }
+
+
+def build_policy_search_specs(rows: list[dict[str, Any]]) -> list[PolicySearchSpec]:
+    specs: list[PolicySearchSpec] = []
+    seen_names: set[str] = set()
+    present_models = {str(row.get("model_name") or "") for row in rows if row.get("model_name")}
+    present_strategies = {str(row.get("strategy_bucket") or "") for row in rows if row.get("strategy_bucket")}
+
+    for model_name in sorted(present_models):
+        if not model_name or model_name in POLICY_SEARCH_CONSENSUS_GROUPS:
+            continue
+        alias = model_alias(model_name)
+        for strategy in sorted(present_strategies):
+            if strategy == "MAX_SO_FAR":
+                continue
+            for spec in policy_spec_grid(
+                base_alias=alias,
+                source="model",
+                strategy_bucket=strategy,
+                model_name=model_name,
+            ):
+                add_policy_spec(specs, seen_names, spec)
+
+    for group_name, required_models in sorted(POLICY_SEARCH_CONSENSUS_GROUPS.items()):
+        if not set(required_models).issubset(present_models):
+            continue
+        alias = consensus_alias(group_name)
+        for strategy in sorted(strategy for strategy in present_strategies if strategy != "MAX_SO_FAR"):
+            for spec in policy_spec_grid(
+                base_alias=alias,
+                source="consensus",
+                strategy_bucket=strategy,
+                model_group=group_name,
+            ):
+                add_policy_spec(specs, seen_names, spec)
+
+    if "MAX_SO_FAR" in present_strategies:
+        for spec in policy_spec_grid(base_alias="pm_us12_max_so_far", source="max_so_far", strategy_bucket="MAX_SO_FAR"):
+            add_policy_spec(specs, seen_names, spec)
+
+    return specs
+
+
+def policy_spec_grid(
+    *,
+    base_alias: str,
+    source: str,
+    strategy_bucket: str,
+    model_name: str | None = None,
+    model_group: str | None = None,
+) -> list[PolicySearchSpec]:
+    entry_bands = (
+        EntryBandSpec(None, None, None),
+        EntryBandSpec("entry_00_10", 0.00, 0.10),
+        EntryBandSpec("entry_05_10", 0.05, 0.10),
+        EntryBandSpec("entry_10_25", 0.10, 0.25),
+        EntryBandSpec("entry_25_50", 0.25, 0.50),
+        EntryBandSpec("entry_50_75", 0.50, 0.75),
+        EntryBandSpec("entry_75_100", 0.75, 1.00),
+        EntryBandSpec("entry_25_75", 0.25, 0.75),
+        EntryBandSpec("no_tiny", 0.05, None),
+    )
+    windows = (
+        LocalWindowSpec(None, None, None),
+        LocalWindowSpec("early", "10:00", "12:00"),
+        LocalWindowSpec("late", "12:00", "15:00"),
+    )
+    obs_delays: tuple[str | None, ...] = (None, "5m", "10m", "15m")
+    uniqueness_modes = ("station_date", "station_date_bucket_side", "station_date_bucket_side_obs_delay")
+
+    specs = []
+    strategy_slug = STRATEGY_ALIASES.get(strategy_bucket, slugify(strategy_bucket))
+    for obs_delay in obs_delays:
+        for window in windows:
+            for entry_band in entry_bands:
+                for uniqueness_mode in uniqueness_modes:
+                    parts = [base_alias]
+                    if not base_alias.endswith(f"_{strategy_slug}"):
+                        parts.append(strategy_slug)
+                    if obs_delay is not None:
+                        parts.append(obs_delay)
+                    if window.slug is not None:
+                        parts.append(window.slug)
+                    if entry_band.slug is not None:
+                        parts.append(entry_band.slug)
+                    if uniqueness_mode == "station_date_bucket_side":
+                        parts.append("by_bucket_side")
+                    elif uniqueness_mode == "station_date_bucket_side_obs_delay":
+                        parts.append("by_bucket_side_delay")
+                    parts.append("first")
+                    specs.append(
+                        PolicySearchSpec(
+                            name="_".join(parts),
+                            source=source,
+                            strategy_bucket=strategy_bucket,
+                            model_name=model_name,
+                            model_group=model_group,
+                            obs_delay_bucket=obs_delay,
+                            entry_price_min=entry_band.minimum,
+                            entry_price_max=entry_band.maximum,
+                            local_decision_start=window.start,
+                            local_decision_end=window.end,
+                            uniqueness_key_mode=uniqueness_mode,
+                        )
+                    )
+    return specs
+
+
+def add_policy_spec(specs: list[PolicySearchSpec], seen_names: set[str], spec: PolicySearchSpec) -> None:
+    if spec.name in seen_names:
+        return
+    seen_names.add(spec.name)
+    specs.append(spec)
+
+
+def build_policy_search_rows(base_rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    search_rows = [
+        *base_rows,
+        *build_consensus_rows(base_rows, consensus_groups=POLICY_SEARCH_CONSENSUS_GROUPS),
+    ]
+    specs = build_policy_search_specs(base_rows)
+    position_rows: list[dict[str, Any]] = []
+    summaries: list[dict[str, Any]] = []
+    for spec in specs:
+        candidates = [row for row in search_rows if row_matches_policy_spec(spec, row)]
+        selected = first_policy_rows(spec, candidates)
+        if not selected:
+            continue
+        policy_rows = [policy_row(spec, row) for row in selected]
+        position_rows.extend(policy_rows)
+        summaries.append(summarize_policy_candidate(spec, policy_rows))
+    return position_rows, sorted(summaries, key=policy_default_rank)
+
+
+def row_matches_policy_spec(spec: PolicySearchSpec, row: dict[str, Any]) -> bool:
+    if spec.source == "model" and row.get("model_name") != spec.model_name:
+        return False
+    if spec.source == "consensus":
+        if row.get("source") != f"consensus:{spec.model_group}":
+            return False
+    if spec.source == "max_so_far" and row.get("strategy_bucket") != "MAX_SO_FAR":
+        return False
+    if spec.source != "max_so_far" and row.get("strategy_bucket") == "MAX_SO_FAR":
+        return False
+    if spec.strategy_bucket is not None and row.get("strategy_bucket") != spec.strategy_bucket:
+        return False
+    if spec.obs_delay_bucket is not None and row.get("obs_delay_bucket") != spec.obs_delay_bucket:
+        return False
+    if not in_range(entry_price(row), spec.entry_price_min, spec.entry_price_max):
+        return False
+    if spec.local_decision_start is not None or spec.local_decision_end is not None:
+        decision_time = local_time(row.get("decision_time_local"))
+        if decision_time is None:
+            return False
+        start = parse_hhmm(spec.local_decision_start) if spec.local_decision_start else None
+        end = parse_hhmm(spec.local_decision_end) if spec.local_decision_end else None
+        if start is not None and decision_time < start:
+            return False
+        if end is not None and decision_time >= end:
+            return False
+    return True
+
+
+def first_policy_rows(spec: PolicySearchSpec, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for row in sorted(rows, key=sort_key):
+        key = policy_uniqueness_key(spec, row)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(row)
+    return selected
+
+
+def policy_uniqueness_key(spec: PolicySearchSpec, row: dict[str, Any]) -> tuple[Any, ...]:
+    key = [row.get("station"), row.get("market_date"), row.get("market_family") or "HIGH_TEMP"]
+    if spec.uniqueness_key_mode == "station_date_bucket_side":
+        key.extend([row.get("selected_bucket"), row.get("selected_side")])
+    elif spec.uniqueness_key_mode == "station_date_bucket_side_obs_delay":
+        key.extend([row.get("selected_bucket"), row.get("selected_side"), row.get("obs_delay_bucket")])
+    elif spec.uniqueness_key_mode != "station_date":
+        raise ValueError(f"Unsupported uniqueness_key_mode: {spec.uniqueness_key_mode}")
+    return tuple(key)
+
+
+def policy_row(spec: PolicySearchSpec, row: dict[str, Any]) -> dict[str, Any]:
+    item = dict(row)
+    item["policy_name"] = spec.name
+    item["policy_source"] = spec.source
+    item["policy_model_name"] = spec.model_name
+    item["policy_model_group"] = spec.model_group
+    item["policy_filters"] = policy_filter_label(spec)
+    return item
+
+
+def summarize_policy_candidate(spec: PolicySearchSpec, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    summary = summarize_slice(spec.name, rows, min_n=0)
+    summary["policy_name"] = spec.name
+    summary["source"] = spec.source
+    summary["model"] = spec.model_name or spec.model_group or "max_so_far"
+    summary["strategy"] = spec.strategy_bucket
+    summary["filters"] = policy_filter_label(spec)
+    summary["scope"] = spec.uniqueness_key_mode
+    return summary
+
+
+def policy_filter_label(spec: PolicySearchSpec) -> str:
+    parts = []
+    if spec.obs_delay_bucket is not None:
+        parts.append(f"obs={spec.obs_delay_bucket}")
+    if spec.local_decision_start is not None or spec.local_decision_end is not None:
+        parts.append(f"local={spec.local_decision_start or '*'}-{spec.local_decision_end or '*'}")
+    if spec.entry_price_min is not None or spec.entry_price_max is not None:
+        parts.append(f"entry={format_bound(spec.entry_price_min)}-{format_bound(spec.entry_price_max)}")
+    return ",".join(parts) if parts else "none"
 
 
 def opportunity_key(item: dict[str, Any]) -> tuple[Any, ...]:
@@ -556,7 +871,14 @@ def execution_win_rate_rank(row: dict[str, Any]) -> tuple[float, int, float, flo
     )
 
 
-def render_report(mode_results: dict[str, ModeResult], *, min_n: int, top_n: int) -> str:
+def render_report(
+    mode_results: dict[str, ModeResult],
+    *,
+    min_n: int,
+    top_n: int,
+    policy_summaries: list[dict[str, Any]] | None = None,
+    min_policy_n: int | None = None,
+) -> str:
     lines = ["# Snapshot Opportunity Sweep", ""]
     all_mode_tables: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for mode_name in MODE_ORDER:
@@ -595,6 +917,32 @@ def render_report(mode_results: dict[str, ModeResult], *, min_n: int, top_n: int
             lines.extend(render_execution_policy_table(rows))
         else:
             lines.append("No slices met the minimum resolved sample size.")
+    if policy_summaries is not None:
+        policy_min = min_n if min_policy_n is None else min_policy_n
+        eligible_policy_summaries = [
+            row
+            for row in policy_summaries
+            if int(row.get("resolved") or 0) >= policy_min
+            and float_value(row.get("pnl")) > 0.0
+            and float_value(row.get("rr")) > 0.0
+        ]
+        lines.extend(["", "## Policy Search Candidates", ""])
+        lines.append(
+            "Built by enumerating policy specs from prediction snapshots, replaying first-eligible rows, "
+            "and ranking the resulting policy-level PnL. This section is not a grouped slice of existing policy rows."
+        )
+        lines.extend(["", "### Highest Sharpe", ""])
+        lines.extend(render_policy_search_table(sorted(eligible_policy_summaries, key=policy_sharpe_rank)[:top_n]) if eligible_policy_summaries else ["No generated policies met the minimum resolved sample size."])
+        lines.extend(["", "### Highest R/R", ""])
+        lines.extend(render_policy_search_table(sorted(eligible_policy_summaries, key=policy_rr_rank)[:top_n]) if eligible_policy_summaries else ["No generated policies met the minimum resolved sample size."])
+        lines.extend(["", "### Highest PnL", ""])
+        lines.extend(render_policy_search_table(sorted(eligible_policy_summaries, key=policy_pnl_rank)[:top_n]) if eligible_policy_summaries else ["No generated policies met the minimum resolved sample size."])
+        lines.extend(["", "### Highest Win Rate", ""])
+        lines.extend(render_policy_search_table(sorted(eligible_policy_summaries, key=policy_win_rate_rank)[:top_n]) if eligible_policy_summaries else ["No generated policies met the minimum resolved sample size."])
+        lines.extend(["", "### Low-Risk Consistency", ""])
+        lines.extend(render_policy_search_table(sorted(eligible_policy_summaries, key=policy_low_risk_rank)[:top_n]) if eligible_policy_summaries else ["No generated policies met the minimum resolved sample size."])
+        lines.extend(["", "### Degenerate Upside", ""])
+        lines.extend(render_policy_search_table(sorted(eligible_policy_summaries, key=policy_degenerate_rank)[:top_n]) if eligible_policy_summaries else ["No generated policies met the minimum resolved sample size."])
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -639,6 +987,30 @@ def render_execution_policy_table(rows: list[dict[str, Any]]) -> list[str]:
     return render_rows(columns, rows)
 
 
+def render_policy_search_table(rows: list[dict[str, Any]]) -> list[str]:
+    columns = (
+        "policy_name",
+        "resolved",
+        "pending",
+        "win_rate",
+        "sharpe",
+        "rr",
+        "pnl",
+        "risk",
+        "avg_entry",
+        "avg_edge",
+        "avg_fair",
+        "avg_sweep_50",
+        "source",
+        "model",
+        "strategy",
+        "filters",
+        "scope",
+        "flags",
+    )
+    return render_rows(columns, rows)
+
+
 def render_rows(columns: Iterable[str], rows: list[dict[str, Any]]) -> list[str]:
     cols = list(columns)
     lines = ["| " + " | ".join(cols) + " |", "|" + "|".join("---" for _ in cols) + "|"]
@@ -651,6 +1023,71 @@ def rank_key(row: dict[str, Any]) -> tuple[int, float, float, str]:
     rr = row.get("rr")
     pnl = row.get("pnl")
     return (-int(row.get("resolved") or 0), -(rr if rr is not None else -math.inf), -(pnl if pnl is not None else -math.inf), str(row.get("label") or ""))
+
+
+def policy_default_rank(row: dict[str, Any]) -> tuple[int, float, float, float, str]:
+    return (
+        -int(row.get("resolved") or 0),
+        -float_value(row.get("sharpe")),
+        -float_value(row.get("rr")),
+        -float_value(row.get("pnl")),
+        str(row.get("policy_name") or ""),
+    )
+
+
+def policy_sharpe_rank(row: dict[str, Any]) -> tuple[float, float, int, str]:
+    return (
+        -float_value(row.get("sharpe")),
+        -float_value(row.get("rr")),
+        -int(row.get("resolved") or 0),
+        str(row.get("policy_name") or ""),
+    )
+
+
+def policy_rr_rank(row: dict[str, Any]) -> tuple[float, float, int, str]:
+    return (
+        -float_value(row.get("rr")),
+        -float_value(row.get("sharpe")),
+        -int(row.get("resolved") or 0),
+        str(row.get("policy_name") or ""),
+    )
+
+
+def policy_pnl_rank(row: dict[str, Any]) -> tuple[float, float, int, str]:
+    return (
+        -float_value(row.get("pnl")),
+        -float_value(row.get("sharpe")),
+        -int(row.get("resolved") or 0),
+        str(row.get("policy_name") or ""),
+    )
+
+
+def policy_win_rate_rank(row: dict[str, Any]) -> tuple[float, int, float, str]:
+    return (
+        -float_value(row.get("win_rate")),
+        -int(row.get("resolved") or 0),
+        -float_value(row.get("sharpe")),
+        str(row.get("policy_name") or ""),
+    )
+
+
+def policy_low_risk_rank(row: dict[str, Any]) -> tuple[int, float, float, float, str]:
+    return (
+        -int(row.get("resolved") or 0),
+        float_value(row.get("avg_entry"), default=math.inf),
+        -float_value(row.get("win_rate")),
+        -float_value(row.get("sharpe")),
+        str(row.get("policy_name") or ""),
+    )
+
+
+def policy_degenerate_rank(row: dict[str, Any]) -> tuple[float, float, float, str]:
+    return (
+        float_value(row.get("avg_entry"), default=math.inf),
+        -float_value(row.get("rr")),
+        -float_value(row.get("pnl")),
+        str(row.get("policy_name") or ""),
+    )
 
 
 def calibration_rank_key(row: dict[str, Any]) -> tuple[int, str]:
@@ -692,6 +1129,63 @@ def liquidity_band(value: float | None) -> str:
     return ">=100"
 
 
+def in_range(value: float | None, minimum: float | None, maximum: float | None) -> bool:
+    if minimum is None and maximum is None:
+        return True
+    if value is None:
+        return False
+    if minimum is not None and value < minimum:
+        return False
+    if maximum is not None and value > maximum:
+        return False
+    return True
+
+
+def local_time(value: Any) -> time | None:
+    if value is None:
+        return None
+    try:
+        return datetime.fromisoformat(str(value)).time()
+    except ValueError:
+        return None
+
+
+def parse_hhmm(value: str | None) -> time:
+    if value is None:
+        raise ValueError("missing time value")
+    return time.fromisoformat(value)
+
+
+def model_alias(model_name: str) -> str:
+    if model_name in KNOWN_MODEL_ALIASES:
+        return KNOWN_MODEL_ALIASES[model_name]
+    return f"model_{slugify(model_name)}"
+
+
+def consensus_alias(group_name: str) -> str:
+    if group_name in KNOWN_CONSENSUS_ALIASES:
+        return KNOWN_CONSENSUS_ALIASES[group_name]
+    return f"consensus_{slugify(group_name)}"
+
+
+def slugify(value: str) -> str:
+    text = "".join(ch if ch.isalnum() else "_" for ch in str(value).lower())
+    while "__" in text:
+        text = text.replace("__", "_")
+    return text.strip("_")
+
+
+def format_bound(value: float | None) -> str:
+    if value is None:
+        return "*"
+    return f"{value:.2f}"
+
+
+def float_value(value: Any, *, default: float = -math.inf) -> float:
+    parsed = float_or_none(value)
+    return parsed if parsed is not None else default
+
+
 def mean(values: Iterable[float | None]) -> float | None:
     present = [value for value in values if value is not None]
     if not present:
@@ -721,9 +1215,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--end-date")
     parser.add_argument("--market-family")
     parser.add_argument("--min-n", type=int, default=10)
+    parser.add_argument("--min-policy-n", type=int)
     parser.add_argument("--top-n", type=int, default=12)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--include-consensus", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--policy-search", action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args()
 
 
@@ -732,12 +1228,22 @@ def main() -> None:
     db = sqlite3.connect(str(args.db))
     db.row_factory = sqlite3.Row
     try:
-        rows = load_snapshot_rows(db, start_date=args.start_date, end_date=args.end_date, market_family=args.market_family)
+        base_rows = load_snapshot_rows(db, start_date=args.start_date, end_date=args.end_date, market_family=args.market_family)
     finally:
         db.close()
+    rows = list(base_rows)
     if args.include_consensus:
         rows = [*rows, *build_consensus_rows(rows)]
-    report = render_report(apply_modes(rows), min_n=args.min_n, top_n=args.top_n)
+    policy_summaries = None
+    if args.policy_search:
+        _, policy_summaries = build_policy_search_rows(base_rows)
+    report = render_report(
+        apply_modes(rows),
+        min_n=args.min_n,
+        top_n=args.top_n,
+        policy_summaries=policy_summaries,
+        min_policy_n=args.min_policy_n,
+    )
     if args.output:
         args.output.write_text(report)
     else:
