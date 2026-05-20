@@ -8,6 +8,10 @@ __pycache__/
 data/cache/*.sqlite-shm
 data/cache/*.sqlite-wal
 data/logs/
+.env
+.env.*
+.poly_key_env/
+.poly_key_enc/
 data/paper/
 
 # Bulky/generated research artifacts. Keep curated docs and model artifacts in Git,
