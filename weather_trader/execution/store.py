@@ -1852,6 +1852,142 @@ class ExecutionStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def latest_live_market_date(self) -> str | None:
+        row = self.connection.execute(
+            """
+            select max(market_date) as market_date
+            from live_policy_positions
+            """
+        ).fetchone()
+        if row is None:
+            return None
+        return row["market_date"]
+
+    def live_dashboard_positions(self, limit: int = 1000, market_date: date | str | None = None) -> list[dict[str, Any]]:
+        market_date_text = _date_text(market_date)
+        date_filter = "where lpp.market_date = ?" if market_date_text is not None else ""
+        params: tuple[Any, ...] = (market_date_text, limit) if market_date_text is not None else (limit,)
+        rows = self.connection.execute(
+            f"""
+            with latest_books as (
+                select bs.token_id, bs.best_bid, bs.best_ask, bs.timestamp
+                from book_snapshots bs
+                join (
+                    select token_id, max(id) as id
+                    from book_snapshots
+                    group by token_id
+                ) latest on latest.id = bs.id
+            ),
+            station_highs as (
+                select
+                    station,
+                    market_date,
+                    max(high_so_far) as high_so_far,
+                    max(hrrr_remaining_max) as hrrr_remaining_max
+                from prediction_snapshots
+                group by station, market_date
+            )
+            select
+                lpp.id,
+                lpp.timestamp,
+                lpp.strategy_name,
+                lpp.strategy_name as policy_name,
+                coalesce(ls.model_group, '') as model_group,
+                coalesce(ls.strategy_bucket, '') as strategy_bucket,
+                lpp.station,
+                lpp.market_date,
+                lpp.market_family,
+                lpp.scope_key,
+                lpp.selected_market_id,
+                lpp.selected_token_id,
+                lpp.selected_side,
+                lpp.selected_bucket,
+                lpp.obs_delay_bucket,
+                lpp.entry_price,
+                lpp.entry_fair,
+                lpp.entry_edge,
+                lpp.target_notional_usd,
+                lpp.target_shares,
+                lpp.filled_shares,
+                lpp.avg_entry_price,
+                lpp.cost_usd,
+                lpp.mark_value as stored_mark_value,
+                lpp.unrealized_pnl as stored_unrealized_pnl,
+                lpp.state,
+                lb.best_bid as current_bid,
+                lb.best_ask as current_ask,
+                lb.timestamp as current_book_time,
+                highs.high_so_far,
+                highs.hrrr_remaining_max,
+                outcomes.final_high_tmpf,
+                outcomes.resolved_at as outcome_resolved_at,
+                case
+                    when lb.best_bid is not null and lpp.filled_shares > 0 then lb.best_bid * lpp.filled_shares
+                    else lpp.mark_value
+                end as mark_value,
+                case
+                    when lb.best_bid is not null and lpp.filled_shares > 0 then (lb.best_bid * lpp.filled_shares) - lpp.cost_usd
+                    else lpp.unrealized_pnl
+                end as unrealized_pnl
+            from live_policy_positions lpp
+            left join live_strategies ls on ls.name = lpp.strategy_name
+            left join latest_books lb on lb.token_id = lpp.selected_token_id
+            left join station_highs highs
+                on highs.station = lpp.station
+                and highs.market_date = lpp.market_date
+            left join station_date_outcomes outcomes
+                on outcomes.station = lpp.station
+                and outcomes.market_date = lpp.market_date
+            {date_filter}
+            order by lpp.timestamp desc, lpp.id desc
+            limit ?
+            """,
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def recent_live_order_attempts(self, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            select
+                loa.*,
+                lpp.strategy_name,
+                lpp.station,
+                lpp.market_date,
+                lpp.selected_bucket
+            from live_order_attempts loa
+            left join live_policy_positions lpp on lpp.id = loa.live_position_id
+            order by loa.id desc
+            limit ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def recent_live_trade_events(self, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            select *
+            from live_trade_events
+            order by id desc
+            limit ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def recent_live_risk_snapshots(self, limit: int = 20) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            select *
+            from live_risk_snapshots
+            order by id desc
+            limit ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def live_exposure_summary(self) -> dict[str, Any]:
         rows = self.live_open_positions()
         station_date: dict[str, float] = {}

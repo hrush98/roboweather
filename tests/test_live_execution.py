@@ -7,6 +7,8 @@ import pytest
 
 from weather_trader.execution.clob_executor import AllowanceCheck, OrderSubmission
 from weather_trader.execution.contracts import (
+    BookLevel,
+    BookSnapshot,
     LivePositionState,
     LiveStrategy,
     MarketFamily,
@@ -84,6 +86,39 @@ def test_live_position_insert_is_idempotent_by_scope(tmp_path: Path) -> None:
     assert first_id is not None
     assert second_id is None
     assert len(store.live_open_positions()) == 1
+
+
+def test_live_dashboard_positions_join_strategy_books_and_marks(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    store.upsert_live_strategy(default_live_strategy(max_notional_usd=3.0))
+    position_id = store.insert_live_policy_position(_live_position())
+    assert position_id is not None
+    store.update_live_policy_position_execution(
+        position_id,
+        state=str(LivePositionState.FILLED),
+        filled_shares=7.5,
+        avg_entry_price=0.4,
+        cost_usd=3.0,
+    )
+    store.insert_book_snapshot(
+        BookSnapshot(
+            token_id="no-token",
+            bids=[BookLevel(price=0.62, size=100.0)],
+            asks=[BookLevel(price=0.64, size=100.0)],
+            timestamp="2026-05-20T18:00:00+00:00",
+        )
+    )
+
+    rows = store.live_dashboard_positions(market_date=date(2026, 5, 20))
+
+    assert len(rows) == 1
+    assert rows[0]["strategy_name"] == LIVE_POLICY_NAME
+    assert rows[0]["policy_name"] == LIVE_POLICY_NAME
+    assert rows[0]["model_group"] == LIVE_MODEL_GROUP
+    assert rows[0]["current_bid"] == pytest.approx(0.62)
+    assert rows[0]["mark_value"] == pytest.approx(4.65)
+    assert rows[0]["unrealized_pnl"] == pytest.approx(1.65)
+    assert store.latest_live_market_date() == "2026-05-20"
 
 
 def test_live_submit_uses_three_dollar_fak_buy(tmp_path: Path) -> None:

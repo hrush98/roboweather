@@ -336,7 +336,7 @@ def main() -> None:
     paper_policy_loop.add_argument("--interval-seconds", type=int, default=360)
     paper_policy_loop.add_argument("--max-cycles", type=int, default=None)
 
-    tui = subparsers.add_parser("tui", help="Open Textual UI for the paper-trading database")
+    tui = subparsers.add_parser("tui", help="Open Textual UI for the live trading dashboard")
     tui.add_argument("--db", default=str(PAPER_DIR / "roboweather.sqlite"))
 
     args = parser.parse_args()
