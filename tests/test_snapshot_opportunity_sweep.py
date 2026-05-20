@@ -104,6 +104,9 @@ def test_cli_smoke_emits_all_modes(tmp_path: Path) -> None:
     for mode in sweep.MODE_ORDER:
         assert f"## {mode}" in output
     assert "## Promotion Candidates" in output
+    assert "## Best Recorded Execution Policies" in output
+    assert "### Highest Sharpe" in output
+    assert "### Highest Win Rate" in output
 
 
 def _row(

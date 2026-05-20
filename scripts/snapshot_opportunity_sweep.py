@@ -472,6 +472,74 @@ def promotion_candidates(mode_tables: dict[str, dict[str, list[dict[str, Any]]]]
     return sorted(rows, key=rank_key)[:top_n]
 
 
+def best_recorded_execution_policies(
+    mode_tables: dict[str, dict[str, list[dict[str, Any]]]],
+    *,
+    min_n: int,
+    top_n: int,
+) -> dict[str, list[dict[str, Any]]]:
+    # These modes represent rules we could have executed without hindsight: first signal,
+    # first station/date signal, and later re-entry only after a large edge improvement.
+    execution_modes = {"first_opportunity", "station_date_first", "edge_improve_50"}
+    policy_tables = {
+        "By Source",
+        "By Source Strategy",
+        "By Source Strategy Side",
+        "By Source Strategy Obs Delay",
+        "By Source Strategy Entry Side",
+        "By Source Strategy Edge Side",
+    }
+    rows = []
+    seen: set[tuple[str, str, str]] = set()
+    for mode_name, tables in mode_tables.items():
+        if mode_name not in execution_modes:
+            continue
+        for table_name, table_rows in tables.items():
+            if table_name not in policy_tables:
+                continue
+            for row in table_rows:
+                if row["resolved"] < min_n or row.get("win_rate") is None:
+                    continue
+                key = (mode_name, table_name, str(row.get("label") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append({"mode": mode_name, "table": table_name, **row})
+    return {
+        "Highest Sharpe": sorted(rows, key=execution_sharpe_rank)[:top_n],
+        "Highest Win Rate": sorted(rows, key=execution_win_rate_rank)[:top_n],
+    }
+
+
+def execution_sharpe_rank(row: dict[str, Any]) -> tuple[float, float, int, float, str, str, str]:
+    sharpe_value = row.get("sharpe")
+    rr = row.get("rr")
+    return (
+        -(sharpe_value if sharpe_value is not None else -math.inf),
+        -(rr if rr is not None else -math.inf),
+        -int(row.get("resolved") or 0),
+        -(row.get("win_rate") if row.get("win_rate") is not None else -math.inf),
+        str(row.get("mode") or ""),
+        str(row.get("table") or ""),
+        str(row.get("label") or ""),
+    )
+
+
+def execution_win_rate_rank(row: dict[str, Any]) -> tuple[float, int, float, float, str, str, str]:
+    win_rate = row.get("win_rate")
+    sharpe_value = row.get("sharpe")
+    rr = row.get("rr")
+    return (
+        -(win_rate if win_rate is not None else -math.inf),
+        -int(row.get("resolved") or 0),
+        -(sharpe_value if sharpe_value is not None else -math.inf),
+        -(rr if rr is not None else -math.inf),
+        str(row.get("mode") or ""),
+        str(row.get("table") or ""),
+        str(row.get("label") or ""),
+    )
+
+
 def render_report(mode_results: dict[str, ModeResult], *, min_n: int, top_n: int) -> str:
     lines = ["# Snapshot Opportunity Sweep", ""]
     all_mode_tables: dict[str, dict[str, list[dict[str, Any]]]] = {}
@@ -498,6 +566,19 @@ def render_report(mode_results: dict[str, ModeResult], *, min_n: int, top_n: int
         lines.extend(render_promotion_table(candidates))
     else:
         lines.append("No non-hindsight slices met the promotion screen.")
+
+    lines.extend(["", "## Best Recorded Execution Policies", ""])
+    lines.append(
+        "Ranked from non-hindsight execution modes only: first opportunity, station/date first, "
+        "and 50% edge-improvement re-entry. Liquidity is shown but is not used as a gate here."
+    )
+    summaries = best_recorded_execution_policies(all_mode_tables, min_n=min_n, top_n=top_n)
+    for title, rows in summaries.items():
+        lines.extend(["", f"### {title}", ""])
+        if rows:
+            lines.extend(render_execution_policy_table(rows))
+        else:
+            lines.append("No slices met the minimum resolved sample size.")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -520,6 +601,25 @@ def render_calibration_table(rows: list[dict[str, Any]]) -> list[str]:
 
 def render_promotion_table(rows: list[dict[str, Any]]) -> list[str]:
     columns = ("mode", "table", "label", "resolved", "rr", "sharpe", "pnl", "avg_entry", "avg_edge", "avg_sweep_50")
+    return render_rows(columns, rows)
+
+
+def render_execution_policy_table(rows: list[dict[str, Any]]) -> list[str]:
+    columns = (
+        "mode",
+        "table",
+        "label",
+        "resolved",
+        "win_rate",
+        "sharpe",
+        "rr",
+        "pnl",
+        "avg_entry",
+        "avg_edge",
+        "avg_fair",
+        "avg_sweep_50",
+        "flags",
+    )
     return render_rows(columns, rows)
 
 
