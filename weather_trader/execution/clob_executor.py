@@ -239,11 +239,21 @@ def _parse_balance_allowance(raw: Any, *, decimals: int = 0) -> tuple[float | No
         return None, None
     balance = raw.get("balance") or raw.get("amount") or raw.get("available")
     allowance = raw.get("allowance") or raw.get("approved")
+    if allowance is None and isinstance(raw.get("allowances"), dict):
+        # Some CLOB responses return allowances by exchange contract address.
+        # Use the max value as the usable allowance for the current collateral.
+        try:
+            allowance = max(float(value) for value in raw["allowances"].values())
+        except (TypeError, ValueError):
+            allowance = None
     try:
         balance_val = float(balance) if balance is not None else None
+    except (TypeError, ValueError):
+        balance_val = None
+    try:
         allowance_val = float(allowance) if allowance is not None else None
     except (TypeError, ValueError):
-        return None, None
+        allowance_val = None
     if decimals > 0:
         scale = 10 ** decimals
         balance_val = balance_val / scale if balance_val is not None else None
