@@ -96,7 +96,7 @@ def test_decrypt_age_keyfile_with_passphrase_uses_pty_without_leaking_secret(tmp
         "if pw != 'correct horse':\n"
         "    print('bad passphrase', file=sys.stderr)\n"
         "    raise SystemExit(1)\n"
-        "print('0xabc123')\n",
+        "print('0x' + 'a' * 64)\n",
         encoding="utf-8",
     )
     decryptor.chmod(0o700)
@@ -104,10 +104,18 @@ def test_decrypt_age_keyfile_with_passphrase_uses_pty_without_leaking_secret(tmp
     keyfile.write_text("encrypted", encoding="utf-8")
     monkeypatch.setenv("AGE_BINARY", str(decryptor))
 
-    assert module.decrypt_age_keyfile_with_passphrase(str(keyfile), "correct horse") == "0xabc123"
+    assert module.decrypt_age_keyfile_with_passphrase(str(keyfile), "correct horse") == "0x" + "a" * 64
 
     with pytest.raises(RuntimeError) as exc_info:
         module.decrypt_age_keyfile_with_passphrase(str(keyfile), "wrong secret")
     message = str(exc_info.value)
     assert "wrong secret" not in message
     assert "passphrase" in message
+
+
+def test_decrypt_output_extracts_private_key_from_env_style_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _reload_settings(monkeypatch)
+    private_key = "0x" + "1" * 64
+
+    assert module._extract_private_key_from_decrypt_output(f"POLYMARKET_PRIVATE_KEY={private_key}\n") == private_key
+    assert module._extract_private_key_from_decrypt_output(f"Enter passphrase: \r\n{private_key}\r\n") == private_key

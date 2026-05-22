@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import select
 import shlex
 import shutil
@@ -68,7 +69,7 @@ def decrypt_age_keyfile(keyfile_path: str) -> str:
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or "").strip()
         raise RuntimeError(stderr or f"{Path(decryptor).name} decryption failed") from exc
-    plaintext = result.stdout.strip()
+    plaintext = _extract_private_key_from_decrypt_output(result.stdout)
     return _validate_private_key_text(plaintext, "Decrypted key")
 
 
@@ -144,10 +145,15 @@ def _read_private_key_fd(fd_value: str) -> str:
 
 
 def _extract_private_key_from_decrypt_output(output: str) -> str:
-    for line in output.splitlines():
-        text = line.strip()
-        if text.startswith("0x"):
-            return text
+    assignment = re.search(
+        r"(?:POLYMARKET_PRIVATE_KEY|PRIVATE_KEY|LIVE_PRIVATE_KEY)\s*=\s*['\"]?(0x[0-9a-fA-F]{64})['\"]?",
+        output,
+    )
+    if assignment:
+        return assignment.group(1)
+    match = re.search(r"(?<![0-9a-fA-F])0x[0-9a-fA-F]{64}(?![0-9a-fA-F])", output)
+    if match:
+        return match.group(0)
     return output.strip()
 
 
