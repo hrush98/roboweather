@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 from zoneinfo import ZoneInfo
 
 from textual.app import App, ComposeResult
@@ -358,6 +358,7 @@ class RoboWeatherTUI(App):
         self.target_date = _default_target_date(db_path)
         self.kill_switch_path = Path(load_live_settings().live_kill_switch_path).expanduser()
         self.table_sorts: dict[str, TableSort] = {}
+        self._process_actions_in_progress: set[str] = set()
         self.process_supervisor = process_supervisor or _default_process_supervisor()
 
     def compose(self) -> ComposeResult:
@@ -513,17 +514,40 @@ class RoboWeatherTUI(App):
         self.set_interval(10.0, self.refresh_table)
         self.set_interval(1.0, self.refresh_processes)
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
         if event.button.id == "kill-button":
             self.action_activate_kill_switch()
         elif event.button.id == "start-research":
-            await self._start_process("research")
+            self._run_process_action("start-research", lambda: self._start_process("research"))
         elif event.button.id == "stop-research":
-            await self._stop_process("research")
+            self._run_process_action("stop-research", lambda: self._stop_process("research"))
         elif event.button.id == "start-live":
-            await self._start_process("live")
+            self._run_process_action("start-live", lambda: self._start_process("live"))
         elif event.button.id == "stop-live":
-            await self._stop_process("live")
+            self._run_process_action("stop-live", lambda: self._stop_process("live"))
+
+    def _run_process_action(self, action_name: str, action_factory: Callable[[], Awaitable[None]]) -> None:
+        if action_name in self._process_actions_in_progress:
+            return
+        self._process_actions_in_progress.add(action_name)
+        self.refresh_processes()
+
+        async def runner() -> None:
+            try:
+                await action_factory()
+            except Exception as exc:
+                self.notify(f"Process action failed: {exc}", severity="error")
+            finally:
+                self._process_actions_in_progress.discard(action_name)
+                self.refresh_processes()
+
+        self.run_worker(
+            runner(),
+            name=action_name,
+            group="process-actions",
+            exit_on_error=False,
+        )
 
     async def on_unmount(self) -> None:
         await self.process_supervisor.stop_all()
@@ -611,15 +635,7 @@ class RoboWeatherTUI(App):
             private_key = ""
 
     async def _prompt_live_passphrase(self) -> str | None:
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[str | None] = loop.create_future()
-
-        def on_dismiss(value: str | None) -> None:
-            if not future.done():
-                future.set_result(value)
-
-        self.push_screen(PassphraseScreen(), callback=on_dismiss)
-        return await future
+        return await self.push_screen_wait(PassphraseScreen())
 
     def _unlock_and_verify_live_key(self, passphrase: str) -> str:
         settings = load_live_settings()
@@ -652,10 +668,18 @@ class RoboWeatherTUI(App):
                 snapshot.latest_log[:100],
             )
 
-        self.query_one("#start-research", Button).disabled = snapshots["research"].status == "RUNNING"
-        self.query_one("#stop-research", Button).disabled = snapshots["research"].status != "RUNNING"
-        self.query_one("#start-live", Button).disabled = snapshots["live"].status == "RUNNING"
-        self.query_one("#stop-live", Button).disabled = snapshots["live"].status != "RUNNING"
+        self.query_one("#start-research", Button).disabled = (
+            snapshots["research"].status == "RUNNING" or "start-research" in self._process_actions_in_progress
+        )
+        self.query_one("#stop-research", Button).disabled = (
+            snapshots["research"].status != "RUNNING" or "stop-research" in self._process_actions_in_progress
+        )
+        self.query_one("#start-live", Button).disabled = (
+            snapshots["live"].status == "RUNNING" or "start-live" in self._process_actions_in_progress
+        )
+        self.query_one("#stop-live", Button).disabled = (
+            snapshots["live"].status != "RUNNING" or "stop-live" in self._process_actions_in_progress
+        )
         self._refresh_process_log("research", "#research-log")
         self._refresh_process_log("live", "#live-log")
 

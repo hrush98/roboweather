@@ -6,7 +6,7 @@ import sys
 from datetime import date, datetime, timezone
 
 import pytest
-from textual.widgets import Button, DataTable
+from textual.widgets import Button, DataTable, Input
 
 from weather_trader.ui.process_supervisor import ProcessSnapshot, ProcessSpec, ProcessSupervisor
 from weather_trader.ui.textual_app import RoboWeatherTUI, _live_start_label
@@ -24,6 +24,15 @@ from weather_trader.execution.contracts import (
     TradeAction,
 )
 from weather_trader.execution.store import ExecutionStore
+
+
+async def _wait_for_ui(predicate, *, timeout: float = 2.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("timed out waiting for UI condition")
 
 
 def test_position_view_rolls_up_unique_exposures_and_station_totals() -> None:
@@ -454,6 +463,123 @@ def test_tui_dry_run_live_start_does_not_prompt(tmp_path, monkeypatch: pytest.Mo
                     break
                 await asyncio.sleep(0.02)
             assert supervisor.snapshot("live").exit_code == 0
+
+    asyncio.run(scenario())
+
+
+def test_tui_live_start_button_accepts_passphrase_and_starts_with_private_key_fd(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        supervisor = ProcessSupervisor(
+            [
+                ProcessSpec("research", "Research Loop", (sys.executable, "-c", "print('research')")),
+                ProcessSpec("live", "Live Loop", (sys.executable, "-c", "print('live')")),
+            ],
+            cwd=tmp_path,
+            env={"LIVE_MODE": "live"},
+        )
+        app = RoboWeatherTUI(tmp_path / "tui.sqlite", process_supervisor=supervisor)
+        captured: dict[str, object] = {}
+
+        def unlock(passphrase: str) -> str:
+            captured["passphrase"] = passphrase
+            return "0xlivekey"
+
+        async def fake_start(name: str, *, extra_env=None, pass_fds=()):
+            captured["name"] = name
+            captured["extra_env"] = dict(extra_env or {})
+            captured["pass_fds"] = pass_fds
+            fd = int(captured["extra_env"]["POLYMARKET_PRIVATE_KEY_FD"])
+            captured["fd_key"] = os.read(fd, 100).decode()
+            return ProcessSnapshot(name, "Live Loop", "RUNNING", 123, None, None, None, 1, "", "live")
+
+        monkeypatch.setattr(app, "_unlock_and_verify_live_key", unlock)
+        monkeypatch.setattr(supervisor, "start", fake_start)
+
+        async with app.run_test(size=(140, 40)) as pilot:
+            app.query_one("#start-live", Button).press()
+            await _wait_for_ui(lambda: type(app.screen).__name__ == "PassphraseScreen")
+            passphrase_input = app.screen.query_one("#passphrase-input", Input)
+            assert passphrase_input.has_focus is True
+
+            await pilot.press(*list("passphrase"), "enter")
+            await _wait_for_ui(lambda: captured.get("fd_key") == "0xlivekey")
+
+        assert captured["passphrase"] == "passphrase"
+        assert captured["name"] == "live"
+        assert captured["pass_fds"] == (int(captured["extra_env"]["POLYMARKET_PRIVATE_KEY_FD"]),)
+
+    asyncio.run(scenario())
+
+
+def test_tui_live_start_button_escape_cancels_without_starting(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        supervisor = ProcessSupervisor(
+            [
+                ProcessSpec("research", "Research Loop", (sys.executable, "-c", "print('research')")),
+                ProcessSpec("live", "Live Loop", (sys.executable, "-c", "print('live')")),
+            ],
+            cwd=tmp_path,
+            env={"LIVE_MODE": "live"},
+        )
+        app = RoboWeatherTUI(tmp_path / "tui.sqlite", process_supervisor=supervisor)
+        starts = 0
+
+        async def fake_start(name: str, *, extra_env=None, pass_fds=()):
+            nonlocal starts
+            starts += 1
+            return ProcessSnapshot(name, "Live Loop", "RUNNING", 123, None, None, None, 1, "", "live")
+
+        monkeypatch.setattr(supervisor, "start", fake_start)
+
+        async with app.run_test(size=(140, 40)) as pilot:
+            app.query_one("#start-live", Button).press()
+            await _wait_for_ui(lambda: type(app.screen).__name__ == "PassphraseScreen")
+            await pilot.press("escape")
+            await _wait_for_ui(lambda: type(app.screen).__name__ != "PassphraseScreen")
+
+        assert starts == 0
+
+    asyncio.run(scenario())
+
+
+def test_tui_live_start_button_ignores_overlapping_starts(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        supervisor = ProcessSupervisor(
+            [
+                ProcessSpec("research", "Research Loop", (sys.executable, "-c", "print('research')")),
+                ProcessSpec("live", "Live Loop", (sys.executable, "-c", "print('live')")),
+            ],
+            cwd=tmp_path,
+            env={"LIVE_MODE": "live"},
+        )
+        app = RoboWeatherTUI(tmp_path / "tui.sqlite", process_supervisor=supervisor)
+        starts = 0
+
+        def unlock(passphrase: str) -> str:
+            return "0xlivekey"
+
+        async def fake_start(name: str, *, extra_env=None, pass_fds=()):
+            nonlocal starts
+            starts += 1
+            fd = int(extra_env["POLYMARKET_PRIVATE_KEY_FD"])
+            os.read(fd, 100)
+            return ProcessSnapshot(name, "Live Loop", "RUNNING", 123, None, None, None, 1, "", "live")
+
+        monkeypatch.setattr(app, "_unlock_and_verify_live_key", unlock)
+        monkeypatch.setattr(supervisor, "start", fake_start)
+
+        async with app.run_test(size=(140, 40)) as pilot:
+            start_button = app.query_one("#start-live", Button)
+            start_button.press()
+            start_button.press()
+            await _wait_for_ui(lambda: type(app.screen).__name__ == "PassphraseScreen")
+            await pilot.press(*list("passphrase"), "enter")
+            await _wait_for_ui(lambda: starts == 1)
+            await pilot.pause(0.1)
+
+        assert starts == 1
 
     asyncio.run(scenario())
 
