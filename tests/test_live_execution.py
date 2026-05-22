@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import weather_trader.live.execution as live_execution
 from weather_trader.execution.clob_executor import AllowanceCheck, OrderSubmission
 from weather_trader.execution.contracts import (
     BookLevel,
@@ -140,6 +141,30 @@ def test_live_submit_uses_three_dollar_fak_buy(tmp_path: Path) -> None:
     assert attempt["order_mode"] == "FAK"
     row = store.live_open_positions()[0]
     assert row["cost_usd"] == pytest.approx(3.0)
+
+
+def test_default_submitter_reads_private_key_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {"key": 0, "executor": 0}
+
+    def fake_private_key(settings):
+        calls["key"] += 1
+        return "0xkey"
+
+    class FakeExecutor(FakeSubmitter):
+        def __init__(self, *, private_key, settings):
+            calls["executor"] += 1
+            assert private_key == "0xkey"
+
+    monkeypatch.setattr(live_execution, "private_key_from_env_or_keyfile", fake_private_key)
+    monkeypatch.setattr(live_execution, "ClobExecutor", FakeExecutor)
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), mode="live"))
+
+    first = engine._default_submitter()
+    second = engine._default_submitter()
+
+    assert first is second
+    assert calls == {"key": 1, "executor": 1}
 
 
 class FakeSubmitter:

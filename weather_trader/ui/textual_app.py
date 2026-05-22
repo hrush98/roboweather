@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,10 +10,12 @@ from zoneinfo import ZoneInfo
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, DataTable, Footer, Header, Static, TabbedContent, TabPane
+from textual.screen import ModalScreen
+from textual.widgets import Button, DataTable, Footer, Header, Input, Static, TabbedContent, TabPane
 
+from weather_trader.execution.clob_executor import ClobExecutor
 from weather_trader.execution.store import ExecutionStore
-from weather_trader.live.settings import load_live_settings
+from weather_trader.live.settings import decrypt_age_keyfile_with_passphrase, load_live_settings
 from weather_trader.ui.dashboard_rollups import (
     _build_live_policy_view,
     _bucket_label,
@@ -146,6 +150,55 @@ def _live_start_label(env: dict[str, str]) -> str:
     return "Start Live Run" if env.get("LIVE_MODE", "dry-run").strip().lower() == "live" else "Start Live Dry Run"
 
 
+def _is_live_mode(env: dict[str, str]) -> bool:
+    return env.get("LIVE_MODE", "dry-run").strip().lower() == "live"
+
+
+def _registered_strategy_row(strategy: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "ACTIVE" if int(strategy.get("active") or 0) == 1 else "STOPPED",
+        "book_status": "NO_POSITIONS",
+        "policy": str(strategy.get("name", "")),
+        "model_group": str(strategy.get("model_group", "")),
+        "strategy_bucket": str(strategy.get("strategy_bucket", "")),
+        "obs_delay_bucket": "",
+        "open_positions": 0,
+        "risk": 0.0,
+        "mtm": 0.0,
+        "avg_entry": strategy.get("entry_price_min"),
+        "avg_fair": None,
+        "avg_edge": None,
+        "avg_bid": None,
+        "mark_pct": None,
+        "expected_rr": None,
+        "live_rr": None,
+    }
+
+
+class PassphraseScreen(ModalScreen[str | None]):
+    def compose(self) -> ComposeResult:
+        with Vertical(id="passphrase-dialog"):
+            yield Static("Unlock Polymarket key", id="passphrase-title")
+            yield Input(placeholder="age keyfile passphrase", password=True, id="passphrase-input")
+            with Horizontal(id="passphrase-buttons"):
+                yield Button("Unlock", id="passphrase-submit", variant="success")
+                yield Button("Cancel", id="passphrase-cancel", variant="default")
+
+    def on_mount(self) -> None:
+        self.query_one("#passphrase-input", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        self.dismiss(event.value)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "passphrase-cancel":
+            self.dismiss(None)
+            return
+        self.dismiss(self.query_one("#passphrase-input", Input).value)
+
+
 class RoboWeatherTUI(App):
     CSS = """
     Screen {
@@ -248,6 +301,36 @@ class RoboWeatherTUI(App):
 
     .stack {
         height: 1fr;
+    }
+
+    PassphraseScreen {
+        align: center middle;
+    }
+
+    #passphrase-dialog {
+        width: 64;
+        height: 9;
+        padding: 1 2;
+        background: #22272b;
+        border: tall #f8e6b0;
+    }
+
+    #passphrase-title {
+        height: 1;
+        color: #f8e6b0;
+    }
+
+    #passphrase-input {
+        margin-top: 1;
+    }
+
+    #passphrase-buttons {
+        height: 3;
+        margin-top: 1;
+    }
+
+    #passphrase-buttons Button {
+        margin-right: 1;
     }
     """
     BINDINGS = [
@@ -470,9 +553,65 @@ class RoboWeatherTUI(App):
         self.refresh_table()
 
     async def _start_process(self, name: str) -> None:
-        snapshot = await self.process_supervisor.start(name)
+        if name == "live" and _is_live_mode(self.process_supervisor.env):
+            snapshot = await self._start_live_process_with_key_unlock()
+            if snapshot is None:
+                self.refresh_processes()
+                return
+        else:
+            snapshot = await self.process_supervisor.start(name)
         self.notify(f"{snapshot.label} {snapshot.status.lower()}.")
         self.refresh_processes()
+
+    async def _start_live_process_with_key_unlock(self):
+        if self.process_supervisor.snapshot("live").status == "RUNNING":
+            return self.process_supervisor.snapshot("live")
+        passphrase = await self._prompt_live_passphrase()
+        if not passphrase:
+            self.notify("Live start canceled.")
+            return None
+        read_fd: int | None = None
+        private_key = ""
+        try:
+            private_key = await asyncio.to_thread(self._unlock_and_verify_live_key, passphrase)
+            read_fd, write_fd = os.pipe()
+            try:
+                os.write(write_fd, private_key.encode())
+            finally:
+                os.close(write_fd)
+            snapshot = await self.process_supervisor.start(
+                "live",
+                extra_env={"POLYMARKET_PRIVATE_KEY_FD": str(read_fd)},
+                pass_fds=(read_fd,),
+            )
+            os.close(read_fd)
+            read_fd = None
+            return snapshot
+        except Exception as exc:
+            if read_fd is not None:
+                try:
+                    os.close(read_fd)
+                except OSError:
+                    pass
+            self.notify(f"Live key unlock/auth failed: {exc}", severity="error")
+            return None
+        finally:
+            passphrase = ""
+            private_key = ""
+
+    async def _prompt_live_passphrase(self) -> str | None:
+        return await self.push_screen_wait(PassphraseScreen())
+
+    def _unlock_and_verify_live_key(self, passphrase: str) -> str:
+        settings = load_live_settings()
+        private_key = decrypt_age_keyfile_with_passphrase(settings.polymarket_keyfile_path, passphrase)
+        executor = ClobExecutor(private_key=private_key, settings=settings)
+        if executor.check_kill_switch():
+            raise RuntimeError("kill switch is active")
+        allowance = executor.check_allowance_buy(1.0)
+        if not allowance.ok:
+            raise RuntimeError(f"allowance check failed: {allowance.reason or 'unknown'}")
+        return private_key
 
     async def _stop_process(self, name: str) -> None:
         snapshot = await self.process_supervisor.stop(name)

@@ -102,10 +102,19 @@ class ProcessSupervisor:
     def logs(self, name: str) -> list[str]:
         return list(self._processes[name].logs)
 
-    async def start(self, name: str) -> ProcessSnapshot:
+    async def start(
+        self,
+        name: str,
+        *,
+        extra_env: dict[str, str] | None = None,
+        pass_fds: tuple[int, ...] = (),
+    ) -> ProcessSnapshot:
         managed = self._processes[name]
         if managed.is_running():
             return self.snapshot(name)
+        child_env = dict(self.env)
+        if extra_env:
+            child_env.update(extra_env)
         managed.restart_count += 1
         managed.started_at = datetime.now(timezone.utc)
         managed.stopped_at = None
@@ -115,10 +124,11 @@ class ProcessSupervisor:
         process = await asyncio.create_subprocess_exec(
             *managed.spec.command,
             cwd=str(self.cwd),
-            env=self.env,
+            env=child_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             start_new_session=True,
+            pass_fds=pass_fds,
         )
         managed.process = process
         managed.logs.append(f"started pid={process.pid}")

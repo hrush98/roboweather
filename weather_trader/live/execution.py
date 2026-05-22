@@ -461,8 +461,15 @@ class LiveExecutionEngine:
         return state
 
     def _default_submitter(self) -> LiveSubmitter:
-        private_key = private_key_from_env_or_keyfile(self.settings)
-        return ClobExecutor(private_key=private_key, settings=self.settings)
+        default_submitter = getattr(self, "_default_submitter_instance", None)
+        if default_submitter is None:
+            private_key = private_key_from_env_or_keyfile(self.settings)
+            try:
+                default_submitter = ClobExecutor(private_key=private_key, settings=self.settings)
+                self._default_submitter_instance = default_submitter
+            finally:
+                private_key = ""
+        return default_submitter
 
     def _record_risk_snapshot(self) -> None:
         exposure = self.store.live_exposure_summary()

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import select
 import shlex
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,10 +43,13 @@ def load_live_settings() -> LiveSettings:
 
 def private_key_from_env_or_keyfile(settings: LiveSettings) -> str:
     load_local_env()
+    fd_value = os.getenv("POLYMARKET_PRIVATE_KEY_FD")
+    if fd_value:
+        return _read_private_key_fd(fd_value)
     for name in ("POLYMARKET_PRIVATE_KEY", "PRIVATE_KEY", "LIVE_PRIVATE_KEY"):
         value = os.getenv(name)
         if value:
-            return value.strip()
+            return _validate_private_key_text(value.strip(), "Environment private key")
     return decrypt_age_keyfile(settings.polymarket_keyfile_path)
 
 
@@ -64,9 +69,92 @@ def decrypt_age_keyfile(keyfile_path: str) -> str:
         stderr = (exc.stderr or "").strip()
         raise RuntimeError(stderr or f"{Path(decryptor).name} decryption failed") from exc
     plaintext = result.stdout.strip()
-    if not plaintext.startswith("0x"):
-        raise ValueError("Decrypted key does not look like a hex private key.")
-    return plaintext
+    return _validate_private_key_text(plaintext, "Decrypted key")
+
+
+def decrypt_age_keyfile_with_passphrase(keyfile_path: str, passphrase: str) -> str:
+    resolved = Path(os.path.expanduser(keyfile_path)).resolve()
+    if not resolved.exists():
+        raise FileNotFoundError(f"Keyfile not found: {resolved}")
+    decryptor = _age_binary()
+    pid, master_fd = os.forkpty()
+    if pid == 0:  # pragma: no cover - child process is covered through parent behavior
+        try:
+            os.execv(decryptor, [decryptor, "--decrypt", "-o", "-", str(resolved)])
+        except Exception:
+            os._exit(127)
+
+    output = bytearray()
+    sent_passphrase = False
+    deadline = time.monotonic() + 30.0
+    status = 0
+    try:
+        while True:
+            if time.monotonic() > deadline:
+                try:
+                    os.kill(pid, 15)
+                except ProcessLookupError:
+                    pass
+                raise RuntimeError("age decryption timed out")
+            ready, _, _ = select.select([master_fd], [], [], 0.1)
+            if ready:
+                try:
+                    chunk = os.read(master_fd, 4096)
+                except OSError:
+                    chunk = b""
+                if chunk:
+                    output.extend(chunk)
+                    if not sent_passphrase and b"passphrase" in output.lower():
+                        os.write(master_fd, (passphrase + "\n").encode())
+                        sent_passphrase = True
+                else:
+                    break
+            if not sent_passphrase and time.monotonic() > deadline - 29.0:
+                os.write(master_fd, (passphrase + "\n").encode())
+                sent_passphrase = True
+            finished_pid, status = os.waitpid(pid, os.WNOHANG)
+            if finished_pid:
+                break
+        if not status:
+            _, status = os.waitpid(pid, 0)
+    finally:
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+
+    decoded = output.decode(errors="replace")
+    if status != 0:
+        raise RuntimeError("age decryption failed; passphrase was rejected or keyfile is invalid")
+    plaintext = _extract_private_key_from_decrypt_output(decoded)
+    return _validate_private_key_text(plaintext, "Decrypted key")
+
+
+def _read_private_key_fd(fd_value: str) -> str:
+    try:
+        fd = int(fd_value)
+    except ValueError as exc:
+        raise ValueError("POLYMARKET_PRIVATE_KEY_FD must be an integer file descriptor") from exc
+    try:
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            plaintext = handle.read().strip()
+    except OSError as exc:
+        raise RuntimeError("Unable to read POLYMARKET_PRIVATE_KEY_FD") from exc
+    return _validate_private_key_text(plaintext, "FD private key")
+
+
+def _extract_private_key_from_decrypt_output(output: str) -> str:
+    for line in output.splitlines():
+        text = line.strip()
+        if text.startswith("0x"):
+            return text
+    return output.strip()
+
+
+def _validate_private_key_text(value: str, label: str) -> str:
+    if not value.startswith("0x"):
+        raise ValueError(f"{label} does not look like a hex private key.")
+    return value
 
 
 def load_local_env() -> None:

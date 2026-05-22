@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from datetime import date, datetime, timezone
 
 import pytest
 from textual.widgets import Button, DataTable
 
-from weather_trader.ui.process_supervisor import ProcessSpec, ProcessSupervisor
+from weather_trader.ui.process_supervisor import ProcessSnapshot, ProcessSpec, ProcessSupervisor
 from weather_trader.ui.textual_app import RoboWeatherTUI, _live_start_label
 from weather_trader.ui.dashboard_rollups import _build_live_policy_view, _build_policy_view, _build_position_view, _bucket_label
 from weather_trader.execution.contracts import (
     BookLevel,
     BookSnapshot,
+    LiveStrategy,
+    MarketFamily,
     MarketSnapshot,
     PredictionResult,
     PredictionSnapshot,
@@ -424,6 +427,117 @@ def test_tui_process_actions_start_and_stop_supervised_process(tmp_path) -> None
             assert supervisor.snapshot("research").status in {"EXITED", "FAILED"}
             assert app.query_one("#start-research", Button).disabled is False
             assert app.query_one("#stop-research", Button).disabled is True
+
+    asyncio.run(scenario())
+
+
+def test_tui_dry_run_live_start_does_not_prompt(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        supervisor = ProcessSupervisor(
+            [
+                ProcessSpec("research", "Research Loop", (sys.executable, "-c", "print('research')")),
+                ProcessSpec("live", "Live Loop", (sys.executable, "-c", "print('live')")),
+            ],
+            cwd=tmp_path,
+            env={"LIVE_MODE": "dry-run"},
+        )
+        app = RoboWeatherTUI(tmp_path / "tui.sqlite", process_supervisor=supervisor)
+
+        async def fail_prompt():
+            raise AssertionError("dry-run live start should not prompt")
+
+        monkeypatch.setattr(app, "_prompt_live_passphrase", fail_prompt)
+        async with app.run_test(size=(140, 40)):
+            await app._start_process("live")
+            for _ in range(50):
+                if supervisor.snapshot("live").status == "EXITED":
+                    break
+                await asyncio.sleep(0.02)
+            assert supervisor.snapshot("live").exit_code == 0
+
+    asyncio.run(scenario())
+
+
+def test_tui_live_start_unlocks_and_starts_with_private_key_fd(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        supervisor = ProcessSupervisor(
+            [
+                ProcessSpec("research", "Research Loop", (sys.executable, "-c", "print('research')")),
+                ProcessSpec("live", "Live Loop", (sys.executable, "-c", "print('live')")),
+            ],
+            cwd=tmp_path,
+            env={"LIVE_MODE": "live"},
+        )
+        app = RoboWeatherTUI(tmp_path / "tui.sqlite", process_supervisor=supervisor)
+        captured: dict[str, object] = {}
+
+        async def prompt():
+            return "passphrase"
+
+        def unlock(passphrase: str) -> str:
+            captured["passphrase"] = passphrase
+            return "0xlivekey"
+
+        async def fake_start(name: str, *, extra_env=None, pass_fds=()):
+            captured["name"] = name
+            captured["extra_env"] = dict(extra_env or {})
+            captured["pass_fds"] = pass_fds
+            fd = int(captured["extra_env"]["POLYMARKET_PRIVATE_KEY_FD"])
+            captured["fd_key"] = os.read(fd, 100).decode()
+            return ProcessSnapshot(name, "Live Loop", "RUNNING", 123, None, None, None, 1, "", "live")
+
+        monkeypatch.setattr(app, "_prompt_live_passphrase", prompt)
+        monkeypatch.setattr(app, "_unlock_and_verify_live_key", unlock)
+        monkeypatch.setattr(supervisor, "start", fake_start)
+
+        async with app.run_test(size=(140, 40)):
+            await app._start_process("live")
+
+        assert captured["passphrase"] == "passphrase"
+        assert captured["name"] == "live"
+        assert captured["fd_key"] == "0xlivekey"
+        assert captured["pass_fds"] == (int(captured["extra_env"]["POLYMARKET_PRIVATE_KEY_FD"]),)
+
+    asyncio.run(scenario())
+
+
+def test_tui_live_start_cancel_or_failure_does_not_start(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario() -> None:
+        supervisor = ProcessSupervisor(
+            [
+                ProcessSpec("research", "Research Loop", (sys.executable, "-c", "print('research')")),
+                ProcessSpec("live", "Live Loop", (sys.executable, "-c", "print('live')")),
+            ],
+            cwd=tmp_path,
+            env={"LIVE_MODE": "live"},
+        )
+        app = RoboWeatherTUI(tmp_path / "tui.sqlite", process_supervisor=supervisor)
+        starts = 0
+
+        async def fake_start(name: str, *, extra_env=None, pass_fds=()):
+            nonlocal starts
+            starts += 1
+            return ProcessSnapshot(name, "Live Loop", "RUNNING", 123, None, None, None, 1, "", "live")
+
+        async def cancel_prompt():
+            return None
+
+        monkeypatch.setattr(supervisor, "start", fake_start)
+        monkeypatch.setattr(app, "_prompt_live_passphrase", cancel_prompt)
+        async with app.run_test(size=(140, 40)):
+            await app._start_process("live")
+            assert starts == 0
+
+            async def pass_prompt():
+                return "passphrase"
+
+            def fail_unlock(passphrase: str) -> str:
+                raise RuntimeError("bad unlock")
+
+            monkeypatch.setattr(app, "_prompt_live_passphrase", pass_prompt)
+            monkeypatch.setattr(app, "_unlock_and_verify_live_key", fail_unlock)
+            await app._start_process("live")
+            assert starts == 0
 
     asyncio.run(scenario())
 

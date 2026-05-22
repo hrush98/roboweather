@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,8 @@ import weather_trader.live.settings as live_settings
 def _reload_settings(monkeypatch: pytest.MonkeyPatch):
     for name in (
         "POLYMARKET_KEYFILE_PATH",
+        "POLYMARKET_PRIVATE_KEY",
+        "POLYMARKET_PRIVATE_KEY_FD",
         "POLYMARKET_SIGNATURE_TYPE",
         "POLYMARKET_FUNDER_ADDRESS",
         "AGE_BINARY",
@@ -55,3 +58,56 @@ def test_age_binary_reports_missing_decryptor(monkeypatch: pytest.MonkeyPatch) -
 
     with pytest.raises(FileNotFoundError, match="age/rage decryptor not found"):
         module._age_binary()
+
+
+def test_private_key_fd_is_preferred_and_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _reload_settings(monkeypatch)
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b"0xfdkey")
+    os.close(write_fd)
+    monkeypatch.setenv("POLYMARKET_PRIVATE_KEY_FD", str(read_fd))
+    monkeypatch.setenv("POLYMARKET_PRIVATE_KEY", "0xenvkey")
+
+    private_key = module.private_key_from_env_or_keyfile(module.LiveSettings())
+
+    assert private_key == "0xfdkey"
+    with pytest.raises(OSError):
+        os.fstat(read_fd)
+
+
+def test_private_key_fd_invalid_key_reports_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _reload_settings(monkeypatch)
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b"not-a-key")
+    os.close(write_fd)
+    monkeypatch.setenv("POLYMARKET_PRIVATE_KEY_FD", str(read_fd))
+
+    with pytest.raises(ValueError, match="FD private key does not look"):
+        module.private_key_from_env_or_keyfile(module.LiveSettings())
+
+
+def test_decrypt_age_keyfile_with_passphrase_uses_pty_without_leaking_secret(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _reload_settings(monkeypatch)
+    decryptor = tmp_path / "fake-age"
+    decryptor.write_text(
+        "#!/usr/bin/env python3\n"
+        "import getpass, sys\n"
+        "pw = getpass.getpass('Enter passphrase: ')\n"
+        "if pw != 'correct horse':\n"
+        "    print('bad passphrase', file=sys.stderr)\n"
+        "    raise SystemExit(1)\n"
+        "print('0xabc123')\n",
+        encoding="utf-8",
+    )
+    decryptor.chmod(0o700)
+    keyfile = tmp_path / "polymarket.key.age"
+    keyfile.write_text("encrypted", encoding="utf-8")
+    monkeypatch.setenv("AGE_BINARY", str(decryptor))
+
+    assert module.decrypt_age_keyfile_with_passphrase(str(keyfile), "correct horse") == "0xabc123"
+
+    with pytest.raises(RuntimeError) as exc_info:
+        module.decrypt_age_keyfile_with_passphrase(str(keyfile), "wrong secret")
+    message = str(exc_info.value)
+    assert "wrong secret" not in message
+    assert "passphrase" in message
