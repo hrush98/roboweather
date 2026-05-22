@@ -600,7 +600,15 @@ class RoboWeatherTUI(App):
             private_key = ""
 
     async def _prompt_live_passphrase(self) -> str | None:
-        return await self.push_screen_wait(PassphraseScreen())
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[str | None] = loop.create_future()
+
+        def on_dismiss(value: str | None) -> None:
+            if not future.done():
+                future.set_result(value)
+
+        self.push_screen(PassphraseScreen(), callback=on_dismiss)
+        return await future
 
     def _unlock_and_verify_live_key(self, passphrase: str) -> str:
         settings = load_live_settings()
