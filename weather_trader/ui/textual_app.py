@@ -176,6 +176,11 @@ def _registered_strategy_row(strategy: dict[str, Any]) -> dict[str, Any]:
 
 
 class PassphraseScreen(ModalScreen[str | None]):
+    BINDINGS = [
+        ("enter", "submit", "Submit"),
+        ("escape", "cancel", "Cancel"),
+    ]
+
     def compose(self) -> ComposeResult:
         with Vertical(id="passphrase-dialog"):
             yield Static("Unlock Polymarket key", id="passphrase-title")
@@ -189,14 +194,20 @@ class PassphraseScreen(ModalScreen[str | None]):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.stop()
-        self.dismiss(event.value)
+        self.action_submit()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
         if event.button.id == "passphrase-cancel":
-            self.dismiss(None)
+            self.action_cancel()
             return
+        self.action_submit()
+
+    def action_submit(self) -> None:
         self.dismiss(self.query_one("#passphrase-input", Input).value)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class RoboWeatherTUI(App):
