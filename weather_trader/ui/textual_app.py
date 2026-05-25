@@ -15,6 +15,7 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, Static, Ta
 
 from weather_trader.execution.clob_executor import ClobExecutor
 from weather_trader.execution.store import ExecutionStore
+from weather_trader.live.resolution import LiveResolutionService
 from weather_trader.live.settings import decrypt_age_keyfile_with_passphrase, load_live_settings
 from weather_trader.ui.dashboard_rollups import (
     _build_live_policy_view,
@@ -39,6 +40,7 @@ class TableSort:
 
 OVERVIEW_TABLE_IDS = {"live-summary", "live-strategies", "live-stations", "live-positions"}
 REPO_ROOT = Path(__file__).resolve().parents[2]
+LIVE_RESOLUTION_POLL_INTERVAL_SECONDS = 6 * 60 * 60
 
 DEFAULT_DESC_SORT_COLUMNS = {
     "attempts",
@@ -358,7 +360,10 @@ class RoboWeatherTUI(App):
         self.target_date = _default_target_date(db_path)
         self.kill_switch_path = Path(load_live_settings().live_kill_switch_path).expanduser()
         self.table_sorts: dict[str, TableSort] = {}
+        self._process_log_rows: dict[str, tuple[str, ...]] = {}
         self._process_actions_in_progress: set[str] = set()
+        self._last_live_resolution_poll_at: datetime | None = None
+        self._last_live_resolution_summary: dict[str, Any] | None = None
         self.process_supervisor = process_supervisor or _default_process_supervisor()
 
     def compose(self) -> ComposeResult:
@@ -685,13 +690,26 @@ class RoboWeatherTUI(App):
 
     def _refresh_process_log(self, name: str, table_id: str) -> None:
         table = self.query_one(table_id, DataTable)
+        rows = tuple(self.process_supervisor.logs(name)[-200:])
+        if self._process_log_rows.get(name) == rows:
+            return
+        self._process_log_rows[name] = rows
+        scroll_x = table.scroll_x
+        scroll_y = table.scroll_y
+        follow_tail = table.is_vertical_scroll_end and not table.is_vertical_scrollbar_grabbed
         table.clear()
-        for line in self.process_supervisor.logs(name)[-200:]:
+        for line in rows:
             table.add_row(line[:240])
+        if follow_tail:
+            table.scroll_end(animate=False, immediate=True)
+        else:
+            table.scroll_to(x=scroll_x, y=scroll_y, animate=False, force=True, immediate=True)
 
     def refresh_table(self) -> None:
         store = ExecutionStore(self.db_path)
         try:
+            self._refresh_target_date(store)
+            self._maybe_resolve_live_positions(store)
             signals = store.recent_signals(limit=200)
             decisions = store.recent_decisions(limit=50)
             engine_states = store.recent_engine_states(limit=20)
@@ -720,6 +738,7 @@ class RoboWeatherTUI(App):
         live_rr = total_mtm / total_cost if total_cost else None
         rejected = sum(1 for row in live_rows if str(row.get("state")) == "REJECTED")
         live_strategy_names = {str(row.get("strategy_name")) for row in live_rows}
+        registered_policy_names = {str(strategy.get("name", "")) for strategy in strategies}
         active_strategy_count = sum(1 for row in strategies if int(row.get("active") or 0) == 1)
 
         kill_status = self.query_one("#kill-status", Static)
@@ -732,11 +751,12 @@ class RoboWeatherTUI(App):
         summary_rows = [
             ("kill switch", "ACTIVE" if kill_active else "clear", str(self.kill_switch_path)),
             ("market date", self.target_date, "live position filter"),
+            self._live_resolution_summary_row(),
             ("open positions", str(len(live_rows)), f"{len(filled)} with fills, {rejected} rejected"),
             ("risk at work", _fmt_money(total_cost), f"target {_fmt_money(total_target)}"),
             ("live mtm", _fmt_money(total_mtm), f"live R/R {_fmt_pct(live_rr)}"),
             ("quoted positions", f"{marked}/{len(live_rows)}", f"latest book age {'n/a' if latest_book_age is None else f'{latest_book_age:.1f}m'}"),
-            ("strategies", str(active_strategy_count), f"{len(live_strategy_names)} have positions today"),
+            ("strategies", str(active_strategy_count), f"{len(live_strategy_names & registered_policy_names)} have positions today"),
             ("order attempts", str(len(live_orders)), f"last {latest_order.get('final_state', '')} {latest_order.get('final_reason', '')}"),
             ("last event", str(latest_event.get("event_type", "")), str(latest_event.get("message", ""))[:80]),
             ("latest risk snapshot", str(latest_risk.get("timestamp", ""))[:19], _fmt_money(latest_risk.get("open_risk_usd"))),
@@ -746,8 +766,13 @@ class RoboWeatherTUI(App):
 
         strategy_table = self.query_one("#live-strategies", DataTable)
         strategy_table.clear()
+        strategy_rows_by_policy = {str(row.get("policy", "")): row for row in view["policy_rows"]}
+        for strategy in strategies:
+            name = str(strategy.get("name", ""))
+            if name not in strategy_rows_by_policy:
+                strategy_rows_by_policy[name] = _registered_strategy_row(strategy)
         strategy_rows = sorted(
-            view["policy_rows"],
+            strategy_rows_by_policy.values(),
             key=lambda row: (_status_priority(str(row.get("status", ""))), -(row.get("risk") or 0.0), row.get("policy", "")),
         )
         for row in strategy_rows:
@@ -904,4 +929,50 @@ class RoboWeatherTUI(App):
                     f"actionable_only={self.actionable_only}",
                 ]
             )
+        )
+
+    def _refresh_target_date(self, store: ExecutionStore) -> None:
+        latest = store.latest_live_market_date()
+        if latest is None:
+            return
+        if str(latest) > str(self.target_date):
+            self.target_date = str(latest)
+
+    def _maybe_resolve_live_positions(self, store: ExecutionStore) -> None:
+        now = datetime.now(timezone.utc)
+        if (
+            self._last_live_resolution_poll_at is not None
+            and (now - self._last_live_resolution_poll_at).total_seconds() < LIVE_RESOLUTION_POLL_INTERVAL_SECONDS
+        ):
+            return
+        self._last_live_resolution_poll_at = now
+        try:
+            summary = LiveResolutionService(store).resolve_due(as_of_utc=now)
+        except Exception as exc:
+            self._last_live_resolution_summary = {
+                "resolved": 0,
+                "pending": 0,
+                "errors": 1,
+                "timestamp": now,
+                "detail": str(exc)[:80],
+            }
+            return
+        self._last_live_resolution_summary = {
+            "resolved": int(summary.resolved),
+            "pending": int(summary.pending),
+            "errors": len(summary.errors),
+            "timestamp": now,
+            "detail": f"{summary.candidates} candidates, {summary.skipped} skipped",
+        }
+
+    def _live_resolution_summary_row(self) -> tuple[str, str, str]:
+        summary = self._last_live_resolution_summary
+        if summary is None:
+            return ("live resolution", "not polled", "")
+        timestamp = summary.get("timestamp")
+        last = timestamp.astimezone().strftime("%H:%M:%S") if isinstance(timestamp, datetime) else str(timestamp or "")
+        return (
+            "live resolution",
+            f"resolved {summary.get('resolved', 0)} pending {summary.get('pending', 0)} errors {summary.get('errors', 0)}",
+            f"last {last} {summary.get('detail', '')}".strip(),
         )

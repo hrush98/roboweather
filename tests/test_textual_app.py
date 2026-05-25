@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 from textual.widgets import Button, DataTable, Input
@@ -14,6 +15,8 @@ from weather_trader.ui.dashboard_rollups import _build_live_policy_view, _build_
 from weather_trader.execution.contracts import (
     BookLevel,
     BookSnapshot,
+    LivePolicyPosition,
+    LivePositionState,
     LiveStrategy,
     MarketFamily,
     MarketSnapshot,
@@ -388,6 +391,46 @@ def test_live_policy_view_handles_empty_input() -> None:
     assert view["rows"] == []
 
 
+def test_tui_strategies_table_shows_registered_strategy_without_positions(tmp_path) -> None:
+    db_path = tmp_path / "tui.sqlite"
+    store = ExecutionStore(db_path)
+    try:
+        store.upsert_live_strategy(
+            LiveStrategy(
+                name="idle_strategy",
+                active=True,
+                source="model",
+                model_group="model-a",
+                model_names=["model-a"],
+                strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+                market_family=MarketFamily.HIGH_TEMP,
+                local_decision_start="12:00",
+                local_decision_end="15:00",
+                entry_price_min=0.05,
+                uniqueness_key_mode="station_date_bucket_side_obs_delay",
+                max_notional_usd=1.0,
+                raw_payload={},
+            )
+        )
+    finally:
+        store.close()
+
+    async def scenario() -> None:
+        supervisor = ProcessSupervisor(
+            [
+                ProcessSpec("research", "Research Loop", (sys.executable, "-c", "print('research')")),
+                ProcessSpec("live", "Live Loop", (sys.executable, "-c", "print('live')")),
+            ],
+            cwd=tmp_path,
+        )
+        app = RoboWeatherTUI(db_path, process_supervisor=supervisor)
+        async with app.run_test(size=(140, 40)):
+            strategy_table = app.query_one("#live-strategies", DataTable)
+            assert strategy_table.row_count == 1
+
+    asyncio.run(scenario())
+
+
 def test_tui_process_supervisor_tab_mounts(tmp_path) -> None:
     async def scenario() -> None:
         supervisor = ProcessSupervisor(
@@ -413,6 +456,101 @@ def test_live_start_label_reflects_supervisor_live_mode() -> None:
     assert _live_start_label({}) == "Start Live Dry Run"
     assert _live_start_label({"LIVE_MODE": "dry-run"}) == "Start Live Dry Run"
     assert _live_start_label({"LIVE_MODE": "live"}) == "Start Live Run"
+
+
+def test_tui_refresh_target_date_advances_to_newer_live_date(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "tui.sqlite")
+    try:
+        _insert_live_position(store, date(2026, 5, 25))
+        app = RoboWeatherTUI(tmp_path / "tui.sqlite")
+        app.target_date = "2026-05-22"
+
+        app._refresh_target_date(store)
+
+        assert app.target_date == "2026-05-25"
+    finally:
+        store.close()
+
+
+def test_tui_refresh_target_date_does_not_move_backward(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "tui.sqlite")
+    try:
+        _insert_live_position(store, date(2026, 5, 22))
+        app = RoboWeatherTUI(tmp_path / "tui.sqlite")
+        app.target_date = "2026-05-25"
+
+        app._refresh_target_date(store)
+
+        assert app.target_date == "2026-05-25"
+    finally:
+        store.close()
+
+
+def test_tui_first_refresh_polls_live_resolution(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    class FakeLiveResolutionService:
+        def __init__(self, store: ExecutionStore) -> None:
+            self.store = store
+
+        def resolve_due(self, *, as_of_utc=None):
+            calls.append(as_of_utc)
+            return SimpleNamespace(candidates=2, resolved=1, pending=1, skipped=0, errors=[])
+
+    monkeypatch.setattr("weather_trader.ui.textual_app.LiveResolutionService", FakeLiveResolutionService)
+
+    async def scenario() -> None:
+        app = RoboWeatherTUI(tmp_path / "tui.sqlite", process_supervisor=_test_supervisor(tmp_path))
+        async with app.run_test(size=(140, 40)):
+            assert len(calls) == 1
+            assert app._last_live_resolution_summary is not None
+            assert app._last_live_resolution_summary["resolved"] == 1
+
+    asyncio.run(scenario())
+
+
+def test_tui_live_resolution_poll_is_throttled(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    class FakeLiveResolutionService:
+        def __init__(self, store: ExecutionStore) -> None:
+            self.store = store
+
+        def resolve_due(self, *, as_of_utc=None):
+            calls.append(as_of_utc)
+            return SimpleNamespace(candidates=0, resolved=0, pending=0, skipped=0, errors=[])
+
+    monkeypatch.setattr("weather_trader.ui.textual_app.LiveResolutionService", FakeLiveResolutionService)
+
+    async def scenario() -> None:
+        app = RoboWeatherTUI(tmp_path / "tui.sqlite", process_supervisor=_test_supervisor(tmp_path))
+        async with app.run_test(size=(140, 40)):
+            app.refresh_table()
+            assert len(calls) == 1
+
+    asyncio.run(scenario())
+
+
+def test_tui_live_resolution_exception_is_captured_and_dashboard_renders(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeLiveResolutionService:
+        def __init__(self, store: ExecutionStore) -> None:
+            self.store = store
+
+        def resolve_due(self, *, as_of_utc=None):
+            raise RuntimeError("resolver unavailable")
+
+    monkeypatch.setattr("weather_trader.ui.textual_app.LiveResolutionService", FakeLiveResolutionService)
+
+    async def scenario() -> None:
+        app = RoboWeatherTUI(tmp_path / "tui.sqlite", process_supervisor=_test_supervisor(tmp_path))
+        async with app.run_test(size=(140, 40)):
+            live_summary = app.query_one("#live-summary", DataTable)
+            assert live_summary.row_count > 0
+            assert app._last_live_resolution_summary is not None
+            assert app._last_live_resolution_summary["errors"] == 1
+            assert "resolver unavailable" in app._last_live_resolution_summary["detail"]
+
+    asyncio.run(scenario())
 
 
 def test_tui_process_actions_start_and_stop_supervised_process(tmp_path) -> None:
@@ -500,6 +638,7 @@ def test_tui_live_start_button_accepts_passphrase_and_starts_with_private_key_fd
         async with app.run_test(size=(140, 40)) as pilot:
             app.query_one("#start-live", Button).press()
             await _wait_for_ui(lambda: type(app.screen).__name__ == "PassphraseScreen")
+            await _wait_for_ui(lambda: app.screen.query_one("#passphrase-input", Input).has_focus is True)
             passphrase_input = app.screen.query_one("#passphrase-input", Input)
             assert passphrase_input.has_focus is True
 
@@ -974,3 +1113,39 @@ def test_policy_performance_summary_rolls_up_resolved_policy_silos(tmp_path) -> 
         assert daily_rows[0]["total_pnl"] == pytest.approx(-0.2)
     finally:
         store.close()
+
+
+def _test_supervisor(tmp_path) -> ProcessSupervisor:
+    return ProcessSupervisor(
+        [
+            ProcessSpec("research", "Research Loop", (sys.executable, "-c", "print('research')")),
+            ProcessSpec("live", "Live Loop", (sys.executable, "-c", "print('live')")),
+        ],
+        cwd=tmp_path,
+    )
+
+
+def _insert_live_position(store: ExecutionStore, market_date: date) -> None:
+    position_id = store.insert_live_policy_position(
+        LivePolicyPosition(
+            timestamp="2026-05-25T12:00:00Z",
+            strategy_name=f"live-{market_date.isoformat()}",
+            station="KATL",
+            market_date=market_date,
+            market_family=MarketFamily.HIGH_TEMP,
+            scope_key=f"station_date:{market_date.isoformat()}",
+            selected_market_id=f"market-{market_date.isoformat()}",
+            selected_token_id=f"token-{market_date.isoformat()}",
+            selected_side=TradeAction.BUY_NO,
+            selected_bucket="72-73F",
+            obs_delay_bucket="15m",
+            entry_price=0.4,
+            entry_fair=0.7,
+            entry_edge=0.3,
+            target_notional_usd=3.0,
+            target_shares=7.5,
+            state=LivePositionState.RESERVED,
+            source_prediction_snapshot_ids=[1],
+        )
+    )
+    assert position_id is not None
