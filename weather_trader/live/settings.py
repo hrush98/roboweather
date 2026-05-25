@@ -26,6 +26,19 @@ class LiveSettings:
     live_kill_switch_path: str = "~/.sleeperservice/keys/STOP_TRADING"
     live_share_step: float = 0.0001
     live_require_allowance_check: bool = True
+    live_bankroll_usd: float = 2000.0
+    live_fixed_fraction: float = 0.005
+    live_max_usd_per_order: float = 10.0
+    live_max_exposure_per_station_date: float = 25.0
+    live_max_exposure_per_station_date_side: float = 15.0
+    live_max_exposure_per_exact_bucket_side: float = 10.0
+    live_max_total_open_risk: float = 150.0
+    live_max_daily_new_risk: float = 100.0
+    live_min_order_notional: float = 1.0
+
+    @property
+    def live_base_notional_usd(self) -> float:
+        return self.live_bankroll_usd * self.live_fixed_fraction
 
 
 def load_live_settings() -> LiveSettings:
@@ -41,6 +54,15 @@ def load_live_settings() -> LiveSettings:
         live_kill_switch_path=os.getenv("LIVE_KILL_SWITCH_PATH", "~/.sleeperservice/keys/STOP_TRADING"),
         live_share_step=_float_env("LIVE_SHARE_STEP", 0.0001),
         live_require_allowance_check=_bool_env("LIVE_REQUIRE_ALLOWANCE_CHECK", True),
+        live_bankroll_usd=_float_env("LIVE_BANKROLL_USD", 2000.0),
+        live_fixed_fraction=_float_env("LIVE_FIXED_FRACTION", 0.005),
+        live_max_usd_per_order=_float_env("LIVE_MAX_USD_PER_ORDER", 10.0),
+        live_max_exposure_per_station_date=_float_env("LIVE_MAX_EXPOSURE_PER_STATION_DATE", 25.0),
+        live_max_exposure_per_station_date_side=_float_env("LIVE_MAX_EXPOSURE_PER_STATION_DATE_SIDE", 15.0),
+        live_max_exposure_per_exact_bucket_side=_float_env("LIVE_MAX_EXPOSURE_PER_EXACT_BUCKET_SIDE", 10.0),
+        live_max_total_open_risk=_float_env("LIVE_MAX_TOTAL_OPEN_RISK", 150.0),
+        live_max_daily_new_risk=_float_env("LIVE_MAX_DAILY_NEW_RISK", 100.0),
+        live_min_order_notional=_float_env("LIVE_MIN_ORDER_NOTIONAL", 1.0),
     )
 
 

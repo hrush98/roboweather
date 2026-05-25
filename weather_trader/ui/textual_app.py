@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ from weather_trader.execution.clob_executor import ClobExecutor
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.live.resolution import LiveResolutionService
 from weather_trader.live.settings import decrypt_age_keyfile_with_passphrase, load_live_settings
+from weather_trader.live.sizing import CORE_POLICY_MULTIPLIER, CONSENSUS_POLICY_MULTIPLIER, MOONSHOT_FIXED_NOTIONAL_USD
 from weather_trader.ui.dashboard_rollups import (
     _build_live_policy_view,
     _bucket_label,
@@ -116,6 +118,58 @@ def _status_priority(status: str) -> int:
         "MARKED": 6,
     }.get(status, 9)
 
+
+
+def _position_raw(row: dict[str, Any]) -> dict[str, Any]:
+    raw = row.get("position_raw_json") if "position_raw_json" in row else row.get("raw_json")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw:
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _sizing(row: dict[str, Any]) -> dict[str, Any]:
+    raw = _position_raw(row)
+    sizing = raw.get("sizing")
+    if not isinstance(sizing, dict) and isinstance(raw.get("raw_json"), dict):
+        sizing = raw["raw_json"].get("sizing")
+    return sizing if isinstance(sizing, dict) else {}
+
+
+def _sizing_value(row: dict[str, Any], key: str) -> Any:
+    return _sizing(row).get(key)
+
+
+def _sizing_cap(row: dict[str, Any]) -> str:
+    sizing = _sizing(row)
+    blocked = sizing.get("blocked_reason")
+    if blocked:
+        return str(blocked)
+    target = float(sizing.get("final_target_notional_usd") or row.get("target_notional_usd") or 0.0)
+    caps = sizing.get("caps") if isinstance(sizing.get("caps"), dict) else {}
+    for name, cap in caps.items():
+        if not isinstance(cap, dict):
+            continue
+        applied = float(cap.get("applied_usd") or 0.0)
+        pre_cap = float(sizing.get("pre_cap_target_usd") or 0.0)
+        if applied <= target and applied < pre_cap:
+            return str(name)
+    return "NONE"
+
+
+def _sizing_multiplier(row: dict[str, Any]) -> str:
+    sizing = _sizing(row)
+    if not sizing:
+        return ""
+    policy = sizing.get("policy_multiplier")
+    price = sizing.get("price_multiplier")
+    if policy is None or price is None:
+        return ""
+    return f"p{float(policy):.2f} x px{float(price):.2f}"
 
 def _default_target_date(db_path: Path) -> str:
     store = ExecutionStore(db_path)
@@ -391,6 +445,9 @@ class RoboWeatherTUI(App):
                     yield DataTable(id="live-orders")
                     yield Static("Live Trade Events", classes="section-title")
                     yield DataTable(id="live-events")
+                with TabPane("Config", id="config-tab"):
+                    yield Static("Effective Live Config", classes="section-title")
+                    yield DataTable(id="live-config")
                 with TabPane("Processes", id="processes-tab"):
                     yield Static("Process Supervisor", classes="section-title")
                     with Horizontal(classes="process-controls"):
@@ -472,6 +529,9 @@ class RoboWeatherTUI(App):
                 ("side", "side"),
                 ("bucket", "bucket"),
                 ("target", "target"),
+                ("base", "base"),
+                ("cap", "cap"),
+                ("mult", "multiplier"),
                 ("filled", "filled"),
                 ("cost", "cost"),
                 ("entry", "entry"),
@@ -484,7 +544,11 @@ class RoboWeatherTUI(App):
 
         live_orders = self.query_one("#live-orders", DataTable)
         live_orders.cursor_type = "row"
-        live_orders.add_columns("time", "strategy", "station", "side", "mode", "limit", "target", "filled", "avg", "state", "reason", "order")
+        live_orders.add_columns("time", "strategy", "station", "side", "mode", "limit", "target", "base", "cap", "mult", "filled", "avg", "state", "reason", "order")
+
+        live_config = self.query_one("#live-config", DataTable)
+        live_config.cursor_type = "row"
+        live_config.add_columns("group", "setting", "value")
 
         live_events = self.query_one("#live-events", DataTable)
         live_events.cursor_type = "row"
@@ -658,6 +722,37 @@ class RoboWeatherTUI(App):
         self.notify(f"{snapshot.label} {snapshot.status.lower()}.")
         self.refresh_processes()
 
+
+    def _refresh_config_table(self, settings) -> None:
+        table = self.query_one("#live-config", DataTable)
+        table.clear()
+        rows = [
+            ("Execution", "mode", self.process_supervisor.env.get("LIVE_MODE", "dry-run")),
+            ("Execution", "CLOB URL", settings.polymarket_clob_url),
+            ("Execution", "client version", settings.polymarket_clob_client_version),
+            ("Execution", "allowance check", str(settings.live_require_allowance_check)),
+            ("Execution", "kill switch path", settings.live_kill_switch_path),
+            ("Sizing", "bankroll", _fmt_money(settings.live_bankroll_usd)),
+            ("Sizing", "fixed fraction", _fmt_pct(settings.live_fixed_fraction)),
+            ("Sizing", "base notional", _fmt_money(settings.live_base_notional_usd)),
+            ("Sizing", "min order", _fmt_money(settings.live_min_order_notional)),
+            ("Sizing", "max order", _fmt_money(settings.live_max_usd_per_order)),
+            ("Risk caps", "total open", _fmt_money(settings.live_max_total_open_risk)),
+            ("Risk caps", "daily new", _fmt_money(settings.live_max_daily_new_risk)),
+            ("Risk caps", "station/date", _fmt_money(settings.live_max_exposure_per_station_date)),
+            ("Risk caps", "station/date/side", _fmt_money(settings.live_max_exposure_per_station_date_side)),
+            ("Risk caps", "exact bucket/side", _fmt_money(settings.live_max_exposure_per_exact_bucket_side)),
+            ("Strategy tiers", "core multiplier", f"{CORE_POLICY_MULTIPLIER:.2f}x"),
+            ("Strategy tiers", "consensus multiplier", f"{CONSENSUS_POLICY_MULTIPLIER:.2f}x"),
+            ("Strategy tiers", "moonshot fixed", _fmt_money(MOONSHOT_FIXED_NOTIONAL_USD)),
+            ("Price bands", "< 0.10", "0.25x except moonshot"),
+            ("Price bands", "0.10-0.25", "0.60x"),
+            ("Price bands", "0.25-0.75", "1.00x"),
+            ("Price bands", "> 0.75", "0.60x"),
+        ]
+        for group, setting, value in rows:
+            table.add_row(group, setting, str(value))
+
     def refresh_processes(self) -> None:
         process_table = self.query_one("#process-table", DataTable)
         process_table.clear()
@@ -717,6 +812,7 @@ class RoboWeatherTUI(App):
             live_orders = store.recent_live_order_attempts(limit=100)
             live_events = store.recent_live_trade_events(limit=100)
             live_risk = store.recent_live_risk_snapshots(limit=5)
+            exposure = store.live_exposure_summary()
             strategies = store.live_strategies(active_only=False)
             overview = store.research_status_overview(self.target_date)
         finally:
@@ -738,6 +834,12 @@ class RoboWeatherTUI(App):
         live_rr = total_mtm / total_cost if total_cost else None
         rejected = sum(1 for row in live_rows if str(row.get("state")) == "REJECTED")
         live_strategy_names = {str(row.get("strategy_name")) for row in live_rows}
+        settings = load_live_settings()
+        daily_key = datetime.now(timezone.utc).date().isoformat()
+        open_risk = float(exposure.get("open_risk_usd") or 0.0)
+        daily_new = float((exposure.get("daily_new_risk_usd") or {}).get(daily_key, 0.0))
+        station_exposures = exposure.get("station_date_exposure_usd") or {}
+        largest_station_date = max(station_exposures.items(), key=lambda item: item[1], default=("n/a", 0.0))
         registered_policy_names = {str(strategy.get("name", "")) for strategy in strategies}
         active_strategy_count = sum(1 for row in strategies if int(row.get("active") or 0) == 1)
 
@@ -754,6 +856,9 @@ class RoboWeatherTUI(App):
             self._live_resolution_summary_row(),
             ("open positions", str(len(live_rows)), f"{len(filled)} with fills, {rejected} rejected"),
             ("risk at work", _fmt_money(total_cost), f"target {_fmt_money(total_target)}"),
+            ("open risk", f"{_fmt_money(open_risk)} / {_fmt_money(settings.live_max_total_open_risk)}", "active reserved/submitted/filled risk"),
+            ("daily new risk", f"{_fmt_money(daily_new)} / {_fmt_money(settings.live_max_daily_new_risk)}", f"UTC {daily_key}"),
+            ("largest station/date", f"{_fmt_money(largest_station_date[1])} / {_fmt_money(settings.live_max_exposure_per_station_date)}", str(largest_station_date[0])),
             ("live mtm", _fmt_money(total_mtm), f"live R/R {_fmt_pct(live_rr)}"),
             ("quoted positions", f"{marked}/{len(live_rows)}", f"latest book age {'n/a' if latest_book_age is None else f'{latest_book_age:.1f}m'}"),
             ("strategies", str(active_strategy_count), f"{len(live_strategy_names & registered_policy_names)} have positions today"),
@@ -763,6 +868,8 @@ class RoboWeatherTUI(App):
         ]
         for metric, value, detail in summary_rows:
             live_summary_table.add_row(metric, value, detail)
+
+        self._refresh_config_table(settings)
 
         strategy_table = self.query_one("#live-strategies", DataTable)
         strategy_table.clear()
@@ -828,6 +935,9 @@ class RoboWeatherTUI(App):
                 str(row.get("side", "")),
                 str(row.get("bucket", "")),
                 _fmt_money(raw.get("target_notional_usd")),
+                _fmt_money(_sizing_value(raw, "base_notional_usd")),
+                _sizing_cap(raw),
+                _sizing_multiplier(raw),
                 _fmt(raw.get("filled_shares")),
                 _fmt_money(raw.get("cost_usd")),
                 _fmt(row.get("entry")),
@@ -848,6 +958,9 @@ class RoboWeatherTUI(App):
                 str(order.get("order_mode", "")),
                 _fmt(order.get("limit_price")),
                 _fmt_money(order.get("target_notional_usd")),
+                _fmt_money(_sizing_value(order, "base_notional_usd")),
+                _sizing_cap(order),
+                _sizing_multiplier(order),
                 _fmt(order.get("filled_shares")),
                 _fmt(order.get("avg_price")),
                 str(order.get("final_state", "")),

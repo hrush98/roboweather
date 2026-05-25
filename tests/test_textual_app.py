@@ -1149,3 +1149,75 @@ def _insert_live_position(store: ExecutionStore, market_date: date) -> None:
         )
     )
     assert position_id is not None
+
+
+def test_tui_config_tab_renders_effective_live_sizing_values(tmp_path) -> None:
+    async def scenario() -> None:
+        app = RoboWeatherTUI(tmp_path / "tui.sqlite", process_supervisor=_test_supervisor(tmp_path))
+        async with app.run_test(size=(140, 40)):
+            config = app.query_one("#live-config", DataTable)
+            text = "\n".join(" ".join(str(cell) for cell in config.get_row_at(index)) for index in range(config.row_count))
+            assert "Sizing bankroll $2000.00" in text
+            assert "Sizing base notional $10.00" in text
+            assert "Risk caps total open $150.00" in text
+            assert "Strategy tiers consensus multiplier 0.60x" in text
+            assert "Price bands < 0.10 0.25x except moonshot" in text
+
+    asyncio.run(scenario())
+
+
+def test_tui_live_summary_and_positions_show_sizing_caps(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "tui.sqlite")
+    try:
+        position_id = store.insert_live_policy_position(
+            LivePolicyPosition(
+                timestamp="2026-05-25T12:00:00+00:00",
+                strategy_name="live-sizing-test",
+                station="KATL",
+                market_date=date(2026, 5, 25),
+                market_family=MarketFamily.HIGH_TEMP,
+                scope_key="station_date_bucket_side_obs_delay:72-73F:BUY_NO:15m",
+                selected_market_id="market-sizing",
+                selected_token_id="token-sizing",
+                selected_side=TradeAction.BUY_NO,
+                selected_bucket="72-73F",
+                obs_delay_bucket="15m",
+                entry_price=0.4,
+                entry_fair=0.9,
+                entry_edge=0.5,
+                target_notional_usd=4.5,
+                target_shares=11.25,
+                state=LivePositionState.RESERVED,
+                source_prediction_snapshot_ids=[1],
+                raw_json={
+                    "limit_price": 0.4,
+                    "sizing": {
+                        "base_notional_usd": 10.0,
+                        "policy_multiplier": 1.0,
+                        "price_multiplier": 1.0,
+                        "pre_cap_target_usd": 10.0,
+                        "final_target_notional_usd": 4.5,
+                        "blocked_reason": "RISK_TOTAL_OPEN_CAP",
+                        "caps": {"RISK_TOTAL_OPEN_CAP": {"applied_usd": 4.5, "remaining_usd": 4.5}},
+                    },
+                },
+            )
+        )
+        assert position_id is not None
+    finally:
+        store.close()
+
+    async def scenario() -> None:
+        app = RoboWeatherTUI(tmp_path / "tui.sqlite", process_supervisor=_test_supervisor(tmp_path))
+        async with app.run_test(size=(160, 40)):
+            summary = app.query_one("#live-summary", DataTable)
+            summary_text = "\n".join(" ".join(str(cell) for cell in summary.get_row_at(index)) for index in range(summary.row_count))
+            assert "open risk $4.50 / $150.00" in summary_text
+            assert "largest station/date $4.50 / $25.00 KATL:2026-05-25" in summary_text
+            positions = app.query_one("#live-positions", DataTable)
+            position_text = "\n".join(" ".join(str(cell) for cell in positions.get_row_at(index)) for index in range(positions.row_count))
+            assert "$10.00" in position_text
+            assert "RISK_TOTAL_OPEN_CAP" in position_text
+            assert "p1.00 x px1.00" in position_text
+
+    asyncio.run(scenario())

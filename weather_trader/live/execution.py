@@ -35,6 +35,7 @@ from weather_trader.execution.liquidity import quantize_price, quantize_shares, 
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import StationWeatherState, WeatherFeatureService
 from weather_trader.live.settings import LiveSettings, load_live_settings, private_key_from_env_or_keyfile
+from weather_trader.live.sizing import LiveSizingDecision, LiveSizingModel
 from weather_trader.research.collector import ResearchConfig, build_prediction_snapshot, due_delay_buckets
 from weather_trader.research.policies import CATBOOST_MODEL, DYNAMIC_TUNED_MODEL, ResearchPolicyEvaluator, ResearchPolicySpec
 
@@ -76,7 +77,7 @@ class LiveExecutionConfig:
     market_limit: int = 50000
     max_obs_age_minutes: int = 30
     max_book_age_seconds: float = 10.0
-    max_notional_usd: float = 3.0
+    max_notional_usd: float = 10.0
     min_entry_price: float = 0.05
     require_allowance_check: bool = True
 
@@ -310,6 +311,7 @@ class LiveExecutionEngine:
         self.strategy_plans = live_strategy_plans(self.config)
         self.policy_evaluator = ResearchPolicyEvaluator(store, tuple(policy for plan in self.strategy_plans for policy in plan.policies))
         self.settings = settings or load_live_settings()
+        self.sizing_model = LiveSizingModel(self.settings)
         self.submitter = submitter
         self._default_submitter_instance: LiveSubmitter | None = None
 
@@ -346,7 +348,10 @@ class LiveExecutionEngine:
                 continue
             selected_book = book_by_market_side.get((candidate.position.selected_market_id, str(candidate.position.selected_side)))
             reject_reason = self._candidate_reject_reason(candidate, selected_book)
-            position = self._live_position(candidate, market, reject_reason=reject_reason)
+            sizing = self._size_candidate(candidate, now)
+            if reject_reason is None and sizing.blocked_reason is not None:
+                reject_reason = sizing.blocked_reason
+            position = self._live_position(candidate, market, reject_reason=reject_reason, sizing=sizing)
             position_id = self.store.insert_live_policy_position(position)
             if position_id is None:
                 skipped += 1
@@ -509,15 +514,35 @@ class LiveExecutionEngine:
             return "ENTRY_PRICE_TOO_LOW"
         if candidate.position.selected_book_age_seconds is not None and candidate.position.selected_book_age_seconds > self.config.max_book_age_seconds:
             return "STALE_BOOK"
-        if float(candidate.position.selected_sweep_depth_to_cap or 0.0) < candidate.plan.target_notional_usd:
-            return "INSUFFICIENT_DEPTH"
         return None
 
-    def _live_position(self, candidate: LiveCandidate, market: MarketSnapshot, *, reject_reason: str | None) -> LivePolicyPosition:
+    def _size_candidate(self, candidate: LiveCandidate, as_of_utc: datetime) -> LiveSizingDecision:
+        source = candidate.position
+        entry_price = float(source.selected_sweep_price_cap or source.entry_price)
+        return self.sizing_model.size_candidate(
+            strategy_name=candidate.plan.strategy.name,
+            entry_price=entry_price,
+            station=str(source.station),
+            market_date=source.market_date,
+            selected_side=source.selected_side,
+            selected_bucket=source.selected_bucket,
+            sweep_depth_to_cap=source.selected_sweep_depth_to_cap,
+            exposure=self.store.live_exposure_summary(),
+            as_of_utc=as_of_utc,
+        )
+
+    def _live_position(
+        self,
+        candidate: LiveCandidate,
+        market: MarketSnapshot,
+        *,
+        reject_reason: str | None,
+        sizing: LiveSizingDecision,
+    ) -> LivePolicyPosition:
         source = candidate.position
         token_id = market.yes_token_id if source.selected_side == TradeAction.BUY_YES else market.no_token_id
         limit_price = quantize_price(float(source.selected_sweep_price_cap or source.entry_price))
-        target_notional = quantize_usdc(candidate.plan.target_notional_usd)
+        target_notional = quantize_usdc(sizing.target_notional_usd)
         target_shares = quantize_shares(target_notional / limit_price) if limit_price > 0 else 0.0
         return LivePolicyPosition(
             timestamp=utc_now_iso(),
@@ -543,6 +568,7 @@ class LiveExecutionEngine:
                 "strategy": dataclass_to_jsonable(candidate.plan.strategy),
                 "limit_price": limit_price,
                 "reject_reason": reject_reason,
+                "sizing": sizing.raw_json,
             },
         )
 

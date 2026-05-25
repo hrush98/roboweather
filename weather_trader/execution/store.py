@@ -1720,6 +1720,7 @@ class ExecutionStore:
 
     def insert_live_policy_position(self, position: LivePolicyPosition) -> int | None:
         data = dataclass_to_jsonable(position)
+        raw_payload = {**data, **(position.raw_json or {})}
         cursor = self.connection.execute(
             """
             insert or ignore into live_policy_positions (
@@ -1750,7 +1751,7 @@ class ExecutionStore:
                 position.target_shares,
                 str(position.state),
                 json.dumps(position.source_prediction_snapshot_ids),
-                json.dumps(data, sort_keys=True),
+                json.dumps(raw_payload, sort_keys=True),
             ),
         )
         self.connection.commit()
@@ -2030,6 +2031,7 @@ class ExecutionStore:
                 lpp.mark_value as stored_mark_value,
                 lpp.unrealized_pnl as stored_unrealized_pnl,
                 lpp.state,
+                lpp.raw_json,
                 lb.best_bid as current_bid,
                 lb.best_ask as current_ask,
                 lb.timestamp as current_book_time,
@@ -2070,7 +2072,8 @@ class ExecutionStore:
                 lpp.strategy_name,
                 lpp.station,
                 lpp.market_date,
-                lpp.selected_bucket
+                lpp.selected_bucket,
+                lpp.raw_json as position_raw_json
             from live_order_attempts loa
             left join live_policy_positions lpp on lpp.id = loa.live_position_id
             order by loa.id desc
@@ -2107,13 +2110,43 @@ class ExecutionStore:
     def live_exposure_summary(self) -> dict[str, Any]:
         rows = self.live_open_positions()
         station_date: dict[str, float] = {}
+        station_date_side: dict[str, float] = {}
+        exact_bucket_side: dict[str, float] = {}
         total = 0.0
         for row in rows:
             risk = float(row["cost_usd"] or row["target_notional_usd"] or 0.0)
             total += risk
-            key = f"{row['station']}:{row['market_date']}"
-            station_date[key] = station_date.get(key, 0.0) + risk
-        return {"open_positions": len(rows), "open_risk_usd": total, "station_date_exposure_usd": station_date}
+            station_date_key = f"{row['station']}:{row['market_date']}"
+            station_date_side_key = f"{row['station']}:{row['market_date']}:{row['selected_side']}"
+            exact_key = f"{row['station']}:{row['market_date']}:{row['selected_side']}:{row['selected_bucket'] or ''}"
+            station_date[station_date_key] = station_date.get(station_date_key, 0.0) + risk
+            station_date_side[station_date_side_key] = station_date_side.get(station_date_side_key, 0.0) + risk
+            exact_bucket_side[exact_key] = exact_bucket_side.get(exact_key, 0.0) + risk
+        return {
+            "open_positions": len(rows),
+            "open_risk_usd": total,
+            "station_date_exposure_usd": station_date,
+            "station_date_side_exposure_usd": station_date_side,
+            "exact_bucket_side_exposure_usd": exact_bucket_side,
+            "daily_new_risk_usd": self.live_daily_new_risk_by_utc_date(),
+        }
+
+    def live_daily_new_risk_by_utc_date(self) -> dict[str, float]:
+        rows = self.connection.execute(
+            """
+            select substr(timestamp, 1, 10) as utc_date, target_notional_usd, cost_usd
+            from live_policy_positions
+            where state in ('RESERVED', 'SUBMITTED', 'FILLED', 'PARTIAL', 'DELAYED', 'UNKNOWN')
+            """
+        ).fetchall()
+        daily: dict[str, float] = {}
+        for row in rows:
+            key = str(row["utc_date"] or "")
+            if not key:
+                continue
+            risk = float(row["cost_usd"] or row["target_notional_usd"] or 0.0)
+            daily[key] = daily.get(key, 0.0) + risk
+        return daily
 
     def next_live_attempt_seq(self, live_position_id: int) -> int:
         row = self.connection.execute(

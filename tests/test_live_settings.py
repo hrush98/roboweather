@@ -120,3 +120,48 @@ def test_decrypt_output_extracts_private_key_from_env_style_text(monkeypatch: py
 
     assert module._extract_private_key_from_decrypt_output(f"POLYMARKET_PRIVATE_KEY={private_key}\n") == private_key
     assert module._extract_private_key_from_decrypt_output(f"Enter passphrase: \r\n{private_key}\r\n") == private_key
+
+
+def test_live_sizing_defaults() -> None:
+    settings = live_settings.LiveSettings()
+
+    assert settings.live_bankroll_usd == 2000
+    assert settings.live_fixed_fraction == 0.005
+    assert settings.live_base_notional_usd == 10
+    assert settings.live_max_usd_per_order == 10
+    assert settings.live_max_exposure_per_station_date == 25
+    assert settings.live_max_exposure_per_station_date_side == 15
+    assert settings.live_max_exposure_per_exact_bucket_side == 10
+    assert settings.live_max_total_open_risk == 150
+    assert settings.live_max_daily_new_risk == 100
+    assert settings.live_min_order_notional == 1
+
+
+def test_live_sizing_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _reload_settings(monkeypatch)
+    overrides = {
+        "LIVE_BANKROLL_USD": "3000",
+        "LIVE_FIXED_FRACTION": "0.01",
+        "LIVE_MAX_USD_PER_ORDER": "12",
+        "LIVE_MAX_EXPOSURE_PER_STATION_DATE": "30",
+        "LIVE_MAX_EXPOSURE_PER_STATION_DATE_SIDE": "20",
+        "LIVE_MAX_EXPOSURE_PER_EXACT_BUCKET_SIDE": "11",
+        "LIVE_MAX_TOTAL_OPEN_RISK": "175",
+        "LIVE_MAX_DAILY_NEW_RISK": "125",
+        "LIVE_MIN_ORDER_NOTIONAL": "2",
+    }
+    for name, value in overrides.items():
+        monkeypatch.setenv(name, value)
+
+    settings = module.load_live_settings()
+
+    assert settings.live_bankroll_usd == 3000
+    assert settings.live_fixed_fraction == 0.01
+    assert settings.live_base_notional_usd == 30
+    assert settings.live_max_usd_per_order == 12
+    assert settings.live_max_exposure_per_station_date == 30
+    assert settings.live_max_exposure_per_station_date_side == 20
+    assert settings.live_max_exposure_per_exact_bucket_side == 11
+    assert settings.live_max_total_open_risk == 175
+    assert settings.live_max_daily_new_risk == 125
+    assert settings.live_min_order_notional == 2

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -342,3 +342,92 @@ def _live_position():
         source_prediction_snapshot_ids=[1, 2],
         raw_json={"limit_price": 0.4},
     )
+
+
+def test_live_position_uses_sizing_decision_and_persists_json(tmp_path: Path) -> None:
+    from weather_trader.execution.contracts import MarketSnapshot, ResearchPolicyPosition
+
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live"),
+        submitter=SizingSubmitter(10.0),
+    )
+    plan = live_strategy_plans(LiveExecutionConfig())[1]
+    source = ResearchPolicyPosition(
+        timestamp="2026-05-25T18:00:00+00:00",
+        policy_name=EDGE_CORE_POLICY_NAME,
+        station="KATL",
+        market_date=date(2026, 5, 25),
+        scope_key="station_date_bucket_side_obs_delay:72-73F:BUY_NO:15m",
+        model_group=DYNAMIC_TUNED_MODEL,
+        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        obs_delay_bucket="15m",
+        selected_market_id="market-1",
+        selected_side=TradeAction.BUY_NO,
+        selected_bucket="72-73F",
+        entry_price=0.4,
+        entry_edge=0.5,
+        entry_fair=0.9,
+        source_prediction_snapshot_ids=[1],
+        raw_policy={},
+        selected_sweep_price_cap=0.4,
+        selected_sweep_depth_to_cap=100.0,
+        selected_book_age_seconds=1.0,
+    )
+    candidate = live_execution.LiveCandidate(plan, source)
+    market = MarketSnapshot(
+        market_id="market-1",
+        condition_id=None,
+        question="q",
+        slug="s",
+        city="Atlanta",
+        station="KATL",
+        market_date=date(2026, 5, 25),
+        lower_f=72,
+        upper_f=73,
+        yes_token_id="yes-token",
+        no_token_id="no-token",
+        end_date="2026-05-26T00:00:00Z",
+        resolution_source="test",
+        discovered_at="2026-05-25T18:00:00+00:00",
+    )
+
+    sizing = engine._size_candidate(candidate, as_of_utc=datetime(2026, 5, 25, 18, 0, tzinfo=timezone.utc))
+    position = engine._live_position(candidate, market, reject_reason=None, sizing=sizing)
+    position_id = store.insert_live_policy_position(position)
+    assert position_id is not None
+    state = engine._submit(position_id, position)
+
+    assert state == LivePositionState.FILLED
+    row = store.live_open_positions()[0]
+    assert row["target_notional_usd"] == pytest.approx(10.0)
+    raw = store.connection.execute("select raw_json from live_policy_positions where id = ?", (position_id,)).fetchone()["raw_json"]
+    assert '"sizing"' in raw
+    assert '"final_target_notional_usd": 10.0' in raw
+
+
+def test_blocked_sizing_can_be_recorded_as_rejected_position(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=()))
+    position = _live_position()
+    position = position.__class__(**{**position.__dict__, "target_notional_usd": 0.5, "target_shares": 1.25, "raw_json": {"limit_price": 0.4, "sizing": {"blocked_reason": "RISK_MIN_ORDER_NOTIONAL"}}})
+    position_id = store.insert_live_policy_position(position)
+    assert position_id is not None
+
+    engine._record_rejected(position_id, position, "RISK_MIN_ORDER_NOTIONAL")
+
+    row = store.connection.execute("select state, raw_json from live_policy_positions where id = ?", (position_id,)).fetchone()
+    assert row["state"] == "REJECTED"
+    assert '"final_reason": "RISK_MIN_ORDER_NOTIONAL"' in row["raw_json"]
+    attempt = store.connection.execute("select final_reason from live_order_attempts").fetchone()
+    assert attempt["final_reason"] == "RISK_MIN_ORDER_NOTIONAL"
+
+
+class SizingSubmitter(FakeSubmitter):
+    def __init__(self, expected_amount: float) -> None:
+        self.expected_amount = expected_amount
+
+    def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+        assert amount == pytest.approx(self.expected_amount)
+        return OrderSubmission(True, "order-1", "matched", None, {"success": True, "status": "matched"})
