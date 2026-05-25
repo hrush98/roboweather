@@ -31,6 +31,7 @@ from weather_trader.forecasts.hrrr_client import HRRRClient
 from weather_trader.live.scanner import LiveScanner
 from weather_trader.live.next_day_scanner import NextDayScanner
 from weather_trader.live.execution import LiveExecutionConfig, LiveExecutionEngine
+from weather_trader.live.resolution import LiveResolutionService
 from weather_trader.models.train_classifier import (
     build_bucket_reports,
     build_reliability_report,
@@ -283,6 +284,12 @@ def main() -> None:
     live_loop.add_argument("--model", dest="model_paths", action="append", default=[])
     live_loop.add_argument("--skip-allowance-check", action="store_true")
 
+    resolve_live = subparsers.add_parser("resolve-live", help="Resolve settled live positions from official Polymarket outcomes")
+    resolve_live.add_argument("--db", default=str(DEFAULT_LIVE_DB))
+    resolve_live.add_argument("--min-market-age-days", type=int, default=1)
+    resolve_live.add_argument("--limit", type=int, default=1000)
+    resolve_live.add_argument("--dry-run", action="store_true")
+
     research_loop = subparsers.add_parser("research-loop", help="Run headless research snapshot collection and auto-resolution")
     research_loop.add_argument("--model", required=True)
     research_loop.add_argument("--threshold-model", default=None)
@@ -491,6 +498,14 @@ def main() -> None:
             max_notional_usd=args.max_notional_usd,
             model_paths=args.model_paths,
             require_allowance_check=not args.skip_allowance_check,
+        )
+        return
+    if args.command == "resolve-live":
+        resolve_live_command(
+            db_path=args.db,
+            min_market_age_days=args.min_market_age_days,
+            limit=args.limit,
+            dry_run=args.dry_run,
         )
         return
     if args.command == "research-loop":
@@ -1605,6 +1620,19 @@ def live_loop_command(
             time.sleep(max(1.0, interval_seconds - (time.time() - started)))
     except KeyboardInterrupt:
         print("live-loop stopped")
+    finally:
+        store.close()
+
+
+def resolve_live_command(db_path: str, min_market_age_days: int, limit: int, dry_run: bool) -> None:
+    store = ExecutionStore(Path(db_path))
+    try:
+        summary = LiveResolutionService(store).resolve_due(
+            min_market_age_days=min_market_age_days,
+            limit=limit,
+            dry_run=dry_run,
+        )
+        print(json.dumps(summary.__dict__, indent=2))
     finally:
         store.close()
 

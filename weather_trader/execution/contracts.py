@@ -617,6 +617,13 @@ class LivePolicyPosition:
     target_shares: float
     state: LivePositionState
     source_prediction_snapshot_ids: list[int]
+    resolved_at: str | None = None
+    resolution_source: str | None = None
+    winning_token_id: str | None = None
+    winning_side: TradeAction | None = None
+    settlement_value_usd: float | None = None
+    realized_pnl: float | None = None
+    realized_rr: float | None = None
     raw_json: dict[str, Any] = field(default_factory=dict)
 
 

@@ -13,6 +13,7 @@ from weather_trader.execution.contracts import (
     EngineState,
     LiveOrderAttempt,
     LivePolicyPosition,
+    LivePositionState,
     LiveRiskSnapshot,
     LiveStrategy,
     LiveTradeEvent,
@@ -529,6 +530,13 @@ class ExecutionStore:
                 mark_value real,
                 unrealized_pnl real,
                 state text not null,
+                resolved_at text,
+                resolution_source text,
+                winning_token_id text,
+                winning_side text,
+                settlement_value_usd real,
+                realized_pnl real,
+                realized_rr real,
                 source_prediction_snapshot_ids text not null,
                 raw_json text not null,
                 unique(strategy_name, station, market_date, market_family, scope_key)
@@ -661,6 +669,18 @@ class ExecutionStore:
             },
         )
         self._add_nullable_columns("markets", {"market_family": "text not null default 'HIGH_TEMP'"})
+        self._add_nullable_columns(
+            "live_policy_positions",
+            {
+                "resolved_at": "text",
+                "resolution_source": "text",
+                "winning_token_id": "text",
+                "winning_side": "text",
+                "settlement_value_usd": "real",
+                "realized_pnl": "real",
+                "realized_rr": "real",
+            },
+        )
         self._add_nullable_columns("station_date_outcomes", {"final_low_tmpf": "real"})
         self._add_nullable_columns("prediction_results", {"market_family": "text not null default 'HIGH_TEMP'", "final_low_tmpf": "real"})
         self.connection.commit()
@@ -1762,6 +1782,102 @@ class ExecutionStore:
             (state, filled_shares, avg_entry_price, cost_usd, json.dumps(raw_json, sort_keys=True), live_position_id),
         )
         self.connection.commit()
+
+    def live_unsettled_positions(self, *, max_market_date: date | str | None = None, limit: int = 1000) -> list[dict[str, Any]]:
+        date_filter = "and lpp.market_date <= ?" if max_market_date is not None else ""
+        params: tuple[Any, ...] = ((_date_text(max_market_date), limit) if max_market_date is not None else (limit,))
+        rows = self.connection.execute(
+            f"""
+            select
+                lpp.*,
+                m.condition_id,
+                m.yes_token_id,
+                m.no_token_id
+            from live_policy_positions lpp
+            left join markets m on m.market_id = lpp.selected_market_id
+            where lpp.state in ('FILLED', 'PARTIAL')
+                and lpp.resolved_at is null
+                {date_filter}
+            order by lpp.market_date, lpp.id
+            limit ?
+            """,
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def update_live_policy_position_settlement(
+        self,
+        live_position_id: int,
+        *,
+        resolved_at: str,
+        resolution_source: str,
+        winning_token_id: str | None,
+        winning_side: str | None,
+        settlement_value_usd: float,
+        realized_pnl: float,
+        realized_rr: float | None,
+        raw_patch: dict[str, Any] | None = None,
+    ) -> None:
+        row = self.connection.execute("select raw_json from live_policy_positions where id = ?", (live_position_id,)).fetchone()
+        raw_json = json.loads(row["raw_json"]) if row is not None else {}
+        if raw_patch:
+            raw_json.update(raw_patch)
+        raw_json.update(
+            {
+                "state": str(LivePositionState.SETTLED),
+                "resolved_at": resolved_at,
+                "resolution_source": resolution_source,
+                "winning_token_id": winning_token_id,
+                "winning_side": winning_side,
+                "settlement_value_usd": settlement_value_usd,
+                "realized_pnl": realized_pnl,
+                "realized_rr": realized_rr,
+            }
+        )
+        self.connection.execute(
+            """
+            update live_policy_positions
+            set state = ?,
+                mark_value = ?,
+                unrealized_pnl = ?,
+                resolved_at = ?,
+                resolution_source = ?,
+                winning_token_id = ?,
+                winning_side = ?,
+                settlement_value_usd = ?,
+                realized_pnl = ?,
+                realized_rr = ?,
+                raw_json = ?
+            where id = ?
+            """,
+            (
+                str(LivePositionState.SETTLED),
+                settlement_value_usd,
+                realized_pnl,
+                resolved_at,
+                resolution_source,
+                winning_token_id,
+                winning_side,
+                settlement_value_usd,
+                realized_pnl,
+                realized_rr,
+                json.dumps(raw_json, sort_keys=True),
+                live_position_id,
+            ),
+        )
+        self.connection.commit()
+
+    def has_live_trade_event(self, live_position_id: int, event_type: str) -> bool:
+        row = self.connection.execute(
+            """
+            select 1
+            from live_trade_events
+            where live_position_id = ? and event_type = ?
+            limit 1
+            """,
+            (live_position_id, event_type),
+        ).fetchone()
+        return row is not None
 
     def insert_live_order_attempt(self, attempt: LiveOrderAttempt) -> int | None:
         data = dataclass_to_jsonable(attempt)
