@@ -618,8 +618,7 @@ class LiveExecutionEngine:
                 amount=position.target_notional_usd,
             )
             state = _state_from_response(response)
-        filled_shares = position.target_shares if state in {LivePositionState.FILLED, LivePositionState.SUBMITTED} and response.success else 0.0
-        cost_usd = position.target_notional_usd if filled_shares > 0 else 0.0
+        filled_shares, cost_usd, avg_price = _buy_fill_from_response(response, state, position, limit_price)
         self.store.insert_live_order_attempt(
             LiveOrderAttempt(
                 utc_now_iso(),
@@ -636,7 +635,7 @@ class LiveExecutionEngine:
                 state,
                 response.error_msg or response.status or "submitted",
                 filled_shares,
-                limit_price if filled_shares > 0 else None,
+                avg_price,
                 cost_usd,
                 response.raw,
             )
@@ -645,9 +644,16 @@ class LiveExecutionEngine:
             position_id,
             state=str(state),
             filled_shares=filled_shares,
-            avg_entry_price=limit_price if filled_shares > 0 else None,
+            avg_entry_price=avg_price,
             cost_usd=cost_usd,
-            raw_patch={"external_order_id": response.order_id, "external_status": response.status, "submit_response": response.raw},
+            raw_patch={
+                "external_order_id": response.order_id,
+                "external_status": response.status,
+                "submit_response": response.raw,
+                "actual_filled_shares": filled_shares,
+                "actual_cost_usd": cost_usd,
+                "actual_avg_entry_price": avg_price,
+            },
         )
         self.store.insert_live_trade_event(
             LiveTradeEvent(utc_now_iso(), position_id, position.strategy_name, LiveTradeEventType.ENTRY_SUBMIT, str(state), response.raw)
@@ -677,6 +683,33 @@ class LiveExecutionEngine:
             )
         )
 
+
+def _buy_fill_from_response(
+    response: OrderSubmission,
+    state: LivePositionState,
+    position: LivePolicyPosition,
+    limit_price: float,
+) -> tuple[float, float, float | None]:
+    if not response.success or state not in {LivePositionState.FILLED, LivePositionState.SUBMITTED}:
+        return 0.0, 0.0, None
+    actual_cost = _float_response_field(response.raw, "makingAmount")
+    actual_shares = _float_response_field(response.raw, "takingAmount")
+    if actual_cost is not None and actual_shares is not None and actual_cost > 0.0 and actual_shares > 0.0:
+        avg_price = actual_cost / actual_shares
+        return quantize_shares(actual_shares), quantize_usdc(actual_cost), quantize_price(avg_price)
+    filled_shares = position.target_shares
+    cost_usd = position.target_notional_usd if filled_shares > 0 else 0.0
+    return filled_shares, cost_usd, limit_price if filled_shares > 0 else None
+
+
+def _float_response_field(raw: dict[str, Any], key: str) -> float | None:
+    value = raw.get(key)
+    if value is None and isinstance(raw.get("raw_payload"), dict):
+        value = raw["raw_payload"].get(key)
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
 
 def _book_by_market_side(markets: list[MarketSnapshot], books: dict[str, BookSnapshot]) -> dict[tuple[str, str], BookSnapshot]:
     result: dict[tuple[str, str], BookSnapshot] = {}

@@ -431,3 +431,38 @@ class SizingSubmitter(FakeSubmitter):
     def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
         assert amount == pytest.approx(self.expected_amount)
         return OrderSubmission(True, "order-1", "matched", None, {"success": True, "status": "matched"})
+
+
+def test_live_submit_uses_exchange_returned_fill_amounts(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live"),
+        submitter=ResponseFillSubmitter(),
+    )
+    position = _live_position()
+    position_id = store.insert_live_policy_position(position)
+    assert position_id is not None
+
+    state = engine._submit(position_id, position)
+
+    assert state == LivePositionState.FILLED
+    row = store.live_open_positions()[0]
+    assert row["cost_usd"] == pytest.approx(2.4)
+    assert row["filled_shares"] == pytest.approx(8.0)
+    assert row["avg_entry_price"] == pytest.approx(0.3)
+    attempt = store.connection.execute("select cost_usd, filled_shares, avg_price from live_order_attempts").fetchone()
+    assert attempt["cost_usd"] == pytest.approx(2.4)
+    assert attempt["filled_shares"] == pytest.approx(8.0)
+    assert attempt["avg_price"] == pytest.approx(0.3)
+
+
+class ResponseFillSubmitter(FakeSubmitter):
+    def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+        return OrderSubmission(
+            True,
+            "order-actual-fill",
+            "matched",
+            None,
+            {"success": True, "status": "matched", "makingAmount": "2.4", "takingAmount": "8.0"},
+        )
