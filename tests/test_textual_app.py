@@ -215,6 +215,10 @@ def test_live_policy_view_uses_open_positions_and_policy_silos() -> None:
             "entry_price": 0.79,
             "entry_fair": 0.88,
             "entry_edge": 0.09,
+            "target_notional_usd": 3.0,
+            "filled_shares": 3.797468,
+            "cost_usd": 3.0,
+            "state": "FILLED",
             "current_bid": 0.95,
             "unrealized_pnl": 0.16,
         },
@@ -231,6 +235,10 @@ def test_live_policy_view_uses_open_positions_and_policy_silos() -> None:
             "entry_price": 0.10,
             "entry_fair": 0.25,
             "entry_edge": 0.15,
+            "target_notional_usd": 3.0,
+            "filled_shares": 30.0,
+            "cost_usd": 3.0,
+            "state": "FILLED",
             "current_bid": 0.32,
             "unrealized_pnl": 0.22,
         },
@@ -253,15 +261,18 @@ def test_live_policy_view_uses_open_positions_and_policy_silos() -> None:
     assert view["policy_rows"][0]["avg_edge"] == pytest.approx(0.15)
     assert view["policy_rows"][0]["avg_bid"] == pytest.approx(0.32)
     assert view["policy_rows"][0]["expected_rr"] == pytest.approx(1.5)
-    assert view["policy_rows"][0]["live_rr"] == pytest.approx(2.2)
-    assert view["policy_rows"][0]["live_minus_exp"] == pytest.approx(0.7)
+    assert view["policy_rows"][0]["risk"] == pytest.approx(3.0)
+    assert view["policy_rows"][0]["live_rr"] == pytest.approx(0.22 / 3.0)
+    assert view["policy_rows"][0]["live_minus_exp"] == pytest.approx(0.22 / 3.0 - 1.5)
     assert view["policy_rows"][1]["mtm"] == pytest.approx(0.16)
+    assert view["policy_rows"][1]["risk"] == pytest.approx(3.0)
     assert view["rows"] == view["policy_rows"]
     assert view["position_rows"][0]["policy"] == "pm_us12_mvp_hc_15m_first"
     assert view["position_rows"][0]["live_minus_exp"] == pytest.approx((0.95 - 0.79) / 0.79 - (0.88 - 0.79) / 0.79)
     assert view["exposure_rows"][0]["fair"] == pytest.approx(0.25)
     assert view["exposure_rows"][0]["edge"] == pytest.approx(0.15)
     assert view["exposure_rows"][0]["expected_rr"] == pytest.approx(1.5)
+    assert view["station_rows"][0]["risk"] == pytest.approx(3.0)
     assert [row["station"] for row in view["policy_station_rows"]] == ["KDAL", "KATL"]
 
 

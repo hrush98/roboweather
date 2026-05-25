@@ -86,6 +86,29 @@ def _price_rr(price: float | None, entry: float) -> float | None:
     return (price - entry) / entry
 
 
+def _live_position_risk(row: dict[str, Any]) -> float:
+    cost = _safe_float(row.get("cost_usd"))
+    if cost > 0:
+        return cost
+    state = str(row.get("state") or "")
+    if state in {"RESERVED", "SUBMITTED", "PARTIAL", "DELAYED", "UNKNOWN"}:
+        return _safe_float(row.get("target_notional_usd"))
+    if not state and row.get("target_notional_usd") is None and row.get("cost_usd") is None:
+        return _safe_float(row.get("entry_price"))
+    return 0.0
+
+
+def _weather_money_pnl(row: dict[str, Any], outcome: dict[str, Any], risk: float, entry_price: float) -> float:
+    if outcome["weather_correct"] is None or risk <= 0:
+        return 0.0
+    shares = _safe_float(row.get("filled_shares"))
+    if shares <= 0 and entry_price > 0:
+        shares = risk / entry_price
+    if outcome["weather_correct"]:
+        return shares - risk
+    return -risk
+
+
 def _live_status(mark_pct: float | None, live_rr: float | None, resolved: int | None = None) -> str:
     if resolved is not None and resolved < 10:
         return "TOO_EARLY"
@@ -480,6 +503,8 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
         entry_fair_float = _safe_float(entry_fair)
         entry_edge = row.get("entry_edge")
         entry_edge_float = _safe_float(entry_edge)
+        risk = _live_position_risk(row)
+        weather_pnl = _weather_money_pnl(row, outcome, risk, entry_price)
         exp_rr = _price_rr(entry_fair_float, entry_price) if entry_fair is not None else None
         live_rr = _price_rr(_safe_float(current_bid), entry_price) if current_bid is not None else None
         live_minus_exp = live_rr - exp_rr if live_rr is not None and exp_rr is not None else None
@@ -499,7 +524,7 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
 
         station_raw[station]["raw_count"] += 1
         station_raw[station]["raw_mtm"] += pnl
-        station_raw[station]["risk"] += entry_price
+        station_raw[station]["risk"] += risk
         if current_bid is None:
             station_raw[station]["missing"] += 1
         else:
@@ -565,8 +590,8 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
             group["status"] = "MIXED"
         if outcome["weather_correct"] is not None:
             group["weather_scored"] += 1
-            group["weather_risk"] += entry_price
-            group["weather_pnl"] += _safe_float(outcome["weather_pnl"])
+            group["weather_risk"] += risk
+            group["weather_pnl"] += weather_pnl
             group["weather_high"] = outcome["weather_high"]
             if outcome["weather_correct"]:
                 group["weather_wins"] += 1
@@ -579,8 +604,8 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
 
         if outcome["weather_correct"] is not None:
             station_raw[station]["weather_scored"] += 1
-            station_raw[station]["weather_risk"] += entry_price
-            station_raw[station]["weather_pnl"] += _safe_float(outcome["weather_pnl"])
+            station_raw[station]["weather_risk"] += risk
+            station_raw[station]["weather_pnl"] += weather_pnl
             if outcome["weather_correct"]:
                 station_raw[station]["weather_wins"] += 1
             else:
@@ -622,7 +647,7 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
             },
         )
         policy_group["open_positions"] += 1
-        policy_group["risk"] += entry_price
+        policy_group["risk"] += risk
         policy_group["mtm"] += pnl
         policy_group["entry_sum"] += entry_price
         if entry_fair is not None:
@@ -645,8 +670,8 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
             policy_group["loss05"] += 1
         if outcome["weather_correct"] is not None:
             policy_group["weather_scored"] += 1
-            policy_group["weather_risk"] += entry_price
-            policy_group["weather_pnl"] += _safe_float(outcome["weather_pnl"])
+            policy_group["weather_risk"] += risk
+            policy_group["weather_pnl"] += weather_pnl
             if outcome["weather_correct"]:
                 policy_group["weather_wins"] += 1
             else:
@@ -674,7 +699,7 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
                 "exp_rr": exp_rr,
                 "live_rr": live_rr,
                 "live_minus_exp": live_minus_exp,
-                "risk": entry_price,
+                "risk": risk,
                 "high": outcome["weather_high"],
                 "weather_status": outcome["weather_status"],
                 "book_status": _book_status(1.0 if current_bid is not None else None),
