@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Any
 from weather_trader.live.settings import LiveSettings, load_live_settings
 
 _IMPORT_ERROR: Exception | None = None
+_V2_IMPORT_ERROR: Exception | None = None
 try:  # pragma: no cover - optional live dependency
     from py_clob_client.client import ClobClient
     from py_clob_client.clob_types import (
@@ -34,6 +36,30 @@ except Exception as exc:  # pragma: no cover
     BUY = None
     SELL = None
     _IMPORT_ERROR = exc
+
+try:  # pragma: no cover - optional live dependency
+    from py_clob_client_v2 import (
+        ApiCreds as ApiCredsV2,
+        AssetType as AssetTypeV2,
+        BalanceAllowanceParams as BalanceAllowanceParamsV2,
+        ClobClient as ClobClientV2,
+        MarketOrderArgs as MarketOrderArgsV2,
+        OrderPayload as OrderPayloadV2,
+        OrderType as OrderTypeV2,
+        PartialCreateOrderOptions as PartialCreateOrderOptionsV2,
+        Side as SideV2,
+    )
+except Exception as exc:  # pragma: no cover
+    ApiCredsV2 = None
+    AssetTypeV2 = None
+    BalanceAllowanceParamsV2 = None
+    ClobClientV2 = None
+    MarketOrderArgsV2 = None
+    OrderPayloadV2 = None
+    OrderTypeV2 = None
+    PartialCreateOrderOptionsV2 = None
+    SideV2 = None
+    _V2_IMPORT_ERROR = exc
 
 
 @dataclass(frozen=True)
@@ -75,10 +101,32 @@ class ClobExecutor:
         kill_switch_path: str | None = None,
         settings: LiveSettings | None = None,
     ) -> None:
+        legacy_import_error = _IMPORT_ERROR
         if ClobClient is None:
-            raise RuntimeError("py-clob-client is required for live trading.") from _IMPORT_ERROR
+            legacy_import_error = _IMPORT_ERROR
         self.settings = settings or load_live_settings()
         self._kill_switch_path = kill_switch_path or self.settings.live_kill_switch_path
+        self._client_version = self.settings.polymarket_clob_client_version
+        if self._client_version == "v2":
+            if ClobClientV2 is None:
+                raise RuntimeError("py_clob_client_v2 is required for live trading.") from _V2_IMPORT_ERROR
+            self._client = ClobClientV2(
+                host=clob_url or self.settings.polymarket_clob_url,
+                key=private_key,
+                chain_id=chain_id if chain_id is not None else self.settings.polymarket_chain_id,
+                signature_type=signature_type if signature_type is not None else self.settings.polymarket_signature_type,
+                funder=funder if funder is not None else self.settings.polymarket_funder_address,
+            )
+            creds = self._client.create_or_derive_api_key()
+            if not isinstance(creds, ApiCredsV2):
+                raise RuntimeError("Failed to derive CLOB V2 API credentials.")
+            self._creds = creds
+            self._client.set_api_creds(creds)
+            return
+        if self._client_version not in {"v1", "legacy"}:
+            raise RuntimeError(f"Unsupported POLYMARKET_CLOB_CLIENT_VERSION={self._client_version!r}; use 'v2' or 'v1'.")
+        if ClobClient is None:
+            raise RuntimeError("py-clob-client is required for legacy live trading.") from legacy_import_error
         self._client = ClobClient(
             host=clob_url or self.settings.polymarket_clob_url,
             key=private_key,
@@ -88,7 +136,7 @@ class ClobExecutor:
         )
         creds = self._client.create_or_derive_api_creds()
         if not isinstance(creds, ApiCreds):
-            raise RuntimeError("Failed to derive API credentials.")
+            raise RuntimeError("Failed to derive legacy CLOB API credentials.")
         self._creds = creds
         self._client.set_api_creds(creds)
 
@@ -104,7 +152,10 @@ class ClobExecutor:
         return Path(str(self._kill_switch_path)).expanduser().exists()
 
     def check_allowance_buy(self, required_usdc: float) -> AllowanceCheck:
-        raw = self._client.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
+        if self._client_version == "v2":
+            raw = self._client.get_balance_allowance(BalanceAllowanceParamsV2(asset_type=AssetTypeV2.COLLATERAL))
+        else:
+            raw = self._client.get_balance_allowance(BalanceAllowanceParams(asset_type=AssetType.COLLATERAL))
         balance, allowance = _parse_balance_allowance(raw, decimals=self.settings.polymarket_token_decimals)
         if balance is None or allowance is None:
             return AllowanceCheck(False, balance, allowance, "missing_balance", _raw_dict(raw))
@@ -115,17 +166,28 @@ class ClobExecutor:
         return AllowanceCheck(True, balance, allowance, raw=_raw_dict(raw))
 
     def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
-        return self._place_order(token_id=token_id, side=side, price=price, amount=amount, tick_size=tick_size, order_type=OrderType.FAK)
+        return self._place_order(token_id=token_id, side=side, price=price, amount=amount, tick_size=tick_size, order_type="FAK")
 
     def place_fok_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
-        return self._place_order(token_id=token_id, side=side, price=price, amount=amount, tick_size=tick_size, order_type=OrderType.FOK)
+        return self._place_order(token_id=token_id, side=side, price=price, amount=amount, tick_size=tick_size, order_type="FOK")
 
     def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
-        return self._place_order(token_id=token_id, side=side, price=price, amount=amount, tick_size=tick_size, order_type=OrderType.GTC)
+        return self._place_order(token_id=token_id, side=side, price=price, amount=amount, tick_size=tick_size, order_type="GTC")
 
     def place_fok_batch(self, orders: list[dict[str, Any]]) -> list[OrderSubmission]:
         if self.check_kill_switch():
             return [_blocked_submission("kill_switch")]
+        if self._client_version == "v2":
+            return [
+                self.place_fok_order(
+                    token_id=str(order.get("token_id") or ""),
+                    side=str(order.get("side") or "BUY").upper(),
+                    price=float(order.get("price") or 0.0),
+                    amount=float(order.get("amount") or 0.0),
+                    tick_size=order.get("tick_size"),
+                )
+                for order in orders
+            ]
         prepared: list[PostOrdersArgs] = []
         for order in orders:
             normalized_tick = _normalize_tick_size(order.get("tick_size"))
@@ -136,10 +198,10 @@ class ClobExecutor:
             if not token_id or side not in {"BUY", "SELL"} or price <= 0 or amount <= 0:
                 return [OrderSubmission(False, None, "error", "invalid_order_payload", {"order": order})]
             signed = self._client.create_market_order(
-                MarketOrderArgs(token_id=token_id, side=BUY if side == "BUY" else SELL, amount=amount, price=price, order_type=OrderType.FOK),
+                MarketOrderArgs(token_id=token_id, side=BUY if side == "BUY" else SELL, amount=amount, price=price, order_type=_legacy_order_type("FOK")),
                 PartialCreateOrderOptions(tick_size=normalized_tick) if normalized_tick else None,
             )
-            prepared.append(PostOrdersArgs(order=signed, orderType=OrderType.FOK, postOnly=bool(order.get("post_only", False))))
+            prepared.append(PostOrdersArgs(order=signed, orderType=_legacy_order_type("FOK"), postOnly=bool(order.get("post_only", False))))
         try:
             response = self._client.post_orders(prepared)
         except Exception as exc:  # pragma: no cover
@@ -151,7 +213,10 @@ class ClobExecutor:
 
     def cancel_order(self, order_id: str) -> CancelSubmission:
         try:
-            response = self._client.cancel(order_id=order_id)
+            if self._client_version == "v2":
+                response = self._client.cancel_order(OrderPayloadV2(order_id))
+            else:
+                response = self._client.cancel(order_id=order_id)
         except Exception as exc:  # pragma: no cover
             return CancelSubmission(False, [], {order_id: str(exc)}, str(exc), {"exception_type": type(exc).__name__, "exception": str(exc)})
         raw = _raw_dict(response)
@@ -170,11 +235,26 @@ class ClobExecutor:
         if not token_id or order_side not in {"BUY", "SELL"} or price <= 0 or amount <= 0:
             return _blocked_submission("order_size_zero_after_round")
         try:
-            signed = self._client.create_market_order(
-                MarketOrderArgs(token_id=token_id, side=BUY if order_side == "BUY" else SELL, amount=amount, price=price, order_type=order_type),
-                PartialCreateOrderOptions(tick_size=normalized_tick) if normalized_tick else None,
-            )
-            response = self._client.post_order(signed, order_type)
+            if self._client_version == "v2":
+                resolved_tick = normalized_tick or self._client.get_tick_size(token_id)
+                neg_risk = bool(self._client.get_neg_risk(token_id))
+                response = self._client.create_and_post_market_order(
+                    order_args=MarketOrderArgsV2(
+                        token_id=token_id,
+                        side=SideV2.BUY if order_side == "BUY" else SideV2.SELL,
+                        amount=amount,
+                        price=price,
+                        order_type=_v2_order_type(order_type),
+                    ),
+                    options=PartialCreateOrderOptionsV2(tick_size=str(resolved_tick), neg_risk=neg_risk),
+                    order_type=_v2_order_type(order_type),
+                )
+            else:
+                signed = self._client.create_market_order(
+                    MarketOrderArgs(token_id=token_id, side=BUY if order_side == "BUY" else SELL, amount=amount, price=price, order_type=_legacy_order_type(order_type)),
+                    PartialCreateOrderOptions(tick_size=normalized_tick) if normalized_tick else None,
+                )
+                response = self._client.post_order(signed, _legacy_order_type(order_type))
         except Exception as exc:  # pragma: no cover
             return _exception_submission(exc)
         return _submission_from_payload(response)
@@ -182,7 +262,35 @@ class ClobExecutor:
 
 def _submission_from_payload(payload: Any) -> OrderSubmission:
     raw = _raw_dict(payload)
-    return OrderSubmission(bool(raw.get("success", True)), raw.get("orderId") or raw.get("orderID"), raw.get("status"), raw.get("errorMsg"), raw)
+    success_value = raw.get("success", True)
+    success = success_value.strip().lower() != "false" if isinstance(success_value, str) else bool(success_value)
+    return OrderSubmission(success, raw.get("orderId") or raw.get("orderID"), raw.get("status"), raw.get("errorMsg") or raw.get("error"), raw)
+
+
+def _v2_order_type(order_type: Any) -> Any:
+    value = str(order_type)
+    if value.endswith(".FAK"):
+        return OrderTypeV2.FAK
+    if value.endswith(".FOK"):
+        return OrderTypeV2.FOK
+    if value.endswith(".GTC"):
+        return OrderTypeV2.GTC
+    if value.endswith(".GTD"):
+        return OrderTypeV2.GTD
+    return getattr(OrderTypeV2, value, value)
+
+
+def _legacy_order_type(order_type: Any) -> Any:
+    value = str(order_type)
+    if value.endswith(".FAK"):
+        return OrderType.FAK
+    if value.endswith(".FOK"):
+        return OrderType.FOK
+    if value.endswith(".GTC"):
+        return OrderType.GTC
+    if value.endswith(".GTD"):
+        return OrderType.GTD
+    return getattr(OrderType, value, value)
 
 
 def _blocked_submission(reason: str) -> OrderSubmission:
@@ -191,10 +299,30 @@ def _blocked_submission(reason: str) -> OrderSubmission:
 
 def _exception_submission(exc: Exception) -> OrderSubmission:
     raw: dict[str, Any] = {"exception_type": type(exc).__name__, "exception": str(exc)}
-    if PolyApiException is not None and isinstance(exc, PolyApiException):
-        raw["status_code"] = getattr(exc, "status_code", None)
-        raw["error_message"] = getattr(exc, "error_message", None)
-    return OrderSubmission(False, None, "error", str(raw.get("error_message") or raw["exception"]), raw)
+    status_code = getattr(exc, "status_code", None)
+    error_message = getattr(exc, "error_message", None) or getattr(exc, "error_msg", None)
+    if status_code is not None:
+        raw["status_code"] = status_code
+    if error_message is not None:
+        raw["error_message"] = error_message
+        if isinstance(error_message, dict):
+            raw.update({key: value for key, value in error_message.items() if isinstance(key, str)})
+        elif isinstance(error_message, str):
+            parsed = _parse_error_message_dict(error_message)
+            if parsed:
+                raw.update(parsed)
+    order_id = raw.get("orderID") or raw.get("orderId") or raw.get("id")
+    message = raw.get("error") or raw.get("error_message") or raw["exception"]
+    return OrderSubmission(False, str(order_id) if order_id else None, "error", str(message), raw)
+
+
+def _parse_error_message_dict(value: str) -> dict[str, Any] | None:
+    text = value.strip()
+    try:
+        parsed = ast.literal_eval(text)
+    except (SyntaxError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _raw_dict(value: Any) -> dict[str, Any]:

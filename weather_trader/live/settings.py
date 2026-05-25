@@ -19,6 +19,7 @@ class LiveSettings:
     polymarket_clob_url: str = "https://clob.polymarket.com"
     polymarket_chain_id: int = 137
     polymarket_signature_type: int = 0
+    polymarket_clob_client_version: str = "v2"
     polymarket_funder_address: str | None = None
     polymarket_keyfile_path: str = "~/.sleeperservice/keys/polymarket.key.age"
     polymarket_token_decimals: int = 6
@@ -33,6 +34,7 @@ def load_live_settings() -> LiveSettings:
         polymarket_clob_url=os.getenv("POLYMARKET_CLOB_URL", "https://clob.polymarket.com"),
         polymarket_chain_id=_int_env("POLYMARKET_CHAIN_ID", 137),
         polymarket_signature_type=_int_env("POLYMARKET_SIGNATURE_TYPE", 0),
+        polymarket_clob_client_version=os.getenv("POLYMARKET_CLOB_CLIENT_VERSION", "v2").strip().lower(),
         polymarket_funder_address=os.getenv("POLYMARKET_FUNDER_ADDRESS") or None,
         polymarket_keyfile_path=os.getenv("POLYMARKET_KEYFILE_PATH", "~/.sleeperservice/keys/polymarket.key.age"),
         polymarket_token_decimals=_int_env("POLYMARKET_TOKEN_DECIMALS", 6),

@@ -15,6 +15,7 @@ def _reload_settings(monkeypatch: pytest.MonkeyPatch):
         "POLYMARKET_PRIVATE_KEY",
         "POLYMARKET_PRIVATE_KEY_FD",
         "POLYMARKET_SIGNATURE_TYPE",
+        "POLYMARKET_CLOB_CLIENT_VERSION",
         "POLYMARKET_FUNDER_ADDRESS",
         "AGE_BINARY",
     ):

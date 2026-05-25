@@ -40,7 +40,12 @@ from weather_trader.research.policies import CATBOOST_MODEL, DYNAMIC_TUNED_MODEL
 
 
 LIVE_POLICY_NAME = "pm_us12_bucket_consensus_hc_late_no_tiny_by_bucket_side_delay_first"
+EDGE_CORE_POLICY_NAME = "pm_us12_dynamic_tuned_hc_late_buy_no_edge_025_by_bucket_side_delay_first"
+MOONSHOT_POLICY_NAME = "pm_us12_dynamic_tuned_hc_late_entry_05_10_buy_no_by_bucket_side_delay_first"
 LIVE_MODEL_GROUP = "obs_bucket_consensus"
+EDGE_CORE_MIN_EDGE = 0.25
+MOONSHOT_MIN_EDGE = 0.90
+MOONSHOT_NOTIONAL_USD = 1.0
 LIVE_MODEL_PATHS = (
     MODELS_DIR / f"{DYNAMIC_TUNED_MODEL}.joblib",
     MODELS_DIR / f"{CATBOOST_MODEL}.joblib",
@@ -86,6 +91,21 @@ class LiveCycleResult:
     errors: list[str]
 
 
+@dataclass(frozen=True)
+class LiveStrategyPlan:
+    strategy: LiveStrategy
+    policies: tuple[ResearchPolicySpec, ...]
+    target_notional_usd: float
+    selected_side: TradeAction | None = None
+    min_entry_price: float | None = None
+
+
+@dataclass(frozen=True)
+class LiveCandidate:
+    plan: LiveStrategyPlan
+    position: Any
+
+
 class LiveSubmitter(Protocol):
     def check_kill_switch(self) -> bool:
         ...
@@ -126,6 +146,65 @@ def default_live_strategy(max_notional_usd: float = 3.0) -> LiveStrategy:
     )
 
 
+def moonshot_live_strategy() -> LiveStrategy:
+    return LiveStrategy(
+        name=MOONSHOT_POLICY_NAME,
+        active=True,
+        source="model",
+        model_group=DYNAMIC_TUNED_MODEL,
+        model_names=[DYNAMIC_TUNED_MODEL],
+        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        market_family=MarketFamily.HIGH_TEMP,
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+        entry_price_min=0.05,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+        max_notional_usd=MOONSHOT_NOTIONAL_USD,
+        raw_payload={
+            "report": {
+                "resolved": 19,
+                "win_rate": 0.158,
+                "rr": 2.958,
+                "sharpe": 0.337,
+                "avg_entry": 0.039,
+                "entry_price_max": 0.10,
+                "or_edge_min": MOONSHOT_MIN_EDGE,
+                "selected_side": str(TradeAction.BUY_NO),
+            }
+        },
+    )
+
+
+def edge_core_live_strategy(max_notional_usd: float = 3.0) -> LiveStrategy:
+    return LiveStrategy(
+        name=EDGE_CORE_POLICY_NAME,
+        active=True,
+        source="model",
+        model_group=DYNAMIC_TUNED_MODEL,
+        model_names=[DYNAMIC_TUNED_MODEL],
+        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        market_family=MarketFamily.HIGH_TEMP,
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+        entry_price_min=0.05,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+        max_notional_usd=max_notional_usd,
+        raw_payload={
+            "report": {
+                "resolved": 63,
+                "win_rate": 0.635,
+                "pnl": 12.127,
+                "rr": 0.435,
+                "sharpe": 0.448,
+                "avg_entry": 0.433,
+                "avg_edge": 0.463,
+                "edge_min": EDGE_CORE_MIN_EDGE,
+                "selected_side": str(TradeAction.BUY_NO),
+            }
+        },
+    )
+
+
 def live_policy_spec(config: LiveExecutionConfig) -> ResearchPolicySpec:
     return ResearchPolicySpec(
         LIVE_POLICY_NAME,
@@ -137,6 +216,76 @@ def live_policy_spec(config: LiveExecutionConfig) -> ResearchPolicySpec:
         local_decision_start="12:00",
         local_decision_end="15:00",
         uniqueness_key_mode="station_date_bucket_side_obs_delay",
+    )
+
+
+def edge_core_policy_spec(config: LiveExecutionConfig) -> ResearchPolicySpec:
+    return ResearchPolicySpec(
+        EDGE_CORE_POLICY_NAME,
+        "model",
+        StrategyBucket.HIGH_CONVICTION,
+        model_name=DYNAMIC_TUNED_MODEL,
+        station_allow_set=PM_ACTIVE_US12_STATIONS,
+        entry_price_min=config.min_entry_price,
+        edge_min=EDGE_CORE_MIN_EDGE,
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+    )
+
+
+def moonshot_policy_spec() -> ResearchPolicySpec:
+    return ResearchPolicySpec(
+        MOONSHOT_POLICY_NAME,
+        "model",
+        StrategyBucket.HIGH_CONVICTION,
+        model_name=DYNAMIC_TUNED_MODEL,
+        station_allow_set=PM_ACTIVE_US12_STATIONS,
+        entry_price_min=0.05,
+        entry_price_max=0.10,
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+    )
+
+
+def moonshot_edge_policy_spec() -> ResearchPolicySpec:
+    return ResearchPolicySpec(
+        MOONSHOT_POLICY_NAME,
+        "model",
+        StrategyBucket.HIGH_CONVICTION,
+        model_name=DYNAMIC_TUNED_MODEL,
+        station_allow_set=PM_ACTIVE_US12_STATIONS,
+        entry_price_min=0.05,
+        edge_min=MOONSHOT_MIN_EDGE,
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+    )
+
+
+def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, ...]:
+    return (
+        LiveStrategyPlan(
+            default_live_strategy(config.max_notional_usd),
+            (live_policy_spec(config),),
+            config.max_notional_usd,
+            min_entry_price=config.min_entry_price,
+        ),
+        LiveStrategyPlan(
+            edge_core_live_strategy(config.max_notional_usd),
+            (edge_core_policy_spec(config),),
+            config.max_notional_usd,
+            TradeAction.BUY_NO,
+            config.min_entry_price,
+        ),
+        LiveStrategyPlan(
+            moonshot_live_strategy(),
+            (moonshot_policy_spec(), moonshot_edge_policy_spec()),
+            MOONSHOT_NOTIONAL_USD,
+            TradeAction.BUY_NO,
+            config.min_entry_price,
+        ),
     )
 
 
@@ -158,17 +307,20 @@ class LiveExecutionEngine:
         self.weather_service = weather_service or WeatherFeatureService(max_obs_age_minutes=self.config.max_obs_age_minutes)
         self.decision_engine = StationDateDecisionEngine()
         self.fair_value_engines = [FairValueEngine(path) for path in self.config.model_paths]
-        self.policy_evaluator = ResearchPolicyEvaluator(store, (live_policy_spec(self.config),))
+        self.strategy_plans = live_strategy_plans(self.config)
+        self.policy_evaluator = ResearchPolicyEvaluator(store, tuple(policy for plan in self.strategy_plans for policy in plan.policies))
         self.settings = settings or load_live_settings()
         self.submitter = submitter
+        self._default_submitter_instance: LiveSubmitter | None = None
 
     def run_once(self, as_of_utc: datetime | None = None) -> LiveCycleResult:
         now = as_of_utc or datetime.now(timezone.utc)
         errors: list[str] = []
-        self.store.upsert_live_strategy(default_live_strategy(self.config.max_notional_usd))
-        self.store.insert_live_trade_event(
-            LiveTradeEvent(utc_now_iso(), None, LIVE_POLICY_NAME, LiveTradeEventType.STRATEGY_REGISTERED, "strategy active", {})
-        )
+        for plan in self.strategy_plans:
+            self.store.upsert_live_strategy(plan.strategy)
+            self.store.insert_live_trade_event(
+                LiveTradeEvent(utc_now_iso(), None, plan.strategy.name, LiveTradeEventType.STRATEGY_REGISTERED, "strategy active", {})
+            )
         try:
             markets = same_day_markets(self.discovery.discover(limit=self.config.market_limit), now)
             markets = [
@@ -188,11 +340,11 @@ class LiveExecutionEngine:
         market_by_id = {market.market_id: market for market in markets}
         book_by_market_side = _book_by_market_side(markets, books)
         for candidate in candidates:
-            market = market_by_id.get(candidate.selected_market_id)
+            market = market_by_id.get(candidate.position.selected_market_id)
             if market is None:
                 skipped += 1
                 continue
-            selected_book = book_by_market_side.get((candidate.selected_market_id, str(candidate.selected_side)))
+            selected_book = book_by_market_side.get((candidate.position.selected_market_id, str(candidate.position.selected_side)))
             reject_reason = self._candidate_reject_reason(candidate, selected_book)
             position = self._live_position(candidate, market, reject_reason=reject_reason)
             position_id = self.store.insert_live_policy_position(position)
@@ -201,7 +353,7 @@ class LiveExecutionEngine:
                 continue
             reserved += 1
             self.store.insert_live_trade_event(
-                LiveTradeEvent(utc_now_iso(), position_id, LIVE_POLICY_NAME, LiveTradeEventType.ENTRY_RESERVED, "entry reserved", position.raw_json)
+                LiveTradeEvent(utc_now_iso(), position_id, position.strategy_name, LiveTradeEventType.ENTRY_RESERVED, "entry reserved", position.raw_json)
             )
             if reject_reason is not None:
                 rejected += 1
@@ -282,12 +434,26 @@ class LiveExecutionEngine:
                 except Exception as exc:
                     errors.append(f"model:{engine.model_name}:group:{station_id}:{market_date}: {exc}")
         consensus = self.policy_evaluator._build_consensus(snapshots)
-        filtered = self.policy_evaluator._candidates_for_policy(live_policy_spec(self.config), snapshots, consensus)
-        return [
-            position
-            for candidate in self.policy_evaluator._first_by_scope(live_policy_spec(self.config), filtered)
-            if (position := self.policy_evaluator._position_from_candidate(live_policy_spec(self.config), candidate)) is not None
-        ]
+        candidates: list[LiveCandidate] = []
+        for plan in self.strategy_plans:
+            plan_candidates: dict[tuple[object, ...], LiveCandidate] = {}
+            for policy in plan.policies:
+                filtered = self.policy_evaluator._candidates_for_policy(policy, snapshots, consensus)
+                if plan.selected_side is not None:
+                    filtered = [item for item in filtered if item.get("selected_side") == str(plan.selected_side)]
+                for candidate in self.policy_evaluator._first_by_scope(policy, filtered):
+                    position = self.policy_evaluator._position_from_candidate(policy, candidate)
+                    if position is None:
+                        continue
+                    key = (position.station, position.market_date, position.market_family, position.scope_key)
+                    existing = plan_candidates.get(key)
+                    if existing is None or position.timestamp < existing.position.timestamp:
+                        plan_candidates[key] = LiveCandidate(plan, position)
+            for candidate in sorted(plan_candidates.values(), key=lambda item: (item.position.timestamp, item.position.station, item.position.scope_key)):
+                position = candidate.position
+                if position is not None:
+                    candidates.append(candidate)
+        return candidates
 
     def _build_signal(
         self,
@@ -336,43 +502,45 @@ class LiveExecutionEngine:
             model_features_hash=fair.model_features_hash,
         )
 
-    def _candidate_reject_reason(self, candidate, book: BookSnapshot | None) -> str | None:
+    def _candidate_reject_reason(self, candidate: LiveCandidate, book: BookSnapshot | None) -> str | None:
         if book is None or book.best_ask is None:
             return "MISSING_BOOK"
-        if candidate.entry_price < self.config.min_entry_price:
+        if candidate.plan.min_entry_price is not None and candidate.position.entry_price < candidate.plan.min_entry_price:
             return "ENTRY_PRICE_TOO_LOW"
-        if candidate.selected_book_age_seconds is not None and candidate.selected_book_age_seconds > self.config.max_book_age_seconds:
+        if candidate.position.selected_book_age_seconds is not None and candidate.position.selected_book_age_seconds > self.config.max_book_age_seconds:
             return "STALE_BOOK"
-        if float(candidate.selected_sweep_depth_to_cap or 0.0) < self.config.max_notional_usd:
+        if float(candidate.position.selected_sweep_depth_to_cap or 0.0) < candidate.plan.target_notional_usd:
             return "INSUFFICIENT_DEPTH"
         return None
 
-    def _live_position(self, candidate, market: MarketSnapshot, *, reject_reason: str | None) -> LivePolicyPosition:
-        token_id = market.yes_token_id if candidate.selected_side == TradeAction.BUY_YES else market.no_token_id
-        limit_price = quantize_price(float(candidate.selected_sweep_price_cap or candidate.entry_price))
-        target_notional = quantize_usdc(self.config.max_notional_usd)
+    def _live_position(self, candidate: LiveCandidate, market: MarketSnapshot, *, reject_reason: str | None) -> LivePolicyPosition:
+        source = candidate.position
+        token_id = market.yes_token_id if source.selected_side == TradeAction.BUY_YES else market.no_token_id
+        limit_price = quantize_price(float(source.selected_sweep_price_cap or source.entry_price))
+        target_notional = quantize_usdc(candidate.plan.target_notional_usd)
         target_shares = quantize_shares(target_notional / limit_price) if limit_price > 0 else 0.0
         return LivePolicyPosition(
             timestamp=utc_now_iso(),
-            strategy_name=LIVE_POLICY_NAME,
-            station=candidate.station,
-            market_date=candidate.market_date,
-            market_family=MarketFamily(str(candidate.market_family)),
-            scope_key=candidate.scope_key,
-            selected_market_id=candidate.selected_market_id,
+            strategy_name=candidate.plan.strategy.name,
+            station=source.station,
+            market_date=source.market_date,
+            market_family=MarketFamily(str(source.market_family)),
+            scope_key=source.scope_key,
+            selected_market_id=source.selected_market_id,
             selected_token_id=str(token_id or ""),
-            selected_side=candidate.selected_side,
-            selected_bucket=candidate.selected_bucket,
-            obs_delay_bucket=candidate.obs_delay_bucket,
-            entry_price=candidate.entry_price,
-            entry_fair=candidate.entry_fair,
-            entry_edge=candidate.entry_edge,
+            selected_side=source.selected_side,
+            selected_bucket=source.selected_bucket,
+            obs_delay_bucket=source.obs_delay_bucket,
+            entry_price=source.entry_price,
+            entry_fair=source.entry_fair,
+            entry_edge=source.entry_edge,
             target_notional_usd=target_notional,
             target_shares=target_shares,
             state=LivePositionState.RESERVED,
-            source_prediction_snapshot_ids=candidate.source_prediction_snapshot_ids,
+            source_prediction_snapshot_ids=source.source_prediction_snapshot_ids,
             raw_json={
-                "candidate": dataclass_to_jsonable(candidate),
+                "candidate": dataclass_to_jsonable(source),
+                "strategy": dataclass_to_jsonable(candidate.plan.strategy),
                 "limit_price": limit_price,
                 "reject_reason": reject_reason,
             },
@@ -456,7 +624,7 @@ class LiveExecutionEngine:
             raw_patch={"external_order_id": response.order_id, "external_status": response.status, "submit_response": response.raw},
         )
         self.store.insert_live_trade_event(
-            LiveTradeEvent(utc_now_iso(), position_id, LIVE_POLICY_NAME, LiveTradeEventType.ENTRY_SUBMIT, str(state), response.raw)
+            LiveTradeEvent(utc_now_iso(), position_id, position.strategy_name, LiveTradeEventType.ENTRY_SUBMIT, str(state), response.raw)
         )
         return state
 

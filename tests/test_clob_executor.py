@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from weather_trader.execution.clob_executor import _parse_balance_allowance
+from weather_trader.execution.clob_executor import _exception_submission, _parse_balance_allowance
 
 
 def test_parse_balance_allowance_normalizes_raw_units() -> None:
@@ -45,3 +45,37 @@ def test_parse_balance_allowance_keeps_balance_when_allowance_is_bad() -> None:
 
     assert balance == pytest.approx(143.03528)
     assert allowance is None
+
+
+def test_exception_submission_preserves_v2_order_id_from_error_dict() -> None:
+    class FakePolyApiException(Exception):
+        status_code = 400
+        error_msg = {
+            "error": "no orders found to match with FAK order",
+            "orderID": "0xabc",
+        }
+
+        def __str__(self) -> str:
+            return "PolyApiException[status_code=400]"
+
+    submission = _exception_submission(FakePolyApiException())
+
+    assert submission.success is False
+    assert submission.status == "error"
+    assert submission.order_id == "0xabc"
+    assert submission.error_msg == "no orders found to match with FAK order"
+    assert submission.raw["status_code"] == 400
+
+
+def test_exception_submission_parses_v2_error_string() -> None:
+    class FakePolyApiException(Exception):
+        status_code = 400
+        error_msg = "{'error': 'no match', 'orderID': '0xdef'}"
+
+        def __str__(self) -> str:
+            return "PolyApiException[status_code=400]"
+
+    submission = _exception_submission(FakePolyApiException())
+
+    assert submission.order_id == "0xdef"
+    assert submission.error_msg == "no match"

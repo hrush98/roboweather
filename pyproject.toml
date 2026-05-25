@@ -23,7 +23,7 @@ dev = [
     "pytest>=8.0",
 ]
 live = [
-    "py-clob-client",
+    "py_clob_client_v2",
 ]
 
 [tool.setuptools.packages.find]

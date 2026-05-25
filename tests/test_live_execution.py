@@ -21,12 +21,20 @@ from weather_trader.execution.store import ExecutionStore
 from weather_trader.live.execution import (
     CATBOOST_MODEL,
     DYNAMIC_TUNED_MODEL,
+    EDGE_CORE_MIN_EDGE,
+    EDGE_CORE_POLICY_NAME,
     LIVE_MODEL_GROUP,
     LIVE_POLICY_NAME,
+    MOONSHOT_MIN_EDGE,
+    MOONSHOT_POLICY_NAME,
     LiveExecutionConfig,
     LiveExecutionEngine,
+    edge_core_policy_spec,
     default_live_strategy,
     live_policy_spec,
+    live_strategy_plans,
+    moonshot_edge_policy_spec,
+    moonshot_policy_spec,
 )
 from weather_trader.research.policies import ResearchPolicyEvaluator
 
@@ -42,6 +50,36 @@ def test_live_strategy_is_registered_in_separate_store(tmp_path: Path) -> None:
     assert rows[0]["name"] == LIVE_POLICY_NAME
     assert rows[0]["model_group"] == LIVE_MODEL_GROUP
     assert rows[0]["max_notional_usd"] == 3.0
+
+
+def test_live_strategy_plans_include_one_dollar_moonshot() -> None:
+    plans = live_strategy_plans(LiveExecutionConfig(max_notional_usd=3.0))
+
+    assert [plan.strategy.name for plan in plans] == [LIVE_POLICY_NAME, EDGE_CORE_POLICY_NAME, MOONSHOT_POLICY_NAME]
+    edge_core = plans[1]
+    assert edge_core.target_notional_usd == pytest.approx(3.0)
+    assert edge_core.strategy.max_notional_usd == pytest.approx(3.0)
+    assert len(edge_core.policies) == 1
+    assert edge_core.policies[0].model_name == DYNAMIC_TUNED_MODEL
+    assert edge_core.policies[0].edge_min == pytest.approx(EDGE_CORE_MIN_EDGE)
+    assert edge_core.policies[0].entry_price_min == pytest.approx(0.05)
+    assert edge_core.policies[0].entry_price_max is None
+    assert edge_core.selected_side == TradeAction.BUY_NO
+    assert edge_core.min_entry_price == pytest.approx(0.05)
+
+    moonshot = plans[2]
+    assert moonshot.target_notional_usd == pytest.approx(1.0)
+    assert moonshot.strategy.max_notional_usd == pytest.approx(1.0)
+    assert moonshot.strategy.entry_price_min == pytest.approx(0.05)
+    assert len(moonshot.policies) == 2
+    assert moonshot.policies[0].model_name == DYNAMIC_TUNED_MODEL
+    assert moonshot.policies[0].entry_price_min == pytest.approx(0.05)
+    assert moonshot.policies[0].entry_price_max == pytest.approx(0.10)
+    assert moonshot.policies[1].model_name == DYNAMIC_TUNED_MODEL
+    assert moonshot.policies[1].entry_price_min == pytest.approx(0.05)
+    assert moonshot.policies[1].edge_min == pytest.approx(MOONSHOT_MIN_EDGE)
+    assert moonshot.selected_side == TradeAction.BUY_NO
+    assert moonshot.min_entry_price == pytest.approx(0.05)
 
 
 def test_consensus_requires_same_side_market_bucket_and_delay(tmp_path: Path) -> None:
@@ -75,6 +113,68 @@ def test_live_policy_spec_filters_late_no_tiny_and_bucket_side_delay(tmp_path: P
 
     assert len(selected) == 1
     assert selected[0]["selected_bucket"] == "72-73F"
+
+
+def test_edge_core_policy_spec_filters_late_buy_no_edge_gated_entries(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    spec = edge_core_policy_spec(LiveExecutionConfig())
+    evaluator = ResearchPolicyEvaluator(store, (spec,))
+    rows = [
+        _snapshot(DYNAMIC_TUNED_MODEL, id=1, selected_no_ask=0.40, selected_edge=0.25, decision_time_local="2026-05-20T12:30:00-04:00"),
+        _snapshot(DYNAMIC_TUNED_MODEL, id=2, selected_bucket="74-75F", selected_no_ask=0.60, selected_edge=0.24, decision_time_local="2026-05-20T12:31:00-04:00"),
+        _snapshot(DYNAMIC_TUNED_MODEL, id=3, selected_bucket="76-77F", selected_no_ask=0.04, selected_edge=0.90, decision_time_local="2026-05-20T12:32:00-04:00"),
+        _snapshot(
+            DYNAMIC_TUNED_MODEL,
+            id=4,
+            selected_bucket="78-79F",
+            selected_side="BUY_YES",
+            selected_yes_ask=0.40,
+            selected_edge=0.50,
+            decision_time_local="2026-05-20T12:33:00-04:00",
+        ),
+        _snapshot(DYNAMIC_TUNED_MODEL, id=5, selected_bucket="80-81F", selected_no_ask=0.40, selected_edge=0.50, decision_time_local="2026-05-20T11:59:00-04:00"),
+    ]
+
+    filtered = evaluator._candidates_for_policy(spec, rows, [])
+    filtered = [item for item in filtered if item["selected_side"] == str(TradeAction.BUY_NO)]
+    selected = evaluator._first_by_scope(spec, filtered)
+
+    assert [item["selected_bucket"] for item in selected] == ["72-73F"]
+
+
+def test_moonshot_policy_spec_filters_late_five_to_ten_cent_entries(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    spec = moonshot_policy_spec()
+    evaluator = ResearchPolicyEvaluator(store, (spec,))
+    rows = [
+        _snapshot(DYNAMIC_TUNED_MODEL, id=1, selected_no_ask=0.05, decision_time_local="2026-05-20T12:30:00-04:00"),
+        _snapshot(DYNAMIC_TUNED_MODEL, id=2, selected_bucket="74-75F", selected_no_ask=0.10, decision_time_local="2026-05-20T12:31:00-04:00"),
+        _snapshot(DYNAMIC_TUNED_MODEL, id=3, selected_bucket="76-77F", selected_no_ask=0.11, decision_time_local="2026-05-20T12:32:00-04:00"),
+        _snapshot(DYNAMIC_TUNED_MODEL, id=4, selected_bucket="78-79F", selected_no_ask=0.08, decision_time_local="2026-05-20T11:59:00-04:00"),
+    ]
+
+    filtered = evaluator._candidates_for_policy(spec, rows, [])
+    selected = evaluator._first_by_scope(spec, filtered)
+
+    assert [item["selected_bucket"] for item in selected] == ["72-73F", "74-75F"]
+
+
+def test_moonshot_edge_policy_spec_filters_late_high_edge_entries(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    spec = moonshot_edge_policy_spec()
+    evaluator = ResearchPolicyEvaluator(store, (spec,))
+    rows = [
+        _snapshot(DYNAMIC_TUNED_MODEL, id=1, selected_no_ask=0.04, selected_edge=0.90, decision_time_local="2026-05-20T12:30:00-04:00"),
+        _snapshot(DYNAMIC_TUNED_MODEL, id=2, selected_bucket="74-75F", selected_no_ask=0.04, selected_edge=0.89, decision_time_local="2026-05-20T12:31:00-04:00"),
+        _snapshot(DYNAMIC_TUNED_MODEL, id=3, selected_bucket="76-77F", selected_no_ask=0.05, selected_edge=0.90, decision_time_local="2026-05-20T12:32:00-04:00"),
+        _snapshot(DYNAMIC_TUNED_MODEL, id=4, selected_bucket="78-79F", selected_no_ask=0.12, selected_edge=0.95, decision_time_local="2026-05-20T12:33:00-04:00"),
+        _snapshot(DYNAMIC_TUNED_MODEL, id=5, selected_bucket="80-81F", selected_no_ask=0.04, selected_edge=0.95, decision_time_local="2026-05-20T11:59:00-04:00"),
+    ]
+
+    filtered = evaluator._candidates_for_policy(spec, rows, [])
+    selected = evaluator._first_by_scope(spec, filtered)
+
+    assert [item["selected_bucket"] for item in selected] == ["76-77F", "78-79F"]
 
 
 def test_live_position_insert_is_idempotent_by_scope(tmp_path: Path) -> None:
@@ -191,6 +291,7 @@ def _snapshot(
     selected_market_id: str = "market-1",
     selected_yes_ask: float = 0.6,
     selected_no_ask: float = 0.4,
+    selected_edge: float = 0.5,
     decision_time_local: str = "2026-05-20T12:30:00-04:00",
 ) -> dict:
     return {
@@ -204,7 +305,7 @@ def _snapshot(
         "selected_side": selected_side,
         "selected_market_id": selected_market_id,
         "selected_bucket": selected_bucket,
-        "selected_edge": 0.5,
+        "selected_edge": selected_edge,
         "selected_fair_yes": 0.4,
         "selected_fair_no": 0.9,
         "selected_yes_ask": selected_yes_ask,
