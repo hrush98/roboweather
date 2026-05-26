@@ -271,6 +271,7 @@ def main() -> None:
     live_cycle.add_argument("--max-notional-usd", type=float, default=3.0)
     live_cycle.add_argument("--model", dest="model_paths", action="append", default=[])
     live_cycle.add_argument("--skip-allowance-check", action="store_true")
+    live_cycle.add_argument("--retry-wait-seconds", type=float, default=5.0)
 
     live_loop = subparsers.add_parser("live-loop", help="Run repeated live execution cycles")
     live_loop.add_argument("--live-db", default=str(DEFAULT_LIVE_DB))
@@ -283,6 +284,7 @@ def main() -> None:
     live_loop.add_argument("--max-notional-usd", type=float, default=3.0)
     live_loop.add_argument("--model", dest="model_paths", action="append", default=[])
     live_loop.add_argument("--skip-allowance-check", action="store_true")
+    live_loop.add_argument("--retry-wait-seconds", type=float, default=5.0)
 
     resolve_live = subparsers.add_parser("resolve-live", help="Resolve settled live positions from official Polymarket outcomes")
     resolve_live.add_argument("--db", default=str(DEFAULT_LIVE_DB))
@@ -484,6 +486,7 @@ def main() -> None:
             max_notional_usd=args.max_notional_usd,
             model_paths=args.model_paths,
             require_allowance_check=not args.skip_allowance_check,
+            retry_wait_seconds=args.retry_wait_seconds,
         )
         return
     if args.command == "live-loop":
@@ -498,6 +501,7 @@ def main() -> None:
             max_notional_usd=args.max_notional_usd,
             model_paths=args.model_paths,
             require_allowance_check=not args.skip_allowance_check,
+            retry_wait_seconds=args.retry_wait_seconds,
         )
         return
     if args.command == "resolve-live":
@@ -1535,6 +1539,7 @@ def live_cycle_command(
     max_notional_usd: float,
     model_paths: list[str] | None,
     require_allowance_check: bool,
+    retry_wait_seconds: float,
 ) -> None:
     store = ExecutionStore(Path(live_db_path))
     try:
@@ -1547,6 +1552,7 @@ def live_cycle_command(
             max_book_age_seconds=max_book_age_seconds,
             max_notional_usd=max_notional_usd,
             require_allowance_check=require_allowance_check,
+            retry_wait_seconds=retry_wait_seconds,
         )
         result = LiveExecutionEngine(store, config).run_once()
         print(
@@ -1579,6 +1585,7 @@ def live_loop_command(
     max_notional_usd: float,
     model_paths: list[str] | None,
     require_allowance_check: bool,
+    retry_wait_seconds: float,
 ) -> None:
     store = ExecutionStore(Path(live_db_path))
     try:
@@ -1591,6 +1598,7 @@ def live_loop_command(
             max_book_age_seconds=max_book_age_seconds,
             max_notional_usd=max_notional_usd,
             require_allowance_check=require_allowance_check,
+            retry_wait_seconds=retry_wait_seconds,
         )
         engine = LiveExecutionEngine(store, config)
         cycle = 0

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -274,6 +275,9 @@ class FakeSubmitter:
     def check_allowance_buy(self, required_usdc: float) -> AllowanceCheck:
         return AllowanceCheck(True, 100.0, 100.0)
 
+    def get_order(self, order_id: str) -> dict[str, object]:
+        return {"success": True, "status": "matched"}
+
     def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
         assert token_id == "no-token"
         assert side == "BUY"
@@ -431,6 +435,152 @@ class SizingSubmitter(FakeSubmitter):
     def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
         assert amount == pytest.approx(self.expected_amount)
         return OrderSubmission(True, "order-1", "matched", None, {"success": True, "status": "matched"})
+
+
+class RetrySubmitter(FakeSubmitter):
+    def __init__(self) -> None:
+        self.place_calls: list[float] = []
+        self.get_order_calls: list[str] = []
+
+    def get_order(self, order_id: str) -> dict[str, object]:
+        self.get_order_calls.append(order_id)
+        return {"success": True, "status": "live"}
+
+    def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+        self.place_calls.append(amount)
+        if len(self.place_calls) == 1:
+            return OrderSubmission(True, "order-1", "live", None, {"success": True, "status": "live"})
+        assert amount == pytest.approx(1.22)
+        return OrderSubmission(
+            True,
+            "order-2",
+            "matched",
+            None,
+            {"success": True, "status": "matched", "makingAmount": "1.22", "takingAmount": "2.75"},
+        )
+
+
+class RefreshThenFillSubmitter(FakeSubmitter):
+    def __init__(self) -> None:
+        self.place_calls: list[float] = []
+        self.get_order_calls: list[str] = []
+
+    def get_order(self, order_id: str) -> dict[str, object]:
+        self.get_order_calls.append(order_id)
+        return {"success": True, "status": "matched", "makingAmount": "3.0", "takingAmount": "7.5"}
+
+    def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+        self.place_calls.append(amount)
+        return OrderSubmission(True, "order-1", "live", None, {"success": True, "status": "live"})
+
+
+class StaticBookClient:
+    def __init__(self, book: BookSnapshot) -> None:
+        self.book = book
+        self.calls: list[list[str]] = []
+
+    def fetch_books(self, token_ids: list[str]) -> dict[str, BookSnapshot]:
+        self.calls.append(token_ids)
+        return {self.book.token_id: self.book}
+
+
+def _retry_market():
+    from weather_trader.execution.contracts import MarketSnapshot
+
+    return MarketSnapshot(
+        market_id="market-1",
+        condition_id=None,
+        question="q",
+        slug="s",
+        city="Atlanta",
+        station="KATL",
+        market_date=date(2026, 5, 20),
+        lower_f=72,
+        upper_f=73,
+        yes_token_id="yes-token",
+        no_token_id="no-token",
+        end_date="2026-05-21T00:00:00Z",
+        resolution_source="test",
+        discovered_at="2026-05-20T18:00:00+00:00",
+    )
+
+
+def _retry_book(price: float = 0.5, size: float = 2.44) -> BookSnapshot:
+    return BookSnapshot(
+        token_id="no-token",
+        bids=[BookLevel(price=price - 0.02, size=100.0)],
+        asks=[BookLevel(price=price, size=size)],
+        timestamp="2026-05-20T18:00:05+00:00",
+    )
+
+
+def test_live_submit_retries_once_after_wait_with_fresh_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    submitter = RetrySubmitter()
+    book_client = StaticBookClient(_retry_book())
+    sleeps: list[float] = []
+    monkeypatch.setattr(live_execution.time, "sleep", lambda seconds: sleeps.append(seconds))
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live", retry_wait_seconds=5.0),
+        book_client=book_client,
+        submitter=submitter,
+    )
+    position = _live_position()
+    position_id = store.insert_live_policy_position(position)
+    assert position_id is not None
+
+    state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
+
+    assert state == LivePositionState.FILLED
+    assert sleeps == [5.0]
+    assert submitter.place_calls == pytest.approx([3.0, 1.22])
+    assert submitter.get_order_calls == ["order-1"]
+    assert book_client.calls == [["no-token"]]
+    attempts = store.connection.execute("select attempt_seq, external_order_id, target_notional_usd, final_state, raw_payload from live_order_attempts order by attempt_seq").fetchall()
+    assert [(row["attempt_seq"], row["external_order_id"], row["target_notional_usd"], row["final_state"]) for row in attempts] == [
+        (1, "order-1", 3.0, "SUBMITTED"),
+        (2, "order-2", 1.22, "FILLED"),
+    ]
+    first_payload = json.loads(attempts[0]["raw_payload"])["raw_payload"]
+    retry_payload = json.loads(attempts[1]["raw_payload"])["raw_payload"]
+    assert first_payload["execution"]["attempt_label"] == "initial"
+    assert retry_payload["execution"]["attempt_label"] == "retry"
+    assert retry_payload["execution"]["retry"]["wait_seconds"] == 5.0
+    assert retry_payload["execution"]["retry"]["first_attempt_order_id"] == "order-1"
+    assert retry_payload["execution"]["retry"]["retry_book_timestamp"] == "2026-05-20T18:00:05+00:00"
+    row = store.live_open_positions()[0]
+    assert row["cost_usd"] == pytest.approx(1.22)
+    assert row["filled_shares"] == pytest.approx(2.75)
+
+
+def test_live_submit_does_not_retry_when_first_order_fills_during_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    submitter = RefreshThenFillSubmitter()
+    book_client = StaticBookClient(_retry_book())
+    sleeps: list[float] = []
+    monkeypatch.setattr(live_execution.time, "sleep", lambda seconds: sleeps.append(seconds))
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live", retry_wait_seconds=5.0),
+        book_client=book_client,
+        submitter=submitter,
+    )
+    position = _live_position()
+    position_id = store.insert_live_policy_position(position)
+    assert position_id is not None
+
+    state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
+
+    assert state == LivePositionState.FILLED
+    assert sleeps == [5.0]
+    assert submitter.place_calls == pytest.approx([3.0])
+    assert submitter.get_order_calls == ["order-1"]
+    assert book_client.calls == []
+    assert store.connection.execute("select count(*) count from live_order_attempts").fetchone()["count"] == 1
+    row = store.live_open_positions()[0]
+    assert row["cost_usd"] == pytest.approx(3.0)
+    assert row["filled_shares"] == pytest.approx(7.5)
 
 
 def test_live_submit_uses_exchange_returned_fill_amounts(tmp_path: Path) -> None:

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import requests
+import time
 
 from weather_trader.config import DEFAULT_LIVE_DB, MODELS_DIR
 from weather_trader.execution.books import RestBookClient
@@ -31,7 +32,7 @@ from weather_trader.execution.contracts import (
 from weather_trader.execution.discovery import MarketDiscoveryService, same_day_markets
 from weather_trader.execution.fair_value import FairValueEngine, FairValueResult
 from weather_trader.execution.grouping import GroupMarketContext, StationDateDecisionEngine, group_key
-from weather_trader.execution.liquidity import quantize_price, quantize_shares, quantize_usdc
+from weather_trader.execution.liquidity import quantize_price, quantize_shares, quantize_usdc, walk_ask_ladder
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import StationWeatherState, WeatherFeatureService
 from weather_trader.live.settings import LiveSettings, load_live_settings, private_key_from_env_or_keyfile
@@ -80,6 +81,7 @@ class LiveExecutionConfig:
     max_notional_usd: float = 10.0
     min_entry_price: float = 0.05
     require_allowance_check: bool = True
+    retry_wait_seconds: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,18 @@ class LiveStrategyPlan:
 
 
 @dataclass(frozen=True)
+class LiveAttemptResult:
+    response: OrderSubmission
+    state: LivePositionState
+    limit_price: float
+    target_notional_usd: float
+    target_shares: float
+    filled_shares: float
+    cost_usd: float
+    avg_price: float | None
+
+
+@dataclass(frozen=True)
 class LiveCandidate:
     plan: LiveStrategyPlan
     position: Any
@@ -115,6 +129,9 @@ class LiveSubmitter(Protocol):
         ...
 
     def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+        ...
+
+    def get_order(self, order_id: str) -> dict[str, Any]:
         ...
 
 
@@ -364,7 +381,7 @@ class LiveExecutionEngine:
                 rejected += 1
                 self._record_rejected(position_id, position, reject_reason)
                 continue
-            result_state = self._submit(position_id, position)
+            result_state = self._submit(position_id, position, market=market, initial_book=selected_book, as_of_utc=now, errors=errors)
             if result_state in {LivePositionState.SUBMITTED, LivePositionState.FILLED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN}:
                 submitted += 1
             elif result_state == LivePositionState.REJECTED:
@@ -596,29 +613,235 @@ class LiveExecutionEngine:
             )
         )
 
-    def _submit(self, position_id: int, position: LivePolicyPosition) -> LivePositionState:
+    def _submit(
+        self,
+        position_id: int,
+        position: LivePolicyPosition,
+        *,
+        market: MarketSnapshot | None = None,
+        initial_book: BookSnapshot | None = None,
+        as_of_utc: datetime | None = None,
+        errors: list[str] | None = None,
+    ) -> LivePositionState:
+        errors = errors if errors is not None else []
         limit_price = float(position.raw_json["limit_price"])
+        first_attempt = self._place_attempt(
+            position=position,
+            limit_price=limit_price,
+            target_notional_usd=position.target_notional_usd,
+            assume_filled=self.config.mode == "dry-run",
+        )
+        self._record_live_attempt(
+            position_id,
+            position,
+            attempt_label="initial",
+            attempt=first_attempt,
+            update_position=True,
+            position_state=first_attempt.state,
+            position_filled_shares=first_attempt.filled_shares,
+            position_cost_usd=first_attempt.cost_usd,
+            position_avg_price=first_attempt.avg_price,
+            raw_patch={
+                "submit_phase": "initial",
+            },
+        )
+        if not self._is_retryable_attempt(first_attempt) or first_attempt.response.order_id is None:
+            return first_attempt.state
+        if market is None or initial_book is None:
+            return first_attempt.state
+
+        time.sleep(float(self.config.retry_wait_seconds))
+        refreshed = self._refresh_order_state(first_attempt.response.order_id, position, limit_price, position.target_notional_usd)
+        if refreshed is not None:
+            refreshed_state, refreshed_filled_shares, refreshed_cost_usd, refreshed_avg_price, refreshed_raw = refreshed
+            if refreshed_filled_shares > 0 or refreshed_state in {LivePositionState.FILLED, LivePositionState.PARTIAL}:
+                self.store.update_live_policy_position_execution(
+                    position_id,
+                    state=str(refreshed_state),
+                    filled_shares=refreshed_filled_shares,
+                    avg_entry_price=refreshed_avg_price,
+                    cost_usd=refreshed_cost_usd,
+                    raw_patch={
+                        "retry": {
+                            "attempt": "refresh",
+                            "wait_seconds": float(self.config.retry_wait_seconds),
+                            "order_id": first_attempt.response.order_id,
+                            "state": str(refreshed_state),
+                            "filled_shares": refreshed_filled_shares,
+                            "cost_usd": refreshed_cost_usd,
+                            "avg_price": refreshed_avg_price,
+                        }
+                    },
+                )
+                self.store.insert_live_trade_event(
+                    LiveTradeEvent(
+                        utc_now_iso(),
+                        position_id,
+                        position.strategy_name,
+                        LiveTradeEventType.ENTRY_CONFIRMED,
+                        "first order filled during retry wait",
+                        {"order_id": first_attempt.response.order_id, "state": str(refreshed_state), "raw": refreshed_raw},
+                    )
+                )
+                return refreshed_state
+            self.store.insert_live_trade_event(
+                LiveTradeEvent(
+                    utc_now_iso(),
+                    position_id,
+                    position.strategy_name,
+                    LiveTradeEventType.ENTRY_SUBMIT,
+                    "first order still open after retry wait",
+                    {"order_id": first_attempt.response.order_id, "state": str(refreshed_state), "raw": refreshed_raw},
+                )
+            )
+
+        retry_book = self._refresh_retry_book(position.selected_token_id, errors)
+        if retry_book is None or retry_book.best_ask is None:
+            return first_attempt.state
+        current = self._current_live_position_metrics(position_id)
+        current_cost_usd = float(current["cost_usd"] or 0.0) if current is not None else first_attempt.cost_usd
+        current_filled_shares = float(current["filled_shares"] or 0.0) if current is not None else first_attempt.filled_shares
+        retry_limit_price, retry_target_notional, retry_reason = self._retry_order_parameters(position, retry_book, current_cost_usd)
+        if retry_reason is not None or retry_target_notional <= 0.0:
+            self.store.insert_live_trade_event(
+                LiveTradeEvent(
+                    utc_now_iso(),
+                    position_id,
+                    position.strategy_name,
+                    LiveTradeEventType.ENTRY_SUBMIT,
+                    f"retry skipped: {retry_reason or 'NO_TARGET'}",
+                    {"retry_book_timestamp": retry_book.timestamp, "retry_reason": retry_reason},
+                )
+            )
+            return first_attempt.state
+
+        second_attempt = self._place_attempt(
+            position=position,
+            limit_price=retry_limit_price,
+            target_notional_usd=retry_target_notional,
+            assume_filled=False,
+        )
+        first_order_open = first_attempt.state in {LivePositionState.SUBMITTED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN}
+        if second_attempt.state == LivePositionState.REJECTED and first_order_open:
+            self._record_live_attempt(
+                position_id,
+                position,
+                attempt_label="retry",
+                attempt=second_attempt,
+                update_position=False,
+                raw_patch={
+                    "retry": {
+                        "attempt": "retry",
+                        "wait_seconds": float(self.config.retry_wait_seconds),
+                        "limit_price": retry_limit_price,
+                        "target_notional_usd": retry_target_notional,
+                        "retry_book_timestamp": retry_book.timestamp,
+                        "retry_reason": retry_reason,
+                        "first_attempt_order_id": first_attempt.response.order_id,
+                        "first_attempt_state": str(first_attempt.state),
+                    }
+                },
+            )
+            return first_attempt.state
+
+        cumulative_filled_shares = current_filled_shares + second_attempt.filled_shares
+        cumulative_cost_usd = current_cost_usd + second_attempt.cost_usd
+        cumulative_avg_price = cumulative_cost_usd / cumulative_filled_shares if cumulative_filled_shares > 0 else None
+        self._record_live_attempt(
+            position_id,
+            position,
+            attempt_label="retry",
+            attempt=second_attempt,
+            update_position=True,
+            position_state=second_attempt.state,
+            position_filled_shares=cumulative_filled_shares,
+            position_cost_usd=cumulative_cost_usd,
+            position_avg_price=cumulative_avg_price,
+            raw_patch={
+                "retry": {
+                    "attempt": "retry",
+                    "wait_seconds": float(self.config.retry_wait_seconds),
+                    "limit_price": retry_limit_price,
+                    "target_notional_usd": retry_target_notional,
+                    "retry_book_timestamp": retry_book.timestamp,
+                    "retry_reason": retry_reason,
+                    "first_attempt_order_id": first_attempt.response.order_id,
+                    "first_attempt_state": str(first_attempt.state),
+                }
+            },
+        )
+        return second_attempt.state if second_attempt.state in {LivePositionState.SUBMITTED, LivePositionState.FILLED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN} else first_attempt.state
+
+    def _place_attempt(
+        self,
+        *,
+        position: LivePolicyPosition,
+        limit_price: float,
+        target_notional_usd: float,
+        assume_filled: bool,
+    ) -> LiveAttemptResult:
+        limit_price = quantize_price(limit_price)
+        target_notional_usd = quantize_usdc(target_notional_usd)
+        target_shares = quantize_shares(target_notional_usd / limit_price) if limit_price > 0 else 0.0
         if self.config.mode == "dry-run":
-            state = LivePositionState.SUBMITTED
             response = OrderSubmission(True, None, "dry_run", None, {"dry_run": True})
+            state = LivePositionState.SUBMITTED
         else:
             submitter = self.submitter or self._default_submitter()
             if submitter.check_kill_switch():
-                self._record_rejected(position_id, position, "kill_switch")
-                return LivePositionState.REJECTED
+                response = OrderSubmission(False, None, "rejected", "kill_switch", {"success": False, "errorMsg": "kill_switch"})
+                state = LivePositionState.REJECTED
+                return LiveAttemptResult(response, state, limit_price, target_notional_usd, target_shares, 0.0, 0.0, None)
             if self.config.require_allowance_check and self.settings.live_require_allowance_check:
-                allowance = submitter.check_allowance_buy(position.target_notional_usd)
+                allowance = submitter.check_allowance_buy(target_notional_usd)
                 if not allowance.ok:
-                    self._record_rejected(position_id, position, f"allowance:{allowance.reason}")
-                    return LivePositionState.REJECTED
+                    response = OrderSubmission(False, None, "rejected", f"allowance:{allowance.reason}", {"success": False, "errorMsg": f"allowance:{allowance.reason}", "allowance": allowance.raw})
+                    state = LivePositionState.REJECTED
+                    return LiveAttemptResult(response, state, limit_price, target_notional_usd, target_shares, 0.0, 0.0, None)
             response = submitter.place_fak_order(
                 token_id=position.selected_token_id,
                 side="BUY",
                 price=limit_price,
-                amount=position.target_notional_usd,
+                amount=target_notional_usd,
             )
             state = _state_from_response(response)
-        filled_shares, cost_usd, avg_price = _buy_fill_from_response(response, state, position, limit_price)
+        filled_shares, cost_usd, avg_price = _buy_fill_from_response(
+            response,
+            state,
+            position,
+            limit_price,
+            target_notional_usd,
+            assume_filled=assume_filled,
+        )
+        return LiveAttemptResult(response, state, limit_price, target_notional_usd, target_shares, filled_shares, cost_usd, avg_price)
+
+    def _record_live_attempt(
+        self,
+        position_id: int,
+        position: LivePolicyPosition,
+        *,
+        attempt_label: str,
+        attempt: LiveAttemptResult,
+        update_position: bool,
+        position_state: LivePositionState | None = None,
+        position_filled_shares: float | None = None,
+        position_cost_usd: float | None = None,
+        position_avg_price: float | None = None,
+        raw_patch: dict[str, Any] | None = None,
+    ) -> None:
+        attempt_payload = dict(attempt.response.raw)
+        attempt_payload["execution"] = {
+            "attempt_label": attempt_label,
+            "update_position": update_position,
+            "limit_price": attempt.limit_price,
+            "target_notional_usd": attempt.target_notional_usd,
+            "target_shares": attempt.target_shares,
+            "filled_shares": attempt.filled_shares,
+            "cost_usd": attempt.cost_usd,
+            "avg_price": attempt.avg_price,
+        }
+        if raw_patch:
+            attempt_payload["execution"].update(raw_patch)
         self.store.insert_live_order_attempt(
             LiveOrderAttempt(
                 utc_now_iso(),
@@ -627,38 +850,131 @@ class LiveExecutionEngine:
                 position.selected_token_id,
                 position.selected_side,
                 LiveOrderMode.FAK,
-                limit_price,
-                position.target_notional_usd,
-                position.target_shares,
-                response.order_id,
-                response.status,
-                state,
-                response.error_msg or response.status or "submitted",
-                filled_shares,
-                avg_price,
-                cost_usd,
-                response.raw,
+                attempt.limit_price,
+                attempt.target_notional_usd,
+                attempt.target_shares,
+                attempt.response.order_id,
+                attempt.response.status,
+                attempt.state,
+                attempt.response.error_msg or attempt.response.status or "submitted",
+                attempt.filled_shares,
+                attempt.avg_price,
+                attempt.cost_usd,
+                attempt_payload,
             )
         )
-        self.store.update_live_policy_position_execution(
-            position_id,
-            state=str(state),
-            filled_shares=filled_shares,
-            avg_entry_price=avg_price,
-            cost_usd=cost_usd,
-            raw_patch={
-                "external_order_id": response.order_id,
-                "external_status": response.status,
-                "submit_response": response.raw,
-                "actual_filled_shares": filled_shares,
-                "actual_cost_usd": cost_usd,
-                "actual_avg_entry_price": avg_price,
-            },
-        )
+        if update_position:
+            self.store.update_live_policy_position_execution(
+                position_id,
+                state=str(position_state or attempt.state),
+                filled_shares=attempt.filled_shares if position_filled_shares is None else position_filled_shares,
+                avg_entry_price=attempt.avg_price if position_avg_price is None else position_avg_price,
+                cost_usd=attempt.cost_usd if position_cost_usd is None else position_cost_usd,
+                raw_patch={
+                    "attempt": attempt_label,
+                    "limit_price": attempt.limit_price,
+                    "target_notional_usd": attempt.target_notional_usd,
+                    "target_shares": attempt.target_shares,
+                    "external_order_id": attempt.response.order_id,
+                    "external_status": attempt.response.status,
+                    "submit_response": attempt.response.raw,
+                    "actual_filled_shares": attempt.filled_shares,
+                    "actual_cost_usd": attempt.cost_usd,
+                    "actual_avg_entry_price": attempt.avg_price,
+                    **(raw_patch or {}),
+                },
+            )
         self.store.insert_live_trade_event(
-            LiveTradeEvent(utc_now_iso(), position_id, position.strategy_name, LiveTradeEventType.ENTRY_SUBMIT, str(state), response.raw)
+            LiveTradeEvent(
+                utc_now_iso(),
+                position_id,
+                position.strategy_name,
+                LiveTradeEventType.ENTRY_SUBMIT,
+                f"{attempt_label} {attempt.state}",
+                attempt.response.raw,
+            )
         )
-        return state
+
+    def _current_live_position_metrics(self, position_id: int) -> dict[str, Any] | None:
+        row = self.store.connection.execute(
+            "select filled_shares, cost_usd, state from live_policy_positions where id = ?",
+            (position_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def _refresh_order_state(
+        self,
+        order_id: str,
+        position: LivePolicyPosition,
+        limit_price: float,
+        target_notional_usd: float,
+    ) -> tuple[LivePositionState, float, float, float | None, dict[str, Any]] | None:
+        submitter = self.submitter or self._default_submitter()
+        get_order = getattr(submitter, "get_order", None)
+        if not callable(get_order):
+            return None
+        try:
+            raw = get_order(order_id)
+        except Exception:
+            return None
+        raw_payload = raw if isinstance(raw, dict) else {"raw": raw}
+        response = OrderSubmission(True, order_id, str(raw_payload.get("status") or raw_payload.get("state") or "submitted"), None, raw_payload)
+        state = _state_from_response(response)
+        filled_shares, cost_usd, avg_price = _buy_fill_from_response(
+            response,
+            state,
+            position,
+            limit_price,
+            target_notional_usd,
+            assume_filled=False,
+        )
+        return state, filled_shares, cost_usd, avg_price, raw_payload
+
+    def _refresh_retry_book(self, token_id: str, errors: list[str]) -> BookSnapshot | None:
+        try:
+            books = self.book_client.fetch_books([token_id])
+        except requests.RequestException as exc:
+            errors.append(f"retry-book:{token_id}: {exc}")
+            return None
+        book = books.get(token_id)
+        if book is not None:
+            self.store.insert_book_snapshot(book)
+        return book
+
+    def _retry_order_parameters(
+        self,
+        position: LivePolicyPosition,
+        book: BookSnapshot,
+        current_cost_usd: float,
+    ) -> tuple[float, float, str | None]:
+        best_ask = book.best_ask
+        if best_ask is None:
+            return 0.0, 0.0, "MISSING_BOOK"
+        fair = position.entry_fair
+        limit_price = quantize_price(min(best_ask + 0.05, fair - 0.15) if fair is not None else best_ask + 0.05)
+        if limit_price <= 0.0:
+            return 0.0, 0.0, "NO_RETRY_PRICE"
+        remaining_notional = max(0.0, float(position.target_notional_usd) - max(0.0, current_cost_usd))
+        if remaining_notional <= 0.0:
+            return limit_price, 0.0, "NO_REMAINING_NOTIONAL"
+        walk = walk_ask_ladder(
+            book=book,
+            limit_price=best_ask,
+            target_notional_usd=remaining_notional,
+            execution_price_cap=limit_price,
+        )
+        retry_target = quantize_usdc(min(remaining_notional, walk.cost_usd))
+        if retry_target < float(self.settings.live_min_order_notional):
+            return limit_price, retry_target, "INSUFFICIENT_DEPTH"
+        return limit_price, retry_target, None
+
+    def _is_retryable_attempt(self, attempt: LiveAttemptResult) -> bool:
+        if attempt.state in {LivePositionState.SUBMITTED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN}:
+            return True
+        if attempt.state != LivePositionState.REJECTED or not attempt.response.error_msg:
+            return False
+        reason = attempt.response.error_msg.lower()
+        return any(token in reason for token in ("liquid", "depth", "book", "fill"))
 
     def _default_submitter(self) -> LiveSubmitter:
         default_submitter = getattr(self, "_default_submitter_instance", None)
@@ -689,17 +1005,24 @@ def _buy_fill_from_response(
     state: LivePositionState,
     position: LivePolicyPosition,
     limit_price: float,
+    target_notional_usd: float,
+    *,
+    assume_filled: bool = False,
 ) -> tuple[float, float, float | None]:
-    if not response.success or state not in {LivePositionState.FILLED, LivePositionState.SUBMITTED}:
+    if not response.success:
         return 0.0, 0.0, None
     actual_cost = _float_response_field(response.raw, "makingAmount")
     actual_shares = _float_response_field(response.raw, "takingAmount")
     if actual_cost is not None and actual_shares is not None and actual_cost > 0.0 and actual_shares > 0.0:
         avg_price = actual_cost / actual_shares
         return quantize_shares(actual_shares), quantize_usdc(actual_cost), quantize_price(avg_price)
-    filled_shares = position.target_shares
-    cost_usd = position.target_notional_usd if filled_shares > 0 else 0.0
-    return filled_shares, cost_usd, limit_price if filled_shares > 0 else None
+    if assume_filled and target_notional_usd > 0.0 and limit_price > 0.0:
+        filled_shares = quantize_shares(target_notional_usd / limit_price)
+        return filled_shares, quantize_usdc(target_notional_usd), limit_price
+    if state in {LivePositionState.FILLED, LivePositionState.PARTIAL} and target_notional_usd > 0.0 and limit_price > 0.0:
+        filled_shares = quantize_shares(target_notional_usd / limit_price)
+        return filled_shares, quantize_usdc(target_notional_usd), limit_price
+    return 0.0, 0.0, None
 
 
 def _float_response_field(raw: dict[str, Any], key: str) -> float | None:
@@ -729,6 +1052,10 @@ def _state_from_response(response: OrderSubmission) -> LivePositionState:
         return LivePositionState.DELAYED
     if status in {"matched", "filled"}:
         return LivePositionState.FILLED
-    if status in {"", "live", "submitted"}:
+    if status in {"partial", "partially_filled", "partially_matched"}:
+        return LivePositionState.PARTIAL
+    if status in {"cancelled", "canceled"}:
+        return LivePositionState.CANCELLED
+    if status in {"", "live", "submitted", "open"}:
         return LivePositionState.SUBMITTED
     return LivePositionState.UNKNOWN

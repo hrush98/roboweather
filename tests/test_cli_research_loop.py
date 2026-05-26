@@ -163,6 +163,8 @@ def test_live_cycle_accepts_execution_options(monkeypatch) -> None:
             "--max-notional-usd",
             "3",
             "--skip-allowance-check",
+            "--retry-wait-seconds",
+            "5",
         ],
     )
 
@@ -172,6 +174,7 @@ def test_live_cycle_accepts_execution_options(monkeypatch) -> None:
     assert captured["mode"] == "live"
     assert captured["max_notional_usd"] == 3.0
     assert captured["require_allowance_check"] is False
+    assert captured["retry_wait_seconds"] == 5.0
 
 
 def test_research_loop_hook_runs_paper_promotion_after_policy_evaluation(monkeypatch) -> None:
