@@ -25,6 +25,7 @@ from weather_trader.live.execution import (
     EDGE_CORE_MIN_EDGE,
     EDGE_CORE_POLICY_NAME,
     LIVE_MODEL_GROUP,
+    LIVE_ENTRY_PRICE_MAX,
     LIVE_POLICY_NAME,
     MOONSHOT_MIN_EDGE,
     MOONSHOT_POLICY_NAME,
@@ -65,6 +66,9 @@ def test_live_strategy_plans_include_moonshot_and_ngboost_medium() -> None:
         MOONSHOT_POLICY_NAME,
         NGBOOST_BEST_BUY_YES_POLICY_NAME,
     ]
+    consensus = plans[0]
+    assert consensus.policies[0].entry_price_max == pytest.approx(LIVE_ENTRY_PRICE_MAX)
+
     edge_core = plans[1]
     assert edge_core.target_notional_usd == pytest.approx(3.0)
     assert edge_core.strategy.max_notional_usd == pytest.approx(3.0)
@@ -72,7 +76,7 @@ def test_live_strategy_plans_include_moonshot_and_ngboost_medium() -> None:
     assert edge_core.policies[0].model_name == DYNAMIC_TUNED_MODEL
     assert edge_core.policies[0].edge_min == pytest.approx(EDGE_CORE_MIN_EDGE)
     assert edge_core.policies[0].entry_price_min == pytest.approx(0.05)
-    assert edge_core.policies[0].entry_price_max is None
+    assert edge_core.policies[0].entry_price_max == pytest.approx(LIVE_ENTRY_PRICE_MAX)
     assert edge_core.selected_side == TradeAction.BUY_NO
     assert edge_core.min_entry_price == pytest.approx(0.05)
 
@@ -86,6 +90,7 @@ def test_live_strategy_plans_include_moonshot_and_ngboost_medium() -> None:
     assert moonshot.policies[0].entry_price_max == pytest.approx(0.10)
     assert moonshot.policies[1].model_name == DYNAMIC_TUNED_MODEL
     assert moonshot.policies[1].entry_price_min == pytest.approx(0.05)
+    assert moonshot.policies[1].entry_price_max == pytest.approx(LIVE_ENTRY_PRICE_MAX)
     assert moonshot.policies[1].edge_min == pytest.approx(MOONSHOT_MIN_EDGE)
     assert moonshot.selected_side == TradeAction.BUY_NO
     assert moonshot.min_entry_price == pytest.approx(0.05)
@@ -98,6 +103,7 @@ def test_live_strategy_plans_include_moonshot_and_ngboost_medium() -> None:
     assert ngboost.policies[0].model_name == NGBOOST_MODEL
     assert ngboost.policies[0].strategy_bucket == StrategyBucket.BEST_BUCKET
     assert ngboost.policies[0].entry_price_min == pytest.approx(0.05)
+    assert ngboost.policies[0].entry_price_max == pytest.approx(LIVE_ENTRY_PRICE_MAX)
     assert ngboost.policies[0].local_decision_start == "12:00"
     assert ngboost.policies[0].local_decision_end == "15:00"
     assert ngboost.selected_side == TradeAction.BUY_YES
@@ -127,6 +133,8 @@ def test_live_policy_spec_filters_late_no_tiny_and_bucket_side_delay(tmp_path: P
             _snapshot(CATBOOST_MODEL, id=4, selected_bucket="74-75F", selected_no_ask=0.04, decision_time_local="2026-05-20T12:30:00-04:00"),
             _snapshot(DYNAMIC_TUNED_MODEL, id=5, selected_bucket="76-77F", selected_no_ask=0.06, decision_time_local="2026-05-20T11:59:00-04:00"),
             _snapshot(CATBOOST_MODEL, id=6, selected_bucket="76-77F", selected_no_ask=0.06, decision_time_local="2026-05-20T11:59:00-04:00"),
+            _snapshot(DYNAMIC_TUNED_MODEL, id=7, selected_bucket="78-79F", selected_no_ask=0.51, decision_time_local="2026-05-20T12:31:00-04:00"),
+            _snapshot(CATBOOST_MODEL, id=8, selected_bucket="78-79F", selected_no_ask=0.51, decision_time_local="2026-05-20T12:31:00-04:00"),
         ]
     )
 
@@ -155,6 +163,7 @@ def test_edge_core_policy_spec_filters_late_buy_no_edge_gated_entries(tmp_path: 
             decision_time_local="2026-05-20T12:33:00-04:00",
         ),
         _snapshot(DYNAMIC_TUNED_MODEL, id=5, selected_bucket="80-81F", selected_no_ask=0.40, selected_edge=0.50, decision_time_local="2026-05-20T11:59:00-04:00"),
+        _snapshot(DYNAMIC_TUNED_MODEL, id=6, selected_bucket="82-83F", selected_no_ask=0.51, selected_edge=0.50, decision_time_local="2026-05-20T12:34:00-04:00"),
     ]
 
     filtered = evaluator._candidates_for_policy(spec, rows, [])
@@ -191,6 +200,7 @@ def test_moonshot_edge_policy_spec_filters_late_high_edge_entries(tmp_path: Path
         _snapshot(DYNAMIC_TUNED_MODEL, id=3, selected_bucket="76-77F", selected_no_ask=0.05, selected_edge=0.90, decision_time_local="2026-05-20T12:32:00-04:00"),
         _snapshot(DYNAMIC_TUNED_MODEL, id=4, selected_bucket="78-79F", selected_no_ask=0.12, selected_edge=0.95, decision_time_local="2026-05-20T12:33:00-04:00"),
         _snapshot(DYNAMIC_TUNED_MODEL, id=5, selected_bucket="80-81F", selected_no_ask=0.04, selected_edge=0.95, decision_time_local="2026-05-20T11:59:00-04:00"),
+        _snapshot(DYNAMIC_TUNED_MODEL, id=6, selected_bucket="82-83F", selected_no_ask=0.51, selected_edge=0.95, decision_time_local="2026-05-20T12:34:00-04:00"),
     ]
 
     filtered = evaluator._candidates_for_policy(spec, rows, [])
@@ -247,6 +257,15 @@ def test_ngboost_best_buy_yes_policy_spec_filters_late_medium_entries(tmp_path: 
             selected_side="BUY_YES",
             selected_yes_ask=0.08,
             decision_time_local="2026-05-20T12:34:00-04:00",
+        ),
+        _snapshot(
+            NGBOOST_MODEL,
+            id=6,
+            strategy_bucket=str(StrategyBucket.BEST_BUCKET),
+            selected_bucket="82-83F",
+            selected_side="BUY_YES",
+            selected_yes_ask=0.51,
+            decision_time_local="2026-05-20T12:35:00-04:00",
         ),
     ]
 
