@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -10,7 +11,7 @@ import time
 
 from weather_trader.config import DEFAULT_LIVE_DB, MODELS_DIR
 from weather_trader.execution.books import RestBookClient
-from weather_trader.execution.clob_executor import ClobExecutor, OrderSubmission
+from weather_trader.execution.clob_executor import CancelSubmission, ClobExecutor, OrderSubmission
 from weather_trader.execution.contracts import (
     BookSnapshot,
     LiveOrderAttempt,
@@ -38,19 +39,22 @@ from weather_trader.execution.weather import StationWeatherState, WeatherFeature
 from weather_trader.live.settings import LiveSettings, load_live_settings, private_key_from_env_or_keyfile
 from weather_trader.live.sizing import LiveSizingDecision, LiveSizingModel
 from weather_trader.research.collector import ResearchConfig, build_prediction_snapshot, due_delay_buckets
-from weather_trader.research.policies import CATBOOST_MODEL, DYNAMIC_TUNED_MODEL, ResearchPolicyEvaluator, ResearchPolicySpec
+from weather_trader.research.policies import CATBOOST_MODEL, DYNAMIC_TUNED_MODEL, NGBOOST_MODEL, ResearchPolicyEvaluator, ResearchPolicySpec
 
 
 LIVE_POLICY_NAME = "pm_us12_bucket_consensus_hc_late_no_tiny_by_bucket_side_delay_first"
 EDGE_CORE_POLICY_NAME = "pm_us12_dynamic_tuned_hc_late_buy_no_edge_025_by_bucket_side_delay_first"
 MOONSHOT_POLICY_NAME = "pm_us12_dynamic_tuned_hc_late_entry_05_10_buy_no_by_bucket_side_delay_first"
+NGBOOST_BEST_BUY_YES_POLICY_NAME = "pm_us12_ngboost_best_bucket_late_buy_yes_medium_by_bucket_side_delay_first"
 LIVE_MODEL_GROUP = "obs_bucket_consensus"
 EDGE_CORE_MIN_EDGE = 0.25
 MOONSHOT_MIN_EDGE = 0.90
 MOONSHOT_NOTIONAL_USD = 1.0
+NGBOOST_BEST_BUY_YES_NOTIONAL_USD = 5.0
 LIVE_MODEL_PATHS = (
     MODELS_DIR / f"{DYNAMIC_TUNED_MODEL}.joblib",
     MODELS_DIR / f"{CATBOOST_MODEL}.joblib",
+    MODELS_DIR / f"{NGBOOST_MODEL}.joblib",
 )
 PM_ACTIVE_US12_STATIONS = frozenset(
     {
@@ -82,6 +86,9 @@ class LiveExecutionConfig:
     min_entry_price: float = 0.05
     require_allowance_check: bool = True
     retry_wait_seconds: float = 5.0
+    enable_resting_fallback: bool = True
+    resting_fallback_ttl_seconds: float = 60.0
+    resting_fallback_notional_fraction: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -131,7 +138,13 @@ class LiveSubmitter(Protocol):
     def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
         ...
 
+    def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+        ...
+
     def get_order(self, order_id: str) -> dict[str, Any]:
+        ...
+
+    def cancel_order(self, order_id: str) -> CancelSubmission:
         ...
 
 
@@ -223,6 +236,35 @@ def edge_core_live_strategy(max_notional_usd: float = 3.0) -> LiveStrategy:
     )
 
 
+def ngboost_best_buy_yes_live_strategy() -> LiveStrategy:
+    return LiveStrategy(
+        name=NGBOOST_BEST_BUY_YES_POLICY_NAME,
+        active=True,
+        source="model",
+        model_group=NGBOOST_MODEL,
+        model_names=[NGBOOST_MODEL],
+        strategy_bucket=StrategyBucket.BEST_BUCKET,
+        market_family=MarketFamily.HIGH_TEMP,
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+        entry_price_min=0.05,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+        max_notional_usd=NGBOOST_BEST_BUY_YES_NOTIONAL_USD,
+        raw_payload={
+            "report": {
+                "resolved": 69,
+                "win_rate": 0.449,
+                "pnl": 3.409,
+                "rr": 0.124,
+                "recent_resolved": 32,
+                "recent_win_rate": 0.625,
+                "recent_rr": 0.372,
+                "selected_side": str(TradeAction.BUY_YES),
+            }
+        },
+    )
+
+
 def live_policy_spec(config: LiveExecutionConfig) -> ResearchPolicySpec:
     return ResearchPolicySpec(
         LIVE_POLICY_NAME,
@@ -282,6 +324,20 @@ def moonshot_edge_policy_spec() -> ResearchPolicySpec:
     )
 
 
+def ngboost_best_buy_yes_policy_spec() -> ResearchPolicySpec:
+    return ResearchPolicySpec(
+        NGBOOST_BEST_BUY_YES_POLICY_NAME,
+        "model",
+        StrategyBucket.BEST_BUCKET,
+        model_name=NGBOOST_MODEL,
+        station_allow_set=PM_ACTIVE_US12_STATIONS,
+        entry_price_min=0.05,
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+    )
+
+
 def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, ...]:
     return (
         LiveStrategyPlan(
@@ -302,6 +358,13 @@ def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, 
             (moonshot_policy_spec(), moonshot_edge_policy_spec()),
             MOONSHOT_NOTIONAL_USD,
             TradeAction.BUY_NO,
+            config.min_entry_price,
+        ),
+        LiveStrategyPlan(
+            ngboost_best_buy_yes_live_strategy(),
+            (ngboost_best_buy_yes_policy_spec(),),
+            NGBOOST_BEST_BUY_YES_NOTIONAL_USD,
+            TradeAction.BUY_YES,
             config.min_entry_price,
         ),
     )
@@ -645,8 +708,18 @@ class LiveExecutionEngine:
                 "submit_phase": "initial",
             },
         )
-        if not self._is_retryable_attempt(first_attempt) or first_attempt.response.order_id is None:
+        if not self._is_retryable_attempt(first_attempt):
             return first_attempt.state
+        if first_attempt.response.order_id is None:
+            fallback_state = self._submit_resting_fallback(
+                position_id=position_id,
+                position=position,
+                current_cost_usd=first_attempt.cost_usd,
+                current_filled_shares=first_attempt.filled_shares,
+                source_reason=first_attempt.response.error_msg or first_attempt.response.status or "initial_retryable_rejection",
+                errors=errors,
+            )
+            return fallback_state or first_attempt.state
         if market is None or initial_book is None:
             return first_attempt.state
 
@@ -713,6 +786,19 @@ class LiveExecutionEngine:
                     {"retry_book_timestamp": retry_book.timestamp, "retry_reason": retry_reason},
                 )
             )
+            first_order_open = first_attempt.state in {LivePositionState.SUBMITTED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN}
+            if not first_order_open:
+                fallback_state = self._submit_resting_fallback(
+                    position_id=position_id,
+                    position=position,
+                    current_cost_usd=current_cost_usd,
+                    current_filled_shares=current_filled_shares,
+                    book=retry_book,
+                    source_reason=retry_reason or "retry_skipped",
+                    errors=errors,
+                )
+                if fallback_state is not None:
+                    return fallback_state
             return first_attempt.state
 
         second_attempt = self._place_attempt(
@@ -770,6 +856,18 @@ class LiveExecutionEngine:
                 }
             },
         )
+        if second_attempt.state == LivePositionState.REJECTED:
+            fallback_state = self._submit_resting_fallback(
+                position_id=position_id,
+                position=position,
+                current_cost_usd=current_cost_usd,
+                current_filled_shares=current_filled_shares,
+                book=retry_book,
+                source_reason=second_attempt.response.error_msg or second_attempt.response.status or "retry_rejected",
+                errors=errors,
+            )
+            if fallback_state is not None:
+                return fallback_state
         return second_attempt.state if second_attempt.state in {LivePositionState.SUBMITTED, LivePositionState.FILLED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN} else first_attempt.state
 
     def _place_attempt(
@@ -815,6 +913,209 @@ class LiveExecutionEngine:
         )
         return LiveAttemptResult(response, state, limit_price, target_notional_usd, target_shares, filled_shares, cost_usd, avg_price)
 
+    def _submit_resting_fallback(
+        self,
+        *,
+        position_id: int,
+        position: LivePolicyPosition,
+        current_cost_usd: float,
+        current_filled_shares: float,
+        source_reason: str,
+        errors: list[str],
+        book: BookSnapshot | None = None,
+    ) -> LivePositionState | None:
+        if not self._resting_fallback_enabled(position):
+            return None
+        resting_book = book or self._refresh_retry_book(position.selected_token_id, errors)
+        if resting_book is None:
+            return None
+        limit_price, target_notional_usd, resting_reason = self._resting_order_parameters(position, resting_book, current_cost_usd)
+        if resting_reason is not None or target_notional_usd <= 0.0:
+            self.store.insert_live_trade_event(
+                LiveTradeEvent(
+                    utc_now_iso(),
+                    position_id,
+                    position.strategy_name,
+                    LiveTradeEventType.ENTRY_SUBMIT,
+                    f"resting fallback skipped: {resting_reason or 'NO_TARGET'}",
+                    {"source_reason": source_reason, "resting_book_timestamp": resting_book.timestamp, "resting_reason": resting_reason},
+                )
+            )
+            return None
+
+        attempt = self._place_gtc_attempt(position=position, limit_price=limit_price, target_notional_usd=target_notional_usd)
+        raw_patch: dict[str, Any] = {
+            "resting_fallback": {
+                "source_reason": source_reason,
+                "ttl_seconds": float(self.config.resting_fallback_ttl_seconds),
+                "notional_fraction": float(self.config.resting_fallback_notional_fraction),
+                "resting_book_timestamp": resting_book.timestamp,
+                "best_bid": resting_book.best_bid,
+                "best_ask": resting_book.best_ask,
+                "limit_price": limit_price,
+                "target_notional_usd": target_notional_usd,
+                "reason": resting_reason,
+            }
+        }
+        final_attempt = attempt
+        update_position = attempt.filled_shares > 0 or attempt.state in {LivePositionState.FILLED, LivePositionState.PARTIAL}
+        cancel_response: CancelSubmission | None = None
+        if attempt.response.order_id is not None and attempt.state in {LivePositionState.SUBMITTED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN}:
+            time.sleep(float(self.config.resting_fallback_ttl_seconds))
+            refreshed = self._refresh_order_state(attempt.response.order_id, position, limit_price, target_notional_usd)
+            refreshed_raw: dict[str, Any] | None = None
+            if refreshed is not None:
+                refreshed_state, refreshed_filled_shares, refreshed_cost_usd, refreshed_avg_price, refreshed_raw = refreshed
+                if refreshed_filled_shares > 0 and refreshed_state == LivePositionState.SUBMITTED:
+                    refreshed_state = LivePositionState.PARTIAL
+                final_attempt = LiveAttemptResult(
+                    OrderSubmission(
+                        True,
+                        attempt.response.order_id,
+                        str(refreshed_state),
+                        None,
+                        {"submit": attempt.response.raw, "after_ttl": refreshed_raw},
+                    ),
+                    refreshed_state,
+                    limit_price,
+                    target_notional_usd,
+                    attempt.target_shares,
+                    refreshed_filled_shares,
+                    refreshed_cost_usd,
+                    refreshed_avg_price,
+                )
+                update_position = refreshed_filled_shares > 0 or refreshed_state in {LivePositionState.FILLED, LivePositionState.PARTIAL}
+            if final_attempt.state != LivePositionState.FILLED:
+                cancel_response = self._cancel_resting_order(attempt.response.order_id)
+                if not update_position:
+                    cancel_state = LivePositionState.CANCELLED if cancel_response.success else LivePositionState.UNKNOWN
+                    final_attempt = LiveAttemptResult(
+                        OrderSubmission(
+                            cancel_response.success,
+                            attempt.response.order_id,
+                            str(cancel_state),
+                            cancel_response.error_msg or "RESTING_TTL_EXPIRED",
+                            {"submit": attempt.response.raw, "after_ttl": refreshed_raw, "cancel": cancel_response.raw},
+                        ),
+                        cancel_state,
+                        limit_price,
+                        target_notional_usd,
+                        attempt.target_shares,
+                        0.0,
+                        0.0,
+                        None,
+                    )
+                else:
+                    final_attempt = LiveAttemptResult(
+                        OrderSubmission(
+                            final_attempt.response.success,
+                            attempt.response.order_id,
+                            final_attempt.response.status,
+                            final_attempt.response.error_msg,
+                            {"submit": attempt.response.raw, "after_ttl": refreshed_raw, "cancel": cancel_response.raw},
+                        ),
+                        final_attempt.state,
+                        final_attempt.limit_price,
+                        final_attempt.target_notional_usd,
+                        final_attempt.target_shares,
+                        final_attempt.filled_shares,
+                        final_attempt.cost_usd,
+                        final_attempt.avg_price,
+                    )
+            raw_patch["resting_fallback"].update(
+                {
+                    "order_status_after_ttl": final_attempt.response.status,
+                    "cancel_response": cancel_response.raw if cancel_response is not None else None,
+                }
+            )
+
+        cumulative_filled_shares = current_filled_shares + final_attempt.filled_shares
+        cumulative_cost_usd = current_cost_usd + final_attempt.cost_usd
+        cumulative_avg_price = cumulative_cost_usd / cumulative_filled_shares if cumulative_filled_shares > 0 else None
+        self._record_live_attempt(
+            position_id,
+            position,
+            attempt_label="resting_fallback",
+            attempt=final_attempt,
+            update_position=update_position,
+            position_state=final_attempt.state,
+            position_filled_shares=cumulative_filled_shares,
+            position_cost_usd=cumulative_cost_usd,
+            position_avg_price=cumulative_avg_price,
+            raw_patch=raw_patch,
+            order_mode=LiveOrderMode.GTC,
+        )
+        return final_attempt.state if final_attempt.state in {LivePositionState.SUBMITTED, LivePositionState.FILLED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN} else None
+
+    def _place_gtc_attempt(
+        self,
+        *,
+        position: LivePolicyPosition,
+        limit_price: float,
+        target_notional_usd: float,
+    ) -> LiveAttemptResult:
+        limit_price = quantize_price(limit_price)
+        target_notional_usd = quantize_usdc(target_notional_usd)
+        target_shares = quantize_shares(target_notional_usd / limit_price) if limit_price > 0 else 0.0
+        submitter = self.submitter or self._default_submitter()
+        if submitter.check_kill_switch():
+            response = OrderSubmission(False, None, "rejected", "kill_switch", {"success": False, "errorMsg": "kill_switch"})
+            return LiveAttemptResult(response, LivePositionState.REJECTED, limit_price, target_notional_usd, target_shares, 0.0, 0.0, None)
+        if self.config.require_allowance_check and self.settings.live_require_allowance_check:
+            allowance = submitter.check_allowance_buy(target_notional_usd)
+            if not allowance.ok:
+                response = OrderSubmission(False, None, "rejected", f"allowance:{allowance.reason}", {"success": False, "errorMsg": f"allowance:{allowance.reason}", "allowance": allowance.raw})
+                return LiveAttemptResult(response, LivePositionState.REJECTED, limit_price, target_notional_usd, target_shares, 0.0, 0.0, None)
+        response = submitter.place_gtc_order(
+            token_id=position.selected_token_id,
+            side="BUY",
+            price=limit_price,
+            amount=target_notional_usd,
+        )
+        state = _state_from_response(response)
+        filled_shares, cost_usd, avg_price = _buy_fill_from_response(response, state, position, limit_price, target_notional_usd, assume_filled=False)
+        return LiveAttemptResult(response, state, limit_price, target_notional_usd, target_shares, filled_shares, cost_usd, avg_price)
+
+    def _cancel_resting_order(self, order_id: str) -> CancelSubmission:
+        submitter = self.submitter or self._default_submitter()
+        try:
+            return submitter.cancel_order(order_id)
+        except Exception as exc:
+            return CancelSubmission(False, [], {order_id: str(exc)}, str(exc), {"exception_type": type(exc).__name__, "exception": str(exc)})
+
+    def _resting_fallback_enabled(self, position: LivePolicyPosition) -> bool:
+        return bool(self.config.enable_resting_fallback and self.config.mode == "live" and position.strategy_name == LIVE_POLICY_NAME)
+
+    def _resting_order_parameters(
+        self,
+        position: LivePolicyPosition,
+        book: BookSnapshot,
+        current_cost_usd: float,
+    ) -> tuple[float, float, str | None]:
+        best_bid = book.best_bid
+        best_ask = book.best_ask
+        if best_bid is None or best_ask is None:
+            return 0.0, 0.0, "MISSING_BOOK"
+        if best_ask - best_bid <= 0.01:
+            return 0.0, 0.0, "NO_SPREAD"
+        fair_cap = (float(position.entry_fair) - 0.15) if position.entry_fair is not None else float(position.entry_price)
+        entry_cap = float(position.raw_json.get("limit_price") or position.entry_price)
+        price_cap = _quantize_cent_price(min(best_ask - 0.01, fair_cap, entry_cap))
+        price_floor = _quantize_cent_price(best_bid + 0.01)
+        midpoint = _quantize_cent_price((best_bid + best_ask) / 2.0)
+        limit_price = _quantize_cent_price(min(price_cap, max(price_floor, midpoint)))
+        if limit_price <= 0.0:
+            return 0.0, 0.0, "NO_RESTING_PRICE"
+        if limit_price <= best_bid:
+            return limit_price, 0.0, "NO_BID_IMPROVEMENT"
+        if limit_price >= best_ask:
+            return limit_price, 0.0, "WOULD_CROSS_ASK"
+        remaining_notional = max(0.0, float(position.target_notional_usd) - max(0.0, current_cost_usd))
+        target_notional = quantize_usdc(remaining_notional * max(0.0, float(self.config.resting_fallback_notional_fraction)))
+        if target_notional < float(self.settings.live_min_order_notional):
+            return limit_price, target_notional, "NO_REMAINING_NOTIONAL"
+        return limit_price, target_notional, None
+
     def _record_live_attempt(
         self,
         position_id: int,
@@ -828,6 +1129,7 @@ class LiveExecutionEngine:
         position_cost_usd: float | None = None,
         position_avg_price: float | None = None,
         raw_patch: dict[str, Any] | None = None,
+        order_mode: LiveOrderMode = LiveOrderMode.FAK,
     ) -> None:
         attempt_payload = dict(attempt.response.raw)
         attempt_payload["execution"] = {
@@ -849,7 +1151,7 @@ class LiveExecutionEngine:
                 self.store.next_live_attempt_seq(position_id),
                 position.selected_token_id,
                 position.selected_side,
-                LiveOrderMode.FAK,
+                order_mode,
                 attempt.limit_price,
                 attempt.target_notional_usd,
                 attempt.target_shares,
@@ -998,6 +1300,10 @@ class LiveExecutionEngine:
                 exposure,
             )
         )
+
+
+def _quantize_cent_price(value: float) -> float:
+    return round(max(0.0, min(1.0, math.floor((value + 1e-12) * 100.0) / 100.0)), 2)
 
 
 def _buy_fill_from_response(

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 import weather_trader.live.execution as live_execution
-from weather_trader.execution.clob_executor import AllowanceCheck, OrderSubmission
+from weather_trader.execution.clob_executor import AllowanceCheck, CancelSubmission, OrderSubmission
 from weather_trader.execution.contracts import (
     BookLevel,
     BookSnapshot,
@@ -28,6 +28,8 @@ from weather_trader.live.execution import (
     LIVE_POLICY_NAME,
     MOONSHOT_MIN_EDGE,
     MOONSHOT_POLICY_NAME,
+    NGBOOST_BEST_BUY_YES_NOTIONAL_USD,
+    NGBOOST_BEST_BUY_YES_POLICY_NAME,
     LiveExecutionConfig,
     LiveExecutionEngine,
     edge_core_policy_spec,
@@ -36,8 +38,9 @@ from weather_trader.live.execution import (
     live_strategy_plans,
     moonshot_edge_policy_spec,
     moonshot_policy_spec,
+    ngboost_best_buy_yes_policy_spec,
 )
-from weather_trader.research.policies import ResearchPolicyEvaluator
+from weather_trader.research.policies import NGBOOST_MODEL, ResearchPolicyEvaluator
 
 
 def test_live_strategy_is_registered_in_separate_store(tmp_path: Path) -> None:
@@ -53,10 +56,15 @@ def test_live_strategy_is_registered_in_separate_store(tmp_path: Path) -> None:
     assert rows[0]["max_notional_usd"] == 3.0
 
 
-def test_live_strategy_plans_include_one_dollar_moonshot() -> None:
+def test_live_strategy_plans_include_moonshot_and_ngboost_medium() -> None:
     plans = live_strategy_plans(LiveExecutionConfig(max_notional_usd=3.0))
 
-    assert [plan.strategy.name for plan in plans] == [LIVE_POLICY_NAME, EDGE_CORE_POLICY_NAME, MOONSHOT_POLICY_NAME]
+    assert [plan.strategy.name for plan in plans] == [
+        LIVE_POLICY_NAME,
+        EDGE_CORE_POLICY_NAME,
+        MOONSHOT_POLICY_NAME,
+        NGBOOST_BEST_BUY_YES_POLICY_NAME,
+    ]
     edge_core = plans[1]
     assert edge_core.target_notional_usd == pytest.approx(3.0)
     assert edge_core.strategy.max_notional_usd == pytest.approx(3.0)
@@ -81,6 +89,19 @@ def test_live_strategy_plans_include_one_dollar_moonshot() -> None:
     assert moonshot.policies[1].edge_min == pytest.approx(MOONSHOT_MIN_EDGE)
     assert moonshot.selected_side == TradeAction.BUY_NO
     assert moonshot.min_entry_price == pytest.approx(0.05)
+
+    ngboost = plans[3]
+    assert ngboost.target_notional_usd == pytest.approx(NGBOOST_BEST_BUY_YES_NOTIONAL_USD)
+    assert ngboost.strategy.max_notional_usd == pytest.approx(NGBOOST_BEST_BUY_YES_NOTIONAL_USD)
+    assert ngboost.strategy.strategy_bucket == StrategyBucket.BEST_BUCKET
+    assert len(ngboost.policies) == 1
+    assert ngboost.policies[0].model_name == NGBOOST_MODEL
+    assert ngboost.policies[0].strategy_bucket == StrategyBucket.BEST_BUCKET
+    assert ngboost.policies[0].entry_price_min == pytest.approx(0.05)
+    assert ngboost.policies[0].local_decision_start == "12:00"
+    assert ngboost.policies[0].local_decision_end == "15:00"
+    assert ngboost.selected_side == TradeAction.BUY_YES
+    assert ngboost.min_entry_price == pytest.approx(0.05)
 
 
 def test_consensus_requires_same_side_market_bucket_and_delay(tmp_path: Path) -> None:
@@ -176,6 +197,64 @@ def test_moonshot_edge_policy_spec_filters_late_high_edge_entries(tmp_path: Path
     selected = evaluator._first_by_scope(spec, filtered)
 
     assert [item["selected_bucket"] for item in selected] == ["76-77F", "78-79F"]
+
+
+def test_ngboost_best_buy_yes_policy_spec_filters_late_medium_entries(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    spec = ngboost_best_buy_yes_policy_spec()
+    evaluator = ResearchPolicyEvaluator(store, (spec,))
+    rows = [
+        _snapshot(
+            NGBOOST_MODEL,
+            id=1,
+            strategy_bucket=str(StrategyBucket.BEST_BUCKET),
+            selected_side="BUY_YES",
+            selected_yes_ask=0.05,
+            decision_time_local="2026-05-20T12:30:00-04:00",
+        ),
+        _snapshot(
+            NGBOOST_MODEL,
+            id=2,
+            strategy_bucket=str(StrategyBucket.BEST_BUCKET),
+            selected_bucket="74-75F",
+            selected_side="BUY_YES",
+            selected_yes_ask=0.04,
+            decision_time_local="2026-05-20T12:31:00-04:00",
+        ),
+        _snapshot(
+            NGBOOST_MODEL,
+            id=3,
+            strategy_bucket=str(StrategyBucket.BEST_BUCKET),
+            selected_bucket="76-77F",
+            selected_side="BUY_YES",
+            selected_yes_ask=0.08,
+            decision_time_local="2026-05-20T11:59:00-04:00",
+        ),
+        _snapshot(
+            NGBOOST_MODEL,
+            id=4,
+            strategy_bucket=str(StrategyBucket.HIGH_CONVICTION),
+            selected_bucket="78-79F",
+            selected_side="BUY_YES",
+            selected_yes_ask=0.08,
+            decision_time_local="2026-05-20T12:33:00-04:00",
+        ),
+        _snapshot(
+            DYNAMIC_TUNED_MODEL,
+            id=5,
+            strategy_bucket=str(StrategyBucket.BEST_BUCKET),
+            selected_bucket="80-81F",
+            selected_side="BUY_YES",
+            selected_yes_ask=0.08,
+            decision_time_local="2026-05-20T12:34:00-04:00",
+        ),
+    ]
+
+    filtered = evaluator._candidates_for_policy(spec, rows, [])
+    filtered = [item for item in filtered if item["selected_side"] == str(TradeAction.BUY_YES)]
+    selected = evaluator._first_by_scope(spec, filtered)
+
+    assert [item["selected_bucket"] for item in selected] == ["72-73F"]
 
 
 def test_live_position_insert_is_idempotent_by_scope(tmp_path: Path) -> None:
@@ -284,6 +363,12 @@ class FakeSubmitter:
         assert amount == pytest.approx(3.0)
         return OrderSubmission(True, "order-1", "matched", None, {"success": True, "status": "matched"})
 
+    def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+        raise AssertionError("unexpected GTC order")
+
+    def cancel_order(self, order_id: str) -> CancelSubmission:
+        raise AssertionError("unexpected cancel")
+
 
 def _snapshot(
     model_name: str,
@@ -297,6 +382,7 @@ def _snapshot(
     selected_no_ask: float = 0.4,
     selected_edge: float = 0.5,
     decision_time_local: str = "2026-05-20T12:30:00-04:00",
+    strategy_bucket: str = "HIGH_CONVICTION",
 ) -> dict:
     return {
         "id": id,
@@ -305,7 +391,7 @@ def _snapshot(
         "market_date": "2026-05-20",
         "market_family": "HIGH_TEMP",
         "obs_delay_bucket": obs_delay_bucket,
-        "strategy_bucket": "HIGH_CONVICTION",
+        "strategy_bucket": strategy_bucket,
         "selected_side": selected_side,
         "selected_market_id": selected_market_id,
         "selected_bucket": selected_bucket,
@@ -435,6 +521,29 @@ class SizingSubmitter(FakeSubmitter):
     def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
         assert amount == pytest.approx(self.expected_amount)
         return OrderSubmission(True, "order-1", "matched", None, {"success": True, "status": "matched"})
+
+
+class RestingFallbackSubmitter(FakeSubmitter):
+    def __init__(self, *, after_ttl: dict[str, object]) -> None:
+        self.after_ttl = after_ttl
+        self.gtc_calls: list[tuple[str, str, float, float]] = []
+        self.get_order_calls: list[str] = []
+        self.cancel_calls: list[str] = []
+
+    def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+        return OrderSubmission(False, None, "rejected", "insufficient depth", {"success": False, "status": "rejected", "errorMsg": "insufficient depth"})
+
+    def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+        self.gtc_calls.append((token_id, side, price, amount))
+        return OrderSubmission(True, "gtc-1", "live", None, {"success": True, "status": "live", "orderId": "gtc-1"})
+
+    def get_order(self, order_id: str) -> dict[str, object]:
+        self.get_order_calls.append(order_id)
+        return self.after_ttl
+
+    def cancel_order(self, order_id: str) -> CancelSubmission:
+        self.cancel_calls.append(order_id)
+        return CancelSubmission(True, [order_id], None, None, {"canceled": [order_id]})
 
 
 class RetrySubmitter(FakeSubmitter):
@@ -581,6 +690,125 @@ def test_live_submit_does_not_retry_when_first_order_fills_during_wait(tmp_path:
     row = store.live_open_positions()[0]
     assert row["cost_usd"] == pytest.approx(3.0)
     assert row["filled_shares"] == pytest.approx(7.5)
+
+
+def test_resting_fallback_places_gtc_for_full_remaining_notional_and_cancels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    submitter = RestingFallbackSubmitter(after_ttl={"success": True, "status": "live"})
+    book_client = StaticBookClient(BookSnapshot(
+        token_id="no-token",
+        bids=[BookLevel(price=0.33, size=100.0)],
+        asks=[BookLevel(price=0.42, size=100.0)],
+        timestamp="2026-05-20T18:00:06+00:00",
+    ))
+    sleeps: list[float] = []
+    monkeypatch.setattr(live_execution.time, "sleep", lambda seconds: sleeps.append(seconds))
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live", resting_fallback_ttl_seconds=60.0),
+        book_client=book_client,
+        submitter=submitter,
+    )
+    position = _live_position()
+    position_id = store.insert_live_policy_position(position)
+    assert position_id is not None
+
+    state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
+
+    assert state == LivePositionState.REJECTED
+    assert sleeps == [60.0]
+    assert book_client.calls == [["no-token"]]
+    assert submitter.gtc_calls == [("no-token", "BUY", 0.37, 3.0)]
+    assert submitter.get_order_calls == ["gtc-1"]
+    assert submitter.cancel_calls == ["gtc-1"]
+    attempts = store.connection.execute("select attempt_seq, order_mode, external_order_id, limit_price, target_notional_usd, final_state, raw_payload from live_order_attempts order by attempt_seq").fetchall()
+    assert [(row["attempt_seq"], row["order_mode"], row["external_order_id"], row["target_notional_usd"], row["final_state"]) for row in attempts] == [
+        (1, "FAK", None, 3.0, "REJECTED"),
+        (2, "GTC", "gtc-1", 3.0, "CANCELLED"),
+    ]
+    resting_payload = json.loads(attempts[1]["raw_payload"])["raw_payload"]["execution"]["resting_fallback"]
+    assert attempts[1]["limit_price"] == pytest.approx(0.37)
+    assert resting_payload["ttl_seconds"] == pytest.approx(60.0)
+    assert resting_payload["notional_fraction"] == pytest.approx(1.0)
+    assert resting_payload["best_bid"] == pytest.approx(0.33)
+    assert resting_payload["best_ask"] == pytest.approx(0.42)
+    assert resting_payload["cancel_response"] == {"canceled": ["gtc-1"]}
+
+
+def test_resting_fallback_updates_position_when_filled_during_ttl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    submitter = RestingFallbackSubmitter(after_ttl={"success": True, "status": "matched", "makingAmount": "3.0", "takingAmount": "8.1"})
+    book_client = StaticBookClient(BookSnapshot(
+        token_id="no-token",
+        bids=[BookLevel(price=0.33, size=100.0)],
+        asks=[BookLevel(price=0.42, size=100.0)],
+        timestamp="2026-05-20T18:00:06+00:00",
+    ))
+    sleeps: list[float] = []
+    monkeypatch.setattr(live_execution.time, "sleep", lambda seconds: sleeps.append(seconds))
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live", resting_fallback_ttl_seconds=60.0),
+        book_client=book_client,
+        submitter=submitter,
+    )
+    position = _live_position()
+    position_id = store.insert_live_policy_position(position)
+    assert position_id is not None
+
+    state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
+
+    assert state == LivePositionState.FILLED
+    assert sleeps == [60.0]
+    assert submitter.cancel_calls == []
+    row = store.live_open_positions()[0]
+    assert row["state"] == "FILLED"
+    assert row["cost_usd"] == pytest.approx(3.0)
+    assert row["filled_shares"] == pytest.approx(8.1)
+    assert row["avg_entry_price"] == pytest.approx(3.0 / 8.1)
+    attempt = store.connection.execute("select order_mode, final_state, cost_usd, filled_shares from live_order_attempts order by attempt_seq desc limit 1").fetchone()
+    assert attempt["order_mode"] == "GTC"
+    assert attempt["final_state"] == "FILLED"
+    assert attempt["cost_usd"] == pytest.approx(3.0)
+    assert attempt["filled_shares"] == pytest.approx(8.1)
+
+
+def test_resting_fallback_is_consensus_only(tmp_path: Path) -> None:
+    submitter = RestingFallbackSubmitter(after_ttl={"success": True, "status": "live"})
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live"),
+        book_client=StaticBookClient(_retry_book()),
+        submitter=submitter,
+    )
+    position = _live_position().__class__(**{**_live_position().__dict__, "strategy_name": EDGE_CORE_POLICY_NAME})
+    position_id = store.insert_live_policy_position(position)
+    assert position_id is not None
+
+    state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
+
+    assert state == LivePositionState.REJECTED
+    assert submitter.gtc_calls == []
+    assert store.connection.execute("select count(*) count from live_order_attempts").fetchone()["count"] == 1
+
+
+def test_resting_order_parameters_respect_entry_and_fair_caps(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), mode="live"))
+    position = _live_position().__class__(**{**_live_position().__dict__, "entry_fair": 0.48, "raw_json": {"limit_price": 0.36}})
+    book = BookSnapshot(
+        token_id="no-token",
+        bids=[BookLevel(price=0.31, size=100.0)],
+        asks=[BookLevel(price=0.50, size=100.0)],
+        timestamp="2026-05-20T18:00:06+00:00",
+    )
+
+    limit_price, target_notional, reason = engine._resting_order_parameters(position, book, current_cost_usd=0.0)
+
+    assert reason is None
+    assert limit_price == pytest.approx(0.33)
+    assert target_notional == pytest.approx(3.0)
 
 
 def test_live_submit_uses_exchange_returned_fill_amounts(tmp_path: Path) -> None:
