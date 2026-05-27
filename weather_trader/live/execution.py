@@ -47,7 +47,8 @@ EDGE_CORE_POLICY_NAME = "pm_us12_dynamic_tuned_hc_late_buy_no_edge_025_by_bucket
 MOONSHOT_POLICY_NAME = "pm_us12_dynamic_tuned_hc_late_entry_05_10_buy_no_by_bucket_side_delay_first"
 NGBOOST_BEST_BUY_YES_POLICY_NAME = "pm_us12_ngboost_best_bucket_late_buy_yes_medium_by_bucket_side_delay_first"
 LIVE_MODEL_GROUP = "obs_bucket_consensus"
-LIVE_ENTRY_PRICE_MAX = 0.50
+DEFAULT_LIVE_ENTRY_PRICE_MAX = 0.50
+LIVE_ENTRY_PRICE_MAX = DEFAULT_LIVE_ENTRY_PRICE_MAX
 EDGE_CORE_MIN_EDGE = 0.25
 MOONSHOT_MIN_EDGE = 0.90
 MOONSHOT_NOTIONAL_USD = 1.0
@@ -85,6 +86,7 @@ class LiveExecutionConfig:
     max_book_age_seconds: float = 10.0
     max_notional_usd: float = 10.0
     min_entry_price: float = 0.05
+    max_entry_price: float | None = DEFAULT_LIVE_ENTRY_PRICE_MAX
     require_allowance_check: bool = True
     retry_wait_seconds: float = 5.0
     enable_resting_fallback: bool = True
@@ -274,7 +276,7 @@ def live_policy_spec(config: LiveExecutionConfig) -> ResearchPolicySpec:
         model_group=LIVE_MODEL_GROUP,
         station_allow_set=PM_ACTIVE_US12_STATIONS,
         entry_price_min=config.min_entry_price,
-        entry_price_max=LIVE_ENTRY_PRICE_MAX,
+        entry_price_max=config.max_entry_price,
         local_decision_start="12:00",
         local_decision_end="15:00",
         uniqueness_key_mode="station_date_bucket_side_obs_delay",
@@ -289,7 +291,7 @@ def edge_core_policy_spec(config: LiveExecutionConfig) -> ResearchPolicySpec:
         model_name=DYNAMIC_TUNED_MODEL,
         station_allow_set=PM_ACTIVE_US12_STATIONS,
         entry_price_min=config.min_entry_price,
-        entry_price_max=LIVE_ENTRY_PRICE_MAX,
+        entry_price_max=config.max_entry_price,
         edge_min=EDGE_CORE_MIN_EDGE,
         local_decision_start="12:00",
         local_decision_end="15:00",
@@ -312,7 +314,7 @@ def moonshot_policy_spec() -> ResearchPolicySpec:
     )
 
 
-def moonshot_edge_policy_spec() -> ResearchPolicySpec:
+def moonshot_edge_policy_spec(config: LiveExecutionConfig) -> ResearchPolicySpec:
     return ResearchPolicySpec(
         MOONSHOT_POLICY_NAME,
         "model",
@@ -320,7 +322,7 @@ def moonshot_edge_policy_spec() -> ResearchPolicySpec:
         model_name=DYNAMIC_TUNED_MODEL,
         station_allow_set=PM_ACTIVE_US12_STATIONS,
         entry_price_min=0.05,
-        entry_price_max=LIVE_ENTRY_PRICE_MAX,
+        entry_price_max=config.max_entry_price,
         edge_min=MOONSHOT_MIN_EDGE,
         local_decision_start="12:00",
         local_decision_end="15:00",
@@ -328,7 +330,7 @@ def moonshot_edge_policy_spec() -> ResearchPolicySpec:
     )
 
 
-def ngboost_best_buy_yes_policy_spec() -> ResearchPolicySpec:
+def ngboost_best_buy_yes_policy_spec(config: LiveExecutionConfig) -> ResearchPolicySpec:
     return ResearchPolicySpec(
         NGBOOST_BEST_BUY_YES_POLICY_NAME,
         "model",
@@ -336,7 +338,7 @@ def ngboost_best_buy_yes_policy_spec() -> ResearchPolicySpec:
         model_name=NGBOOST_MODEL,
         station_allow_set=PM_ACTIVE_US12_STATIONS,
         entry_price_min=0.05,
-        entry_price_max=LIVE_ENTRY_PRICE_MAX,
+        entry_price_max=config.max_entry_price,
         local_decision_start="12:00",
         local_decision_end="15:00",
         uniqueness_key_mode="station_date_bucket_side_obs_delay",
@@ -360,14 +362,14 @@ def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, 
         ),
         LiveStrategyPlan(
             moonshot_live_strategy(),
-            (moonshot_policy_spec(), moonshot_edge_policy_spec()),
+            (moonshot_policy_spec(), moonshot_edge_policy_spec(config)),
             MOONSHOT_NOTIONAL_USD,
             TradeAction.BUY_NO,
             config.min_entry_price,
         ),
         LiveStrategyPlan(
             ngboost_best_buy_yes_live_strategy(),
-            (ngboost_best_buy_yes_policy_spec(),),
+            (ngboost_best_buy_yes_policy_spec(config),),
             NGBOOST_BEST_BUY_YES_NOTIONAL_USD,
             TradeAction.BUY_YES,
             config.min_entry_price,

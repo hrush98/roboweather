@@ -25,7 +25,7 @@ from weather_trader.live.execution import (
     EDGE_CORE_MIN_EDGE,
     EDGE_CORE_POLICY_NAME,
     LIVE_MODEL_GROUP,
-    LIVE_ENTRY_PRICE_MAX,
+    DEFAULT_LIVE_ENTRY_PRICE_MAX,
     LIVE_POLICY_NAME,
     MOONSHOT_MIN_EDGE,
     MOONSHOT_POLICY_NAME,
@@ -57,8 +57,12 @@ def test_live_strategy_is_registered_in_separate_store(tmp_path: Path) -> None:
     assert rows[0]["max_notional_usd"] == 3.0
 
 
+def test_live_execution_config_defaults_to_fifty_cent_entry_cap() -> None:
+    assert LiveExecutionConfig().max_entry_price == pytest.approx(DEFAULT_LIVE_ENTRY_PRICE_MAX)
+
+
 def test_live_strategy_plans_include_moonshot_and_ngboost_medium() -> None:
-    plans = live_strategy_plans(LiveExecutionConfig(max_notional_usd=3.0))
+    plans = live_strategy_plans(LiveExecutionConfig(max_notional_usd=3.0, max_entry_price=0.40))
 
     assert [plan.strategy.name for plan in plans] == [
         LIVE_POLICY_NAME,
@@ -67,7 +71,7 @@ def test_live_strategy_plans_include_moonshot_and_ngboost_medium() -> None:
         NGBOOST_BEST_BUY_YES_POLICY_NAME,
     ]
     consensus = plans[0]
-    assert consensus.policies[0].entry_price_max == pytest.approx(LIVE_ENTRY_PRICE_MAX)
+    assert consensus.policies[0].entry_price_max == pytest.approx(0.40)
 
     edge_core = plans[1]
     assert edge_core.target_notional_usd == pytest.approx(3.0)
@@ -76,7 +80,7 @@ def test_live_strategy_plans_include_moonshot_and_ngboost_medium() -> None:
     assert edge_core.policies[0].model_name == DYNAMIC_TUNED_MODEL
     assert edge_core.policies[0].edge_min == pytest.approx(EDGE_CORE_MIN_EDGE)
     assert edge_core.policies[0].entry_price_min == pytest.approx(0.05)
-    assert edge_core.policies[0].entry_price_max == pytest.approx(LIVE_ENTRY_PRICE_MAX)
+    assert edge_core.policies[0].entry_price_max == pytest.approx(0.40)
     assert edge_core.selected_side == TradeAction.BUY_NO
     assert edge_core.min_entry_price == pytest.approx(0.05)
 
@@ -90,7 +94,7 @@ def test_live_strategy_plans_include_moonshot_and_ngboost_medium() -> None:
     assert moonshot.policies[0].entry_price_max == pytest.approx(0.10)
     assert moonshot.policies[1].model_name == DYNAMIC_TUNED_MODEL
     assert moonshot.policies[1].entry_price_min == pytest.approx(0.05)
-    assert moonshot.policies[1].entry_price_max == pytest.approx(LIVE_ENTRY_PRICE_MAX)
+    assert moonshot.policies[1].entry_price_max == pytest.approx(0.40)
     assert moonshot.policies[1].edge_min == pytest.approx(MOONSHOT_MIN_EDGE)
     assert moonshot.selected_side == TradeAction.BUY_NO
     assert moonshot.min_entry_price == pytest.approx(0.05)
@@ -103,7 +107,7 @@ def test_live_strategy_plans_include_moonshot_and_ngboost_medium() -> None:
     assert ngboost.policies[0].model_name == NGBOOST_MODEL
     assert ngboost.policies[0].strategy_bucket == StrategyBucket.BEST_BUCKET
     assert ngboost.policies[0].entry_price_min == pytest.approx(0.05)
-    assert ngboost.policies[0].entry_price_max == pytest.approx(LIVE_ENTRY_PRICE_MAX)
+    assert ngboost.policies[0].entry_price_max == pytest.approx(0.40)
     assert ngboost.policies[0].local_decision_start == "12:00"
     assert ngboost.policies[0].local_decision_end == "15:00"
     assert ngboost.selected_side == TradeAction.BUY_YES
@@ -192,7 +196,7 @@ def test_moonshot_policy_spec_filters_late_five_to_ten_cent_entries(tmp_path: Pa
 
 def test_moonshot_edge_policy_spec_filters_late_high_edge_entries(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
-    spec = moonshot_edge_policy_spec()
+    spec = moonshot_edge_policy_spec(LiveExecutionConfig())
     evaluator = ResearchPolicyEvaluator(store, (spec,))
     rows = [
         _snapshot(DYNAMIC_TUNED_MODEL, id=1, selected_no_ask=0.04, selected_edge=0.90, decision_time_local="2026-05-20T12:30:00-04:00"),
@@ -211,7 +215,7 @@ def test_moonshot_edge_policy_spec_filters_late_high_edge_entries(tmp_path: Path
 
 def test_ngboost_best_buy_yes_policy_spec_filters_late_medium_entries(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
-    spec = ngboost_best_buy_yes_policy_spec()
+    spec = ngboost_best_buy_yes_policy_spec(LiveExecutionConfig())
     evaluator = ResearchPolicyEvaluator(store, (spec,))
     rows = [
         _snapshot(
