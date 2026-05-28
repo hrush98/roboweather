@@ -834,6 +834,19 @@ class RoboWeatherTUI(App):
         live_rr = total_mtm / total_cost if total_cost else None
         rejected = sum(1 for row in live_rows if str(row.get("state")) == "REJECTED")
         live_strategy_names = {str(row.get("strategy_name")) for row in live_rows}
+        resting_orders = []
+        for order in live_orders:
+            try:
+                payload = json.loads(str(order.get("raw_payload") or "{}"))
+            except Exception:
+                payload = {}
+            execution = payload.get("execution") if isinstance(payload, dict) else {}
+            if str(order.get("order_mode", "")) == "GTC" and execution.get("attempt_label") == "resting_fallback":
+                resting_orders.append(order)
+        resting_filled = sum(1 for order in resting_orders if str(order.get("final_state", "")) == "FILLED")
+        resting_partial = sum(1 for order in resting_orders if str(order.get("final_state", "")) == "PARTIAL")
+        resting_incomplete = len(resting_orders) - resting_filled
+
         settings = load_live_settings()
         daily_key = datetime.now(timezone.utc).date().isoformat()
         open_risk = float(exposure.get("open_risk_usd") or 0.0)
@@ -863,6 +876,8 @@ class RoboWeatherTUI(App):
             ("quoted positions", f"{marked}/{len(live_rows)}", f"latest book age {'n/a' if latest_book_age is None else f'{latest_book_age:.1f}m'}"),
             ("strategies", str(active_strategy_count), f"{len(live_strategy_names & registered_policy_names)} have positions today"),
             ("order attempts", str(len(live_orders)), f"last {latest_order.get('final_state', '')} {latest_order.get('final_reason', '')}"),
+            ("resting fallback", str(len(resting_orders)), f"{resting_filled} filled, {resting_incomplete} incomplete after 120s ({resting_partial} partial)"),
+
             ("last event", str(latest_event.get("event_type", "")), str(latest_event.get("message", ""))[:80]),
             ("latest risk snapshot", str(latest_risk.get("timestamp", ""))[:19], _fmt_money(latest_risk.get("open_risk_usd"))),
         ]

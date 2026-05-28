@@ -31,9 +31,9 @@ Updated: 2026-05-28
 ### Execution rules
 
 - Live entries are capped at `<= 0.50` because historical replay showed materially better return on risk below this price.
-- Orders use FAK first, with retry handling for transient depth/order-version failures.
+- Orders use FAK first, with retry handling for transient depth/order-version failures. Partial FAK fills continue into a 120-second resting remainder for the leftover notional.
 - Consensus HC may place a single resting fallback limit order after eligible FAK failure paths.
-- Resting fallback TTL is 60 seconds and targets 100% of remaining notional.
+- Resting fallback TTL is 120 seconds and targets the remaining notional after the FAK retry path; keep whatever fills before the cancel.
 - The resting fallback is intentionally narrow: it is for improving fill odds without adding a broad passive market-making system.
 - Live settlement in the live DB updates only when the Polymarket live resolver runs. Polymarket UI may show resolution before `live_policy_positions` is marked `SETTLED`.
 
@@ -66,7 +66,7 @@ The max order cap is set to $25 so the largest intended order cannot exceed the 
 
 FAK retries address temporary book/depth/order-version issues. When those still fail for Consensus HC, a short-lived passive order can capture fills inside or near the intended risk price without leaving stale exposure in the market.
 
-The 60-second TTL is a deliberate compromise: weather does not normally reprice enough in one minute to invalidate the original edge, but the order should not remain open after the cycle context has aged.
+The 120-second TTL is a deliberate compromise: weather does not normally reprice enough in two minutes to invalidate the original edge, but the order should not remain open after the cycle context has aged.
 
 ## Journal
 
@@ -81,6 +81,7 @@ The 60-second TTL is a deliberate compromise: weather does not normally reprice 
 - Current live entry cap is `<= 0.50`.
 - Current risk caps are max order $25, station/date $60, station/date/side $40, exact bucket/side $25, total open risk $375, daily new risk $250.
 - Operator note: May 27 looked rough intraday, but Polymarket UI later showed Seattle, Los Angeles, and the smaller New York NO positions resolving favorably while several other positions lost. The live DB still requires the resolver to mark final settled PnL.
+- Live candidate generation now builds every strategy bucket required by the active policy stack, including `BEST_BUCKET` for NGBoost BUY_YES, instead of only `HIGH_CONVICTION`.
 
 ## Update Protocol
 

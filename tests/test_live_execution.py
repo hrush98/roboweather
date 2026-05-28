@@ -14,11 +14,14 @@ from weather_trader.execution.contracts import (
     LivePositionState,
     LiveStrategy,
     MarketFamily,
+    MarketSnapshot,
     StrategyBucket,
     TradeAction,
     utc_now_iso,
 )
+from weather_trader.execution.fair_value import FairValueResult
 from weather_trader.execution.store import ExecutionStore
+from weather_trader.execution.weather import StationWeatherState
 from weather_trader.live.execution import (
     CATBOOST_MODEL,
     DYNAMIC_TUNED_MODEL,
@@ -61,6 +64,7 @@ def test_live_strategy_is_registered_in_separate_store(tmp_path: Path) -> None:
 
 def test_live_execution_config_defaults_to_fifty_cent_entry_cap() -> None:
     assert LiveExecutionConfig().max_entry_price == pytest.approx(DEFAULT_LIVE_ENTRY_PRICE_MAX)
+    assert LiveExecutionConfig().resting_fallback_ttl_seconds == pytest.approx(120.0)
 
 
 def test_live_strategy_plans_include_moonshot_and_ngboost_medium() -> None:
@@ -284,6 +288,64 @@ def test_ngboost_best_buy_yes_policy_spec_filters_late_medium_entries(tmp_path: 
     assert [item["selected_bucket"] for item in selected] == ["72-73F"]
 
 
+def test_live_build_candidates_includes_ngboost_best_bucket(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live"),
+    )
+    engine.fair_value_engines = [StaticFairValueEngine()]
+    as_of_utc = datetime(2026, 5, 20, 16, 30, tzinfo=timezone.utc)
+    weather = StationWeatherState(
+        station="KATL",
+        local_date=date(2026, 5, 20),
+        latest_obs_time="2026-05-20T16:15:00+00:00",
+        latest_obs_age_minutes=15.0,
+        current_temp=74.0,
+        high_so_far=75.0,
+        low_so_far=61.0,
+        hour_local=12,
+        day_of_year=140,
+        temp_change_1h=1.0,
+        temp_change_3h=3.0,
+        dewpoint=60.0,
+        wind_speed=4.0,
+        wind_dir_sin=0.0,
+        wind_dir_cos=1.0,
+        cloud_cover_code=1.0,
+        hrrr_current_temp=None,
+        hrrr_remaining_max=None,
+        hrrr_remaining_min=None,
+        stale=False,
+    )
+    markets = [
+        _candidate_market("market-1", 72, 73, "yes-1", "no-1"),
+        _candidate_market("market-2", 74, 75, "yes-2", "no-2"),
+        _candidate_market("market-3", 76, 77, "yes-3", "no-3"),
+    ]
+    books = {
+        "yes-1": _book("yes-1", ask=0.11),
+        "no-1": _book("no-1", ask=0.82),
+        "yes-2": _book("yes-2", ask=0.13),
+        "no-2": _book("no-2", ask=0.80),
+        "yes-3": _book("yes-3", ask=0.12),
+        "no-3": _book("no-3", ask=0.85),
+    }
+
+    candidates = engine._build_candidates(markets, books, {"KATL": weather}, as_of_utc, errors=[])
+
+    ngboost = [candidate for candidate in candidates if candidate.plan.strategy.name == NGBOOST_BEST_BUY_YES_POLICY_NAME]
+    assert len(ngboost) == 1
+    position = ngboost[0].position
+    assert position.model_group == NGBOOST_MODEL
+    assert position.strategy_bucket == StrategyBucket.BEST_BUCKET
+    assert position.selected_side == TradeAction.BUY_YES
+    assert position.selected_market_id == "market-2"
+    assert position.selected_bucket == "74-75F"
+    assert position.entry_price == pytest.approx(0.13)
+    assert position.entry_edge == pytest.approx(0.31)
+
+
 def test_live_position_insert_is_idempotent_by_scope(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
     position = _live_position()
@@ -395,6 +457,54 @@ class FakeSubmitter:
 
     def cancel_order(self, order_id: str) -> CancelSubmission:
         raise AssertionError("unexpected cancel")
+
+
+class StaticFairValueEngine:
+    model_name = NGBOOST_MODEL
+
+    def supports_market_family(self, market_family: str | MarketFamily) -> bool:
+        return str(market_family) == str(MarketFamily.HIGH_TEMP)
+
+    def price_markets(self, markets: list[MarketSnapshot], weather: StationWeatherState) -> dict[str, FairValueResult]:
+        fair_yes_by_market = {"market-1": 0.20, "market-2": 0.44, "market-3": 0.28}
+        return {
+            market.market_id: FairValueResult(
+                fair_yes=fair_yes_by_market[market.market_id],
+                fair_no=1.0 - fair_yes_by_market[market.market_id],
+                reason_codes=["MODEL_PROBABILITY", "HRRR_MISSING_LOG"],
+                model_name=self.model_name,
+                model_features_hash="test-hash",
+            )
+            for market in markets
+        }
+
+
+def _candidate_market(market_id: str, lower_f: int, upper_f: int, yes_token_id: str, no_token_id: str) -> MarketSnapshot:
+    return MarketSnapshot(
+        market_id=market_id,
+        condition_id=None,
+        question="q",
+        slug=market_id,
+        city="Atlanta",
+        station="KATL",
+        market_date=date(2026, 5, 20),
+        lower_f=lower_f,
+        upper_f=upper_f,
+        yes_token_id=yes_token_id,
+        no_token_id=no_token_id,
+        end_date="2026-05-21T00:00:00Z",
+        resolution_source="test",
+        discovered_at="2026-05-20T16:00:00+00:00",
+    )
+
+
+def _book(token_id: str, *, ask: float) -> BookSnapshot:
+    return BookSnapshot(
+        token_id=token_id,
+        bids=[BookLevel(price=ask - 0.02, size=100.0)],
+        asks=[BookLevel(price=ask, size=100.0)],
+        timestamp="2026-05-20T16:30:00+00:00",
+    )
 
 
 def _snapshot(
@@ -610,6 +720,39 @@ class RefreshThenFillSubmitter(FakeSubmitter):
         return OrderSubmission(True, "order-1", "live", None, {"success": True, "status": "live"})
 
 
+class PartialRemainderSubmitter(FakeSubmitter):
+    def __init__(self) -> None:
+        self.place_calls: list[float] = []
+        self.get_order_calls: list[str] = []
+        self.cancel_calls: list[str] = []
+        self.gtc_calls: list[tuple[str, str, float, float]] = []
+        self._gtc_amount: float = 0.0
+        self._gtc_price: float = 0.0
+
+    def get_order(self, order_id: str) -> dict[str, object]:
+        self.get_order_calls.append(order_id)
+        if order_id == "gtc-1":
+            filled = self._gtc_amount / 2.0
+            return {"success": True, "status": "partial", "makingAmount": str(filled), "takingAmount": str(filled / self._gtc_price)}
+        return {"success": True, "status": "live"}
+
+    def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+        self.place_calls.append(amount)
+        if len(self.place_calls) == 1:
+            return OrderSubmission(True, "order-1", "partial", None, {"success": True, "status": "partial", "makingAmount": "0.1", "takingAmount": "0.2"})
+        return OrderSubmission(True, "order-2", "partial", None, {"success": True, "status": "partial", "makingAmount": "0.1", "takingAmount": "0.2"})
+
+    def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+        self.gtc_calls.append((token_id, side, price, amount))
+        self._gtc_amount = amount
+        self._gtc_price = price
+        return OrderSubmission(True, "gtc-1", "live", None, {"success": True, "status": "live", "orderId": "gtc-1"})
+
+    def cancel_order(self, order_id: str) -> CancelSubmission:
+        self.cancel_calls.append(order_id)
+        return CancelSubmission(True, [order_id], None, None, {"canceled": [order_id]})
+
+
 class StaticBookClient:
     def __init__(self, book: BookSnapshot) -> None:
         self.book = book
@@ -689,10 +832,52 @@ def test_live_submit_retries_once_after_wait_with_fresh_book(tmp_path: Path, mon
     assert row["cost_usd"] == pytest.approx(1.22)
     assert row["filled_shares"] == pytest.approx(2.75)
 
+def test_live_submit_partial_fak_rolls_remainder_into_resting_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    submitter = PartialRemainderSubmitter()
+    book_client = StaticBookClient(_retry_book(price=0.35, size=2.44))
+    sleeps: list[float] = []
+    monkeypatch.setattr(live_execution.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setenv("LIVE_MIN_ORDER_NOTIONAL", "0.01")
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live", retry_wait_seconds=5.0),
+        book_client=book_client,
+        submitter=submitter,
+    )
+    position = _live_position()
+    position_id = store.insert_live_policy_position(position)
+    assert position_id is not None
+
+    state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
+
+    assert state == LivePositionState.PARTIAL
+    assert sleeps == [5.0, 120.0]
+    assert len(submitter.place_calls) == 2
+    assert submitter.place_calls[0] == pytest.approx(3.0)
+    assert submitter.place_calls[1] > 0
+    assert submitter.get_order_calls == ["order-1", "gtc-1"]
+    assert submitter.cancel_calls == ["gtc-1"]
+    assert len(submitter.gtc_calls) == 1
+    assert submitter.gtc_calls[0][0] == "no-token"
+    assert submitter.gtc_calls[0][1] == "BUY"
+    assert submitter.gtc_calls[0][3] == pytest.approx(2.8)
+    attempts = store.connection.execute("select attempt_seq, order_mode, final_state from live_order_attempts order by attempt_seq").fetchall()
+    assert [(row["attempt_seq"], row["order_mode"], row["final_state"]) for row in attempts] == [
+        (1, "FAK", "PARTIAL"),
+        (2, "FAK", "PARTIAL"),
+        (3, "GTC", "PARTIAL"),
+    ]
+    row = store.live_open_positions()[0]
+    assert row["state"] == "PARTIAL"
+    assert row["cost_usd"] == pytest.approx(1.6)
+
+
+
 
 def test_live_submit_does_not_retry_when_first_order_fills_during_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     submitter = RefreshThenFillSubmitter()
-    book_client = StaticBookClient(_retry_book())
+    book_client = StaticBookClient(_retry_book(price=0.35, size=2.44))
     sleeps: list[float] = []
     monkeypatch.setattr(live_execution.time, "sleep", lambda seconds: sleeps.append(seconds))
     store = ExecutionStore(tmp_path / "live.sqlite")

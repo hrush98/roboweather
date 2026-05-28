@@ -94,7 +94,7 @@ class LiveExecutionConfig:
     require_allowance_check: bool = True
     retry_wait_seconds: float = 5.0
     enable_resting_fallback: bool = True
-    resting_fallback_ttl_seconds: float = 60.0
+    resting_fallback_ttl_seconds: float = 120.0
     resting_fallback_notional_fraction: float = 1.0
 
 
@@ -520,13 +520,23 @@ class LiveExecutionEngine:
                         )
                         for market in group_markets
                     ]
-                    selection = self.decision_engine.select_strategy(contexts, 1000.0, StrategyBucket.HIGH_CONVICTION)
-                    for bucket in due_buckets:
-                        snapshot = build_prediction_snapshot(selection, contexts, weather, market_date, as_of_utc, bucket, engine.model_name)
-                        item = dataclass_to_jsonable(snapshot)
-                        item["id"] = snapshot_id
-                        snapshot_id += 1
-                        snapshots.append(item)
+                    required_strategy_buckets = sorted(
+                        {
+                            policy.strategy_bucket
+                            for plan in self.strategy_plans
+                            for policy in plan.policies
+                            if policy.strategy_bucket is not None
+                        },
+                        key=str,
+                    )
+                    for strategy_bucket in required_strategy_buckets:
+                        selection = self.decision_engine.select_strategy(contexts, 1000.0, strategy_bucket)
+                        for bucket in due_buckets:
+                            snapshot = build_prediction_snapshot(selection, contexts, weather, market_date, as_of_utc, bucket, engine.model_name)
+                            item = dataclass_to_jsonable(snapshot)
+                            item["id"] = snapshot_id
+                            snapshot_id += 1
+                            snapshots.append(item)
                 except Exception as exc:
                     errors.append(f"model:{engine.model_name}:group:{station_id}:{market_date}: {exc}")
         consensus = self.policy_evaluator._build_consensus(snapshots)
@@ -798,7 +808,6 @@ class LiveExecutionEngine:
                     {"retry_book_timestamp": retry_book.timestamp, "retry_reason": retry_reason},
                 )
             )
-            first_order_open = first_attempt.state in {LivePositionState.SUBMITTED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN}
             if not first_order_open:
                 fallback_state = self._submit_resting_fallback(
                     position_id=position_id,
@@ -819,39 +828,19 @@ class LiveExecutionEngine:
             target_notional_usd=retry_target_notional,
             assume_filled=False,
         )
-        first_order_open = first_attempt.state in {LivePositionState.SUBMITTED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN}
-        if second_attempt.state == LivePositionState.REJECTED and first_order_open:
-            self._record_live_attempt(
-                position_id,
-                position,
-                attempt_label="retry",
-                attempt=second_attempt,
-                update_position=False,
-                raw_patch={
-                    "retry": {
-                        "attempt": "retry",
-                        "wait_seconds": float(self.config.retry_wait_seconds),
-                        "limit_price": retry_limit_price,
-                        "target_notional_usd": retry_target_notional,
-                        "retry_book_timestamp": retry_book.timestamp,
-                        "retry_reason": retry_reason,
-                        "first_attempt_order_id": first_attempt.response.order_id,
-                        "first_attempt_state": str(first_attempt.state),
-                    }
-                },
-            )
-            return first_attempt.state
-
         cumulative_filled_shares = current_filled_shares + second_attempt.filled_shares
         cumulative_cost_usd = current_cost_usd + second_attempt.cost_usd
         cumulative_avg_price = cumulative_cost_usd / cumulative_filled_shares if cumulative_filled_shares > 0 else None
+        second_attempt_state = second_attempt.state
+        if second_attempt_state in {LivePositionState.SUBMITTED, LivePositionState.DELAYED, LivePositionState.UNKNOWN} and cumulative_filled_shares > 0:
+            second_attempt_state = LivePositionState.PARTIAL
         self._record_live_attempt(
             position_id,
             position,
             attempt_label="retry",
             attempt=second_attempt,
-            update_position=True,
-            position_state=second_attempt.state,
+            update_position=second_attempt.state != LivePositionState.REJECTED,
+            position_state=second_attempt_state,
             position_filled_shares=cumulative_filled_shares,
             position_cost_usd=cumulative_cost_usd,
             position_avg_price=cumulative_avg_price,
@@ -868,19 +857,28 @@ class LiveExecutionEngine:
                 }
             },
         )
-        if second_attempt.state == LivePositionState.REJECTED:
-            fallback_state = self._submit_resting_fallback(
-                position_id=position_id,
-                position=position,
-                current_cost_usd=current_cost_usd,
-                current_filled_shares=current_filled_shares,
-                book=retry_book,
-                source_reason=second_attempt.response.error_msg or second_attempt.response.status or "retry_rejected",
-                errors=errors,
-            )
-            if fallback_state is not None:
-                return fallback_state
-        return second_attempt.state if second_attempt.state in {LivePositionState.SUBMITTED, LivePositionState.FILLED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN} else first_attempt.state
+        remaining_notional = max(0.0, float(position.target_notional_usd) - max(0.0, cumulative_cost_usd))
+        if remaining_notional < float(self.settings.live_min_order_notional):
+            return second_attempt_state if second_attempt_state in {LivePositionState.SUBMITTED, LivePositionState.FILLED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN} else first_attempt.state
+
+        fallback_state = self._submit_resting_fallback(
+            position_id=position_id,
+            position=position,
+            current_cost_usd=cumulative_cost_usd,
+            current_filled_shares=cumulative_filled_shares,
+            book=retry_book,
+            source_reason=(
+                "retry_remainder_rejected"
+                if second_attempt.state == LivePositionState.REJECTED
+                else "retry_remainder_partial"
+                if second_attempt_state == LivePositionState.PARTIAL
+                else "retry_remainder_open"
+            ),
+            errors=errors,
+        )
+        if fallback_state is not None:
+            return fallback_state
+        return second_attempt_state if second_attempt_state in {LivePositionState.SUBMITTED, LivePositionState.FILLED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN} else first_attempt.state
 
     def _place_attempt(
         self,
@@ -889,6 +887,7 @@ class LiveExecutionEngine:
         limit_price: float,
         target_notional_usd: float,
         assume_filled: bool,
+
     ) -> LiveAttemptResult:
         limit_price = quantize_price(limit_price)
         target_notional_usd = quantize_usdc(target_notional_usd)
