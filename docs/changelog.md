@@ -2,6 +2,11 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-05-28
+
+- Added `docs/live-trading-journal.md` as the current live trading state and rationale tracker.
+- Linked the journal from `AGENTS.md` so future agents update it when live strategy, sizing, risk, execution, or material trading assumptions change.
+
 ## 2026-05-06
 
 - Added backfilled changelog and a modeling/trading decision reference doc.
