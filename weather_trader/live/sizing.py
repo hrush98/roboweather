@@ -60,21 +60,28 @@ class LiveSizingModel:
         selected_bucket: str | None,
         sweep_depth_to_cap: float | None,
         exposure: dict[str, Any],
+        target_notional_usd: float | None = None,
         as_of_utc: datetime | None = None,
     ) -> LiveSizingDecision:
         as_of_utc = as_of_utc or datetime.now(timezone.utc)
         side = str(selected_side)
         market_date_text = str(market_date)
-        base = float(self.settings.live_base_notional_usd)
-        is_moonshot = "moonshot" in strategy_name.lower() or "entry_05_10" in strategy_name.lower()
-        if is_moonshot:
-            policy_multiplier = 0.0
+        if target_notional_usd is not None:
+            base = float(target_notional_usd)
+            policy_multiplier = 1.0
             price_multiplier = 1.0
-            pre_cap = MOONSHOT_FIXED_NOTIONAL_USD
+            pre_cap = base
         else:
-            policy_multiplier = CONSENSUS_POLICY_MULTIPLIER if "consensus" in strategy_name else CORE_POLICY_MULTIPLIER
-            price_multiplier = _price_multiplier(entry_price)
-            pre_cap = base * policy_multiplier * price_multiplier
+            base = float(self.settings.live_base_notional_usd)
+            is_moonshot = "moonshot" in strategy_name.lower() or "entry_05_10" in strategy_name.lower()
+            if is_moonshot:
+                policy_multiplier = 0.0
+                price_multiplier = 1.0
+                pre_cap = MOONSHOT_FIXED_NOTIONAL_USD
+            else:
+                policy_multiplier = CONSENSUS_POLICY_MULTIPLIER if "consensus" in strategy_name else CORE_POLICY_MULTIPLIER
+                price_multiplier = _price_multiplier(entry_price)
+                pre_cap = base * policy_multiplier * price_multiplier
 
         station_date_key = f"{station}:{market_date_text}"
         station_date_side_key = f"{station}:{market_date_text}:{side}"

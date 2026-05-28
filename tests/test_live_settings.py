@@ -128,12 +128,12 @@ def test_live_sizing_defaults() -> None:
     assert settings.live_bankroll_usd == 2000
     assert settings.live_fixed_fraction == 0.005
     assert settings.live_base_notional_usd == 10
-    assert settings.live_max_usd_per_order == 10
-    assert settings.live_max_exposure_per_station_date == 25
-    assert settings.live_max_exposure_per_station_date_side == 15
-    assert settings.live_max_exposure_per_exact_bucket_side == 10
-    assert settings.live_max_total_open_risk == 150
-    assert settings.live_max_daily_new_risk == 100
+    assert settings.live_max_usd_per_order == 25
+    assert settings.live_max_exposure_per_station_date == 60
+    assert settings.live_max_exposure_per_station_date_side == 40
+    assert settings.live_max_exposure_per_exact_bucket_side == 25
+    assert settings.live_max_total_open_risk == 375
+    assert settings.live_max_daily_new_risk == 250
     assert settings.live_min_order_notional == 1
 
 

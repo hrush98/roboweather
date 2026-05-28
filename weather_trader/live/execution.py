@@ -50,6 +50,8 @@ LIVE_MODEL_GROUP = "obs_bucket_consensus"
 DEFAULT_LIVE_ENTRY_PRICE_MAX = 0.50
 LIVE_ENTRY_PRICE_MAX = DEFAULT_LIVE_ENTRY_PRICE_MAX
 EDGE_CORE_MIN_EDGE = 0.25
+CONSENSUS_NOTIONAL_USD = 25.0
+EDGE_CORE_NOTIONAL_USD = 20.0
 MOONSHOT_MIN_EDGE = 0.90
 MOONSHOT_NOTIONAL_USD = 1.0
 NGBOOST_BEST_BUY_YES_NOTIONAL_USD = 5.0
@@ -84,7 +86,9 @@ class LiveExecutionConfig:
     market_limit: int = 50000
     max_obs_age_minutes: int = 30
     max_book_age_seconds: float = 10.0
-    max_notional_usd: float = 10.0
+    max_notional_usd: float = CONSENSUS_NOTIONAL_USD
+    consensus_notional_usd: float = CONSENSUS_NOTIONAL_USD
+    edge_core_notional_usd: float = EDGE_CORE_NOTIONAL_USD
     min_entry_price: float = 0.05
     max_entry_price: float | None = DEFAULT_LIVE_ENTRY_PRICE_MAX
     require_allowance_check: bool = True
@@ -348,15 +352,15 @@ def ngboost_best_buy_yes_policy_spec(config: LiveExecutionConfig) -> ResearchPol
 def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, ...]:
     return (
         LiveStrategyPlan(
-            default_live_strategy(config.max_notional_usd),
+            default_live_strategy(config.consensus_notional_usd),
             (live_policy_spec(config),),
-            config.max_notional_usd,
+            config.consensus_notional_usd,
             min_entry_price=config.min_entry_price,
         ),
         LiveStrategyPlan(
-            edge_core_live_strategy(config.max_notional_usd),
+            edge_core_live_strategy(config.edge_core_notional_usd),
             (edge_core_policy_spec(config),),
-            config.max_notional_usd,
+            config.edge_core_notional_usd,
             TradeAction.BUY_NO,
             config.min_entry_price,
         ),
@@ -615,6 +619,7 @@ class LiveExecutionEngine:
             selected_bucket=source.selected_bucket,
             sweep_depth_to_cap=source.selected_sweep_depth_to_cap,
             exposure=self.store.live_exposure_summary(),
+            target_notional_usd=candidate.plan.target_notional_usd,
             as_of_utc=as_of_utc,
         )
 

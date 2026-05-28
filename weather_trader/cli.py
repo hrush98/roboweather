@@ -30,7 +30,7 @@ from weather_trader.features.build_same_day_features import build_synthetic_thre
 from weather_trader.forecasts.hrrr_client import HRRRClient
 from weather_trader.live.scanner import LiveScanner
 from weather_trader.live.next_day_scanner import NextDayScanner
-from weather_trader.live.execution import DEFAULT_LIVE_ENTRY_PRICE_MAX, LiveExecutionConfig, LiveExecutionEngine
+from weather_trader.live.execution import CONSENSUS_NOTIONAL_USD, DEFAULT_LIVE_ENTRY_PRICE_MAX, EDGE_CORE_NOTIONAL_USD, LiveExecutionConfig, LiveExecutionEngine
 from weather_trader.live.resolution import LiveResolutionService
 from weather_trader.models.train_classifier import (
     build_bucket_reports,
@@ -268,7 +268,9 @@ def main() -> None:
     live_cycle.add_argument("--market-limit", type=int, default=50000)
     live_cycle.add_argument("--max-obs-age-minutes", type=int, default=30)
     live_cycle.add_argument("--max-book-age-seconds", type=float, default=10.0)
-    live_cycle.add_argument("--max-notional-usd", type=float, default=3.0)
+    live_cycle.add_argument("--max-notional-usd", type=float, default=None)
+    live_cycle.add_argument("--consensus-notional-usd", type=float, default=CONSENSUS_NOTIONAL_USD)
+    live_cycle.add_argument("--core-notional-usd", type=float, default=EDGE_CORE_NOTIONAL_USD)
     live_cycle.add_argument("--max-entry-price", type=float, default=DEFAULT_LIVE_ENTRY_PRICE_MAX)
     live_cycle.add_argument("--model", dest="model_paths", action="append", default=[])
     live_cycle.add_argument("--skip-allowance-check", action="store_true")
@@ -282,7 +284,9 @@ def main() -> None:
     live_loop.add_argument("--max-cycles", type=int, default=None)
     live_loop.add_argument("--max-obs-age-minutes", type=int, default=30)
     live_loop.add_argument("--max-book-age-seconds", type=float, default=10.0)
-    live_loop.add_argument("--max-notional-usd", type=float, default=3.0)
+    live_loop.add_argument("--max-notional-usd", type=float, default=None)
+    live_loop.add_argument("--consensus-notional-usd", type=float, default=CONSENSUS_NOTIONAL_USD)
+    live_loop.add_argument("--core-notional-usd", type=float, default=EDGE_CORE_NOTIONAL_USD)
     live_loop.add_argument("--max-entry-price", type=float, default=DEFAULT_LIVE_ENTRY_PRICE_MAX)
     live_loop.add_argument("--model", dest="model_paths", action="append", default=[])
     live_loop.add_argument("--skip-allowance-check", action="store_true")
@@ -486,6 +490,8 @@ def main() -> None:
             max_obs_age_minutes=args.max_obs_age_minutes,
             max_book_age_seconds=args.max_book_age_seconds,
             max_notional_usd=args.max_notional_usd,
+            consensus_notional_usd=args.consensus_notional_usd,
+            edge_core_notional_usd=args.core_notional_usd,
             max_entry_price=args.max_entry_price,
             model_paths=args.model_paths,
             require_allowance_check=not args.skip_allowance_check,
@@ -502,6 +508,8 @@ def main() -> None:
             max_obs_age_minutes=args.max_obs_age_minutes,
             max_book_age_seconds=args.max_book_age_seconds,
             max_notional_usd=args.max_notional_usd,
+            consensus_notional_usd=args.consensus_notional_usd,
+            edge_core_notional_usd=args.core_notional_usd,
             max_entry_price=args.max_entry_price,
             model_paths=args.model_paths,
             require_allowance_check=not args.skip_allowance_check,
@@ -1540,12 +1548,17 @@ def live_cycle_command(
     market_limit: int,
     max_obs_age_minutes: int,
     max_book_age_seconds: float,
-    max_notional_usd: float,
+    max_notional_usd: float | None,
+    consensus_notional_usd: float,
+    edge_core_notional_usd: float,
     max_entry_price: float | None,
     model_paths: list[str] | None,
     require_allowance_check: bool,
     retry_wait_seconds: float,
 ) -> None:
+    if max_notional_usd is not None:
+        consensus_notional_usd = max_notional_usd
+        edge_core_notional_usd = max_notional_usd
     store = ExecutionStore(Path(live_db_path))
     try:
         config = LiveExecutionConfig(
@@ -1555,7 +1568,9 @@ def live_cycle_command(
             market_limit=market_limit,
             max_obs_age_minutes=max_obs_age_minutes,
             max_book_age_seconds=max_book_age_seconds,
-            max_notional_usd=max_notional_usd,
+            max_notional_usd=consensus_notional_usd,
+            consensus_notional_usd=consensus_notional_usd,
+            edge_core_notional_usd=edge_core_notional_usd,
             max_entry_price=max_entry_price,
             require_allowance_check=require_allowance_check,
             retry_wait_seconds=retry_wait_seconds,
@@ -1567,6 +1582,8 @@ def live_cycle_command(
                     "live_db": live_db_path,
                     "mode": mode,
                     "max_entry_price": max_entry_price,
+                    "consensus_notional_usd": consensus_notional_usd,
+                    "core_notional_usd": edge_core_notional_usd,
                     "candidates": result.candidates,
                     "reserved": result.reserved,
                     "submitted": result.submitted,
@@ -1589,12 +1606,17 @@ def live_loop_command(
     max_cycles: int | None,
     max_obs_age_minutes: int,
     max_book_age_seconds: float,
-    max_notional_usd: float,
+    max_notional_usd: float | None,
+    consensus_notional_usd: float,
+    edge_core_notional_usd: float,
     max_entry_price: float | None,
     model_paths: list[str] | None,
     require_allowance_check: bool,
     retry_wait_seconds: float,
 ) -> None:
+    if max_notional_usd is not None:
+        consensus_notional_usd = max_notional_usd
+        edge_core_notional_usd = max_notional_usd
     store = ExecutionStore(Path(live_db_path))
     try:
         config = LiveExecutionConfig(
@@ -1604,7 +1626,9 @@ def live_loop_command(
             market_limit=market_limit,
             max_obs_age_minutes=max_obs_age_minutes,
             max_book_age_seconds=max_book_age_seconds,
-            max_notional_usd=max_notional_usd,
+            max_notional_usd=consensus_notional_usd,
+            consensus_notional_usd=consensus_notional_usd,
+            edge_core_notional_usd=edge_core_notional_usd,
             max_entry_price=max_entry_price,
             require_allowance_check=require_allowance_check,
             retry_wait_seconds=retry_wait_seconds,
@@ -1622,6 +1646,8 @@ def live_loop_command(
                         "live_db": live_db_path,
                         "mode": mode,
                         "max_entry_price": max_entry_price,
+                        "consensus_notional_usd": consensus_notional_usd,
+                        "core_notional_usd": edge_core_notional_usd,
                         "candidates": result.candidates,
                         "reserved": result.reserved,
                         "submitted": result.submitted,

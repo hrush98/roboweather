@@ -33,7 +33,10 @@ Environment overrides:
   LIVE_DB=$HOME/.local/state/roboweather/live_trading.sqlite
   LIVE_MODELS=               # optional space-separated model override list
   MAX_BOOK_AGE_SECONDS=10
-  MAX_NOTIONAL_USD=3
+  MAX_NOTIONAL_USD=          # optional legacy override for consensus/core sizes
+  CONSENSUS_NOTIONAL_USD=25
+  CORE_NOTIONAL_USD=20
+  MAX_ENTRY_PRICE=0.50
   SKIP_ALLOWANCE_CHECK=0
   PYTHON=.venv/bin/python # auto-detected if unset
 
@@ -249,6 +252,15 @@ case "${mode}" in
     fi
     if [[ -n "${MAX_NOTIONAL_USD:-}" ]]; then
       command+=(--max-notional-usd "${MAX_NOTIONAL_USD}")
+    fi
+    if [[ -n "${CONSENSUS_NOTIONAL_USD:-}" ]]; then
+      command+=(--consensus-notional-usd "${CONSENSUS_NOTIONAL_USD}")
+    fi
+    if [[ -n "${CORE_NOTIONAL_USD:-}" ]]; then
+      command+=(--core-notional-usd "${CORE_NOTIONAL_USD}")
+    fi
+    if [[ -n "${MAX_ENTRY_PRICE:-}" ]]; then
+      command+=(--max-entry-price "${MAX_ENTRY_PRICE}")
     fi
     if [[ "${LIVE_MODE:-dry-run}" != "dry-run" ]]; then
       command+=(--mode "${LIVE_MODE}")

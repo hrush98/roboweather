@@ -22,7 +22,9 @@ from weather_trader.execution.store import ExecutionStore
 from weather_trader.live.execution import (
     CATBOOST_MODEL,
     DYNAMIC_TUNED_MODEL,
+    CONSENSUS_NOTIONAL_USD,
     EDGE_CORE_MIN_EDGE,
+    EDGE_CORE_NOTIONAL_USD,
     EDGE_CORE_POLICY_NAME,
     LIVE_MODEL_GROUP,
     DEFAULT_LIVE_ENTRY_PRICE_MAX,
@@ -62,7 +64,7 @@ def test_live_execution_config_defaults_to_fifty_cent_entry_cap() -> None:
 
 
 def test_live_strategy_plans_include_moonshot_and_ngboost_medium() -> None:
-    plans = live_strategy_plans(LiveExecutionConfig(max_notional_usd=3.0, max_entry_price=0.40))
+    plans = live_strategy_plans(LiveExecutionConfig(max_entry_price=0.40))
 
     assert [plan.strategy.name for plan in plans] == [
         LIVE_POLICY_NAME,
@@ -71,11 +73,13 @@ def test_live_strategy_plans_include_moonshot_and_ngboost_medium() -> None:
         NGBOOST_BEST_BUY_YES_POLICY_NAME,
     ]
     consensus = plans[0]
+    assert consensus.target_notional_usd == pytest.approx(CONSENSUS_NOTIONAL_USD)
+    assert consensus.strategy.max_notional_usd == pytest.approx(CONSENSUS_NOTIONAL_USD)
     assert consensus.policies[0].entry_price_max == pytest.approx(0.40)
 
     edge_core = plans[1]
-    assert edge_core.target_notional_usd == pytest.approx(3.0)
-    assert edge_core.strategy.max_notional_usd == pytest.approx(3.0)
+    assert edge_core.target_notional_usd == pytest.approx(EDGE_CORE_NOTIONAL_USD)
+    assert edge_core.strategy.max_notional_usd == pytest.approx(EDGE_CORE_NOTIONAL_USD)
     assert len(edge_core.policies) == 1
     assert edge_core.policies[0].model_name == DYNAMIC_TUNED_MODEL
     assert edge_core.policies[0].edge_min == pytest.approx(EDGE_CORE_MIN_EDGE)
@@ -464,7 +468,7 @@ def test_live_position_uses_sizing_decision_and_persists_json(tmp_path: Path) ->
     engine = LiveExecutionEngine(
         store,
         LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live"),
-        submitter=SizingSubmitter(10.0),
+        submitter=SizingSubmitter(EDGE_CORE_NOTIONAL_USD),
     )
     plan = live_strategy_plans(LiveExecutionConfig())[1]
     source = ResearchPolicyPosition(
@@ -514,10 +518,10 @@ def test_live_position_uses_sizing_decision_and_persists_json(tmp_path: Path) ->
 
     assert state == LivePositionState.FILLED
     row = store.live_open_positions()[0]
-    assert row["target_notional_usd"] == pytest.approx(10.0)
+    assert row["target_notional_usd"] == pytest.approx(EDGE_CORE_NOTIONAL_USD)
     raw = store.connection.execute("select raw_json from live_policy_positions where id = ?", (position_id,)).fetchone()["raw_json"]
     assert '"sizing"' in raw
-    assert '"final_target_notional_usd": 10.0' in raw
+    assert f'"final_target_notional_usd": {EDGE_CORE_NOTIONAL_USD:.1f}' in raw
 
 
 def test_blocked_sizing_can_be_recorded_as_rejected_position(tmp_path: Path) -> None:

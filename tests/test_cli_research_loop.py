@@ -160,8 +160,12 @@ def test_live_cycle_accepts_execution_options(monkeypatch) -> None:
             "/tmp/live.sqlite",
             "--mode",
             "live",
-            "--max-notional-usd",
-            "3",
+            "--consensus-notional-usd",
+            "25",
+            "--core-notional-usd",
+            "20",
+            "--max-entry-price",
+            "0.5",
             "--skip-allowance-check",
             "--retry-wait-seconds",
             "5",
@@ -172,7 +176,10 @@ def test_live_cycle_accepts_execution_options(monkeypatch) -> None:
 
     assert captured["live_db_path"] == "/tmp/live.sqlite"
     assert captured["mode"] == "live"
-    assert captured["max_notional_usd"] == 3.0
+    assert captured["max_notional_usd"] is None
+    assert captured["consensus_notional_usd"] == 25.0
+    assert captured["edge_core_notional_usd"] == 20.0
+    assert captured["max_entry_price"] == 0.5
     assert captured["require_allowance_check"] is False
     assert captured["retry_wait_seconds"] == 5.0
 
