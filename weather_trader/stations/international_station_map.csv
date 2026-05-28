@@ -1,0 +1,11 @@
+city,station,display_name,timezone,latitude,longitude,resolution_station,resolution_source
+Hong Kong,VHHH,Hong Kong International Airport,Asia/Hong_Kong,22.3080,113.9185,HKO,Hong Kong Observatory Daily Extract
+London,EGLC,London City Airport,Europe/London,51.5053,0.0553,EGLC,Wunderground London City Airport Station
+Tokyo,RJTT,Tokyo Haneda Airport,Asia/Tokyo,35.5494,139.7798,RJTT,Wunderground Tokyo Haneda Airport Station
+Seoul,RKSI,Incheon International Airport,Asia/Seoul,37.4691,126.4505,RKSI,Wunderground Incheon Intl Airport Station
+Shanghai,ZSPD,Shanghai Pudong International Airport,Asia/Shanghai,31.1434,121.8052,ZSPD,Wunderground Shanghai Pudong Airport Station
+Singapore,WSSS,Singapore Changi Airport,Asia/Singapore,1.3644,103.9915,WSSS,Wunderground Singapore Changi Airport Station
+Mexico City,MMMX,Benito Juarez International Airport,America/Mexico_City,19.4363,-99.0721,MMMX,Wunderground Benito Juarez International Airport Station
+Paris,LFPB,Paris Le Bourget Airport,Europe/Paris,48.9694,2.4414,LFPB,Wunderground Paris Le Bourget Airport Station
+Amsterdam,EHAM,Amsterdam Schiphol Airport,Europe/Amsterdam,52.3086,4.7639,EHAM,Wunderground Amsterdam Schiphol Airport Station
+Munich,EDDM,Munich Airport,Europe/Berlin,48.3538,11.7861,EDDM,Wunderground Munich Airport Station
