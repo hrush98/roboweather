@@ -4,7 +4,7 @@ from datetime import date
 
 from weather_trader.execution.contracts import MarketSnapshot, PredictionSnapshot, StrategyBucket, TradeAction
 from weather_trader.execution.store import ExecutionStore
-from weather_trader.research.policies import DYNAMIC_TUNED_MODEL, MVP_MODEL, POLICIES, ResearchPolicyEvaluator, ResearchPolicySpec
+from weather_trader.research.policies import DYNAMIC_TUNED_MODEL, GLOBAL_HIGH_DYNAMIC_MODEL, GLOBAL_HIGH_MVP_MODEL, MVP_MODEL, POLICIES, ResearchPolicyEvaluator, ResearchPolicySpec
 
 
 def test_research_policy_evaluator_records_consensus_and_dedupes(tmp_path) -> None:
@@ -172,7 +172,7 @@ def test_research_policy_registry_tracks_expected_policies() -> None:
         "broad_max_so_far_first",
     } <= names
     assert not any(
-        ("_15m_" in name or "_10m_" in name or "_entry_" in name) and not name.startswith("low_")
+        ("_15m_" in name or "_10m_" in name or "_entry_" in name) and not name.startswith(("low_", "global_"))
         for name in names
     )
     assert {
@@ -181,6 +181,42 @@ def test_research_policy_registry_tracks_expected_policies() -> None:
         "low_pm_us12_dynamic_hc_15m_first",
         "low_min_so_far_first",
     } <= names
+    assert {
+        "global_high_dynamic_high_conviction_first",
+        "global_high_mvp_tail_first",
+        "global_high_dynamic_mvp_high_conviction_first",
+        "global_high_catboost_mvp_best_bucket_first",
+        "global_high_bucket_consensus_high_conviction_10m_first",
+        "global_high_three_model_consensus_high_conviction_by_bucket_side_delay_first",
+        "global_low_dynamic_mvp_high_conviction_15m_first",
+    } <= names
+
+
+def test_global_consensus_policy_groups_match_international_models(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+    store.upsert_market(_market(station="RJTT", city="Tokyo", selected_bucket="28-29C"))
+    for model_name in [GLOBAL_HIGH_DYNAMIC_MODEL, GLOBAL_HIGH_MVP_MODEL]:
+        store.insert_prediction_snapshot(
+            _snapshot(
+                model_name=model_name,
+                station="RJTT",
+                strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+                selected_side=TradeAction.BUY_YES,
+                selected_bucket="28-29C",
+                selected_edge=0.2,
+                selected_fair_yes=0.75,
+                selected_yes_ask=0.5,
+            )
+        )
+
+    policy = ResearchPolicySpec(
+        "global_consensus",
+        "consensus",
+        StrategyBucket.HIGH_CONVICTION,
+        model_group="global_high_dynamic_mvp",
+    )
+
+    assert ResearchPolicyEvaluator(store, (policy,)).evaluate() == 1
 
 
 def test_broad_consensus_policies_are_registered_and_idempotent(tmp_path) -> None:
@@ -504,17 +540,18 @@ def test_local_decision_time_filters_split_early_and_late(tmp_path) -> None:
     assert by_policy["late"]["timestamp"] == "2026-05-07T17:00:00+00:00"
 
 
-def _market() -> MarketSnapshot:
+def _market(station: str = "KATL", city: str = "Atlanta", selected_bucket: str = "74-75F") -> MarketSnapshot:
+    lower, upper = selected_bucket.removesuffix("F").removesuffix("C").split("-", 1)
     return MarketSnapshot(
         market_id="m1",
         condition_id="c1",
-        question="Will temp be between 74-75F?",
+        question=f"Will temp be between {selected_bucket}?",
         slug="slug",
-        city="Atlanta",
-        station="KATL",
+        city=city,
+        station=station,
         market_date=date(2026, 5, 7),
-        lower_f=74,
-        upper_f=75,
+        lower_f=float(lower),
+        upper_f=float(upper),
         yes_token_id="yes",
         no_token_id="no",
         end_date="",
@@ -530,8 +567,10 @@ def _snapshot(
     selected_side: TradeAction,
     selected_bucket: str,
     selected_edge: float,
-    selected_fair_no: float,
-    selected_no_ask: float,
+    selected_fair_no: float | None = None,
+    selected_no_ask: float = 0.6,
+    selected_fair_yes: float | None = None,
+    selected_yes_ask: float = 0.4,
     selected_best_ask: float | None = None,
     selected_depth_at_ask: float | None = None,
     selected_book_timestamp: str | None = None,
@@ -575,9 +614,9 @@ def _snapshot(
         selected_bucket=selected_bucket,
         selected_side=selected_side,
         selected_edge=selected_edge,
-        selected_fair_yes=1.0 - selected_fair_no,
-        selected_fair_no=selected_fair_no,
-        selected_yes_ask=0.4,
+        selected_fair_yes=selected_fair_yes if selected_fair_yes is not None else 1.0 - float(selected_fair_no),
+        selected_fair_no=selected_fair_no if selected_fair_no is not None else 1.0 - float(selected_fair_yes),
+        selected_yes_ask=selected_yes_ask,
         selected_no_ask=selected_no_ask,
         model_name=model_name,
         high_conviction=strategy_bucket == StrategyBucket.HIGH_CONVICTION,

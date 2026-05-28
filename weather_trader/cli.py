@@ -101,6 +101,7 @@ PM_ACTIVE_US_STATIONS = (
 )
 
 DEFAULT_RESEARCH_DB = "/home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite"
+DEFAULT_GLOBAL_RESEARCH_DB = "/home/maxrush/.local/state/roboweather/research_global_celsius_2026-05.sqlite"
 
 
 def main() -> None:
@@ -304,6 +305,7 @@ def main() -> None:
     research_loop.add_argument("--extra-model", dest="extra_model_paths", action="append", default=[])
     research_loop.add_argument("--db", default=str(PAPER_DIR / "roboweather.sqlite"))
     research_loop.add_argument("--market-limit", type=int, default=50000)
+    research_loop.add_argument("--market-scope", choices=["us", "global", "all"], default="us")
     research_loop.add_argument("--bankroll", type=float, default=1000.0)
     research_loop.add_argument("--interval-seconds", type=int, default=360)
     research_loop.add_argument("--max-cycles", type=int, default=None)
@@ -322,6 +324,7 @@ def main() -> None:
     resolve_research = subparsers.add_parser("resolve-research", help="Resolve and score due research snapshots")
     resolve_research.add_argument("--db", default=str(PAPER_DIR / "roboweather.sqlite"))
     resolve_research.add_argument("--resolve-after-local-hour", type=int, default=6)
+    resolve_research.add_argument("--market-scope", choices=["us", "global"], default="us")
 
     paper_policy_cycle = subparsers.add_parser("paper-policy-cycle", help="Promote allowlisted research policies into paper execution")
     paper_policy_cycle.add_argument("--db", default=DEFAULT_RESEARCH_DB)
@@ -531,6 +534,7 @@ def main() -> None:
             extra_model_paths=args.extra_model_paths,
             db_path=args.db,
             market_limit=args.market_limit,
+            market_scope=args.market_scope,
             bankroll=args.bankroll,
             interval_seconds=args.interval_seconds,
             max_cycles=args.max_cycles,
@@ -548,7 +552,7 @@ def main() -> None:
         )
         return
     if args.command == "resolve-research":
-        resolve_research_command(args.db, args.resolve_after_local_hour)
+        resolve_research_command(args.db, args.resolve_after_local_hour, args.market_scope)
         return
     if args.command == "paper-policy-cycle":
         paper_policy_cycle_command(
@@ -1687,6 +1691,7 @@ def research_loop_command(
     extra_model_paths: list[str] | None,
     db_path: str,
     market_limit: int,
+    market_scope: str,
     bankroll: float,
     interval_seconds: int,
     max_cycles: int | None,
@@ -1714,10 +1719,12 @@ def research_loop_command(
             max_obs_age_minutes=max_obs_age_minutes,
             bankroll_usd=bankroll,
             market_limit=market_limit,
+            market_scope=market_scope,
         )
         resolver = ResearchResolver(
             store=store,
             config=ResolverConfig(resolve_after_local_hour=resolve_after_local_hour),
+            market_scope=market_scope,
         )
         policy_evaluator = None if disable_policy_evaluation else ResearchPolicyEvaluator(store=store)
         model_paths = [Path(model_path)]
@@ -1739,12 +1746,13 @@ def research_loop_command(
         store.close()
 
 
-def resolve_research_command(db_path: str, resolve_after_local_hour: int) -> None:
+def resolve_research_command(db_path: str, resolve_after_local_hour: int, market_scope: str = "us") -> None:
     store = ExecutionStore(Path(db_path))
     try:
         summary = ResearchResolver(
             store=store,
             config=ResolverConfig(resolve_after_local_hour=resolve_after_local_hour),
+            market_scope=market_scope,
         ).resolve_due()
         print(json.dumps(summary.__dict__, indent=2))
     finally:

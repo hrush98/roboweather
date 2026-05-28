@@ -10,7 +10,8 @@ import numpy as np
 from weather_trader.features.build_same_day_features import prepare_station_observations
 from weather_trader.forecasts.hrrr_client import HRRRClient
 from weather_trader.stations.iem_asos_client import IEMASOSClient
-from weather_trader.stations.metadata import get_station
+from weather_trader.features.international_dataset_builder import _fahrenheit_observations_to_celsius
+from weather_trader.stations.metadata import get_station, get_station_any
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,71 @@ class WeatherFeatureService:
             hrrr_current_temp=_none_if_nan(hrrr_current),
             hrrr_remaining_max=_none_if_nan(hrrr_remaining),
             hrrr_remaining_min=_none_if_nan(hrrr_remaining_min),
+            stale=age_minutes > self.max_obs_age_minutes,
+        )
+        self._cache[key] = state
+        self._cache_fetched_at[key] = as_of_utc
+        return state
+
+
+class CelsiusWeatherFeatureService(WeatherFeatureService):
+    def get_state(self, station_id: str, as_of_utc: datetime) -> StationWeatherState:
+        station = get_station_any(station_id)
+        zone = ZoneInfo(station.timezone)
+        local_date = as_of_utc.astimezone(zone).date()
+        key = (station.station, local_date)
+        cached = self._cache.get(key)
+        fetched_at = self._cache_fetched_at.get(key)
+        if cached and fetched_at and (as_of_utc - fetched_at).total_seconds() < 60:
+            return cached
+
+        local_midnight = datetime.combine(local_date, time.min, tzinfo=zone)
+        start_utc = local_midnight.astimezone(timezone.utc)
+        try:
+            observations = self.obs_client.fetch_observations(
+                station=station.station,
+                start=start_utc.date(),
+                end=(as_of_utc + timedelta(hours=1)).date(),
+            )
+        except Exception:
+            if cached is not None:
+                latest_obs_time = datetime.fromisoformat(cached.latest_obs_time)
+                age_minutes = max(0.0, (as_of_utc - latest_obs_time.astimezone(timezone.utc)).total_seconds() / 60.0)
+                return replace(cached, latest_obs_age_minutes=age_minutes, stale=True)
+            raise
+        prepared = prepare_station_observations(_fahrenheit_observations_to_celsius(observations), station)
+        valid_temp = prepared.loc[
+            (prepared["tmpf"].notna())
+            & (prepared["valid"] <= as_of_utc)
+            & (prepared["local_date"] == local_date)
+        ]
+        if valid_temp.empty:
+            raise ValueError(f"No non-null Celsius temperature observations for {station.station} on {local_date} as of {as_of_utc.isoformat()}")
+        latest = valid_temp.iloc[-1]
+        latest_obs_time = latest["valid"].to_pydatetime()
+        if latest_obs_time.tzinfo is None:
+            latest_obs_time = latest_obs_time.replace(tzinfo=timezone.utc)
+        age_minutes = max(0.0, (as_of_utc - latest_obs_time.astimezone(timezone.utc)).total_seconds() / 60.0)
+        state = StationWeatherState(
+            station=station.station,
+            local_date=latest["local_date"],
+            latest_obs_time=latest_obs_time.astimezone(timezone.utc).isoformat(),
+            latest_obs_age_minutes=age_minutes,
+            current_temp=round(float(latest["tmpf"]), 1),
+            high_so_far=round(float(valid_temp["tmpf"].max()), 1),
+            low_so_far=round(float(valid_temp["tmpf"].min()), 1),
+            hour_local=int(latest["hour_local"]),
+            day_of_year=int(latest["doy"]),
+            temp_change_1h=_float_or_nan(latest.get("temp_change_1h", np.nan)),
+            temp_change_3h=_float_or_nan(latest.get("temp_change_3h", np.nan)),
+            dewpoint=_float_or_nan(latest.get("dwpf", np.nan)),
+            wind_speed=_float_or_nan(latest.get("sknt", np.nan)),
+            wind_dir_sin=_float_or_nan(latest.get("wind_dir_sin", np.nan)),
+            wind_dir_cos=_float_or_nan(latest.get("wind_dir_cos", np.nan)),
+            cloud_cover_code=_float_or_nan(latest.get("cloud_cover_code", np.nan)),
+            hrrr_current_temp=None,
+            hrrr_remaining_max=None,
+            hrrr_remaining_min=None,
             stale=age_minutes > self.max_obs_age_minutes,
         )
         self._cache[key] = state

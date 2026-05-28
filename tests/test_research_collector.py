@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timezone
 
 import requests
+import pandas as pd
 
 from weather_trader.execution.contracts import (
     BookLevel,
@@ -19,9 +20,9 @@ from weather_trader.execution.contracts import (
 from weather_trader.execution.engine import PaperTradingEngine
 from weather_trader.execution.grouping import GroupMarketContext, GroupSelection
 from weather_trader.execution.store import ExecutionStore
-from weather_trader.execution.weather import StationWeatherState
+from weather_trader.execution.weather import CelsiusWeatherFeatureService, StationWeatherState
 from weather_trader.research.collector import ResearchCollector, ResearchConfig, build_prediction_snapshot, due_delay_buckets
-from weather_trader.research.resolver import score_snapshot
+from weather_trader.research.resolver import ResearchResolver, score_snapshot
 
 
 def test_due_delay_buckets_use_actual_obs_age_bucket() -> None:
@@ -89,6 +90,19 @@ def test_low_due_delay_buckets_can_use_configured_snapshot_window() -> None:
         market_family=str(MarketFamily.LOW_TEMP),
     ) == ["5m"]
 
+
+def test_celsius_weather_feature_service_converts_observations() -> None:
+    service = CelsiusWeatherFeatureService(obs_client=_InternationalObservationsClient(), hrrr_client=None)
+
+    state = service.get_state("RJTT", datetime(2026, 5, 6, 1, 30, tzinfo=timezone.utc))
+
+    assert state.current_temp == 21.0
+    assert state.high_so_far == 21.0
+    assert state.low_so_far == 20.0
+    assert state.dewpoint == 10.0
+    assert state.hrrr_current_temp is None
+    assert state.hrrr_remaining_max is None
+
 def test_score_snapshot_scores_selected_side_against_final_high() -> None:
     snapshot = {
         "id": 10,
@@ -150,6 +164,18 @@ def test_score_snapshot_scores_low_family_against_final_low() -> None:
     assert result.correct is True
 
 
+def test_global_resolver_uses_hko_daily_high_and_low(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+    resolver = ResearchResolver(store=store, hko_client=_HKOClient(), market_scope="global")
+
+    outcome = resolver._resolve_station_date("VHHH", date(2026, 5, 6))
+
+    assert outcome.station == "VHHH"
+    assert outcome.final_high_tmpf == 31.2
+    assert outcome.final_low_tmpf == 25.4
+    assert outcome.source == "HKO_CLMMAXT_CLMMINT_C"
+
+
 def test_research_collector_records_discovery_timeout_without_crashing(tmp_path) -> None:
     store = ExecutionStore(tmp_path / "research.sqlite")
     collector = ResearchCollector(store=store, model_paths=[], discovery=_FailingDiscovery())
@@ -173,6 +199,7 @@ def test_research_collector_warns_when_books_are_missing(tmp_path) -> None:
         model_paths=[],
         discovery=_StaticDiscovery([_market(market_date=date(2026, 5, 13))]),
         book_client=_EmptyBookClient(),
+        weather_service=_StaticWeatherService(),
     )
 
     result = collector.run_once(datetime(2026, 5, 13, 16, 5, tzinfo=timezone.utc))
@@ -327,7 +354,7 @@ def test_build_prediction_snapshot_persists_sweep_and_bid_ladder(tmp_path) -> No
 
 
 class _FailingDiscovery:
-    def discover(self, limit: int = 50000, validate_stations: bool = True):
+    def discover(self, limit: int = 50000, validate_stations: bool = True, market_scope: str = "us"):
         raise requests.ReadTimeout("gamma stalled")
 
 
@@ -336,13 +363,41 @@ class _StaticDiscovery:
         self.markets = markets
         self.last_warnings: list[str] = []
 
-    def discover(self, limit: int = 50000, validate_stations: bool = True):
+    def discover(self, limit: int = 50000, validate_stations: bool = True, market_scope: str = "us"):
         return self.markets
 
 
 class _EmptyBookClient:
     def fetch_books(self, token_ids: list[str]):
         return {}
+
+
+class _StaticWeatherService:
+    def get_state(self, station_id: str, as_of_utc: datetime) -> StationWeatherState:
+        return _weather(as_of_utc.isoformat())
+
+
+class _InternationalObservationsClient:
+    def fetch_observations(self, station, start, end):
+        return pd.DataFrame(
+            {
+                "valid": pd.to_datetime(["2026-05-05T15:00:00Z", "2026-05-06T01:00:00Z"], utc=True),
+                "tmpf": [68.0, 69.8],
+                "dwpf": [50.0, 50.0],
+                "sknt": [5.0, 5.0],
+                "drct": [90.0, 100.0],
+                "skyc1": ["FEW", "SCT"],
+                "skyc2": [None, None],
+                "skyc3": [None, None],
+            }
+        )
+
+
+class _HKOClient:
+    def fetch_daily_temperature_series(self, metric, station="HKO"):
+        column = "final_low_tmpf" if metric == "low" else "final_high_tmpf"
+        value = 25.4 if metric == "low" else 31.2
+        return pd.DataFrame({"local_date": [date(2026, 5, 6)], column: [value]})
 
 
 def _selection(side: TradeAction, expected_value: float = 0.1, fair_yes: float = 0.7, fair_no: float = 0.3) -> GroupSelection:

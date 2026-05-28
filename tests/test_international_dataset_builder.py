@@ -9,6 +9,7 @@ from weather_trader.features.international_dataset_builder import (
     InternationalStation,
     _fahrenheit_observations_to_celsius,
 )
+from weather_trader.stations.metadata import get_international_station, get_station
 
 
 def test_fahrenheit_observations_to_celsius() -> None:
@@ -18,6 +19,13 @@ def test_fahrenheit_observations_to_celsius() -> None:
 
     assert converted["tmpf"].round(1).tolist() == [0.0, 20.0]
     assert round(float(converted["dwpf"].iloc[0]), 1) == 10.0
+
+
+def test_international_station_lookup_does_not_change_us_lookup() -> None:
+    assert get_station("KATL").city == "Atlanta"
+    station = get_international_station("RJTT")
+    assert station.city == "Tokyo"
+    assert station.timezone == "Asia/Tokyo"
 
 
 def test_hong_kong_target_uses_hko_daily_value() -> None:

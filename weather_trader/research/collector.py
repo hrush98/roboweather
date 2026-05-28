@@ -25,8 +25,8 @@ from weather_trader.execution.fair_value import FairValueEngine
 from weather_trader.execution.grouping import GroupMarketContext, StationDateDecisionEngine, group_key
 from weather_trader.execution.liquidity import selected_side_execution_modes, selected_side_liquidity
 from weather_trader.execution.store import ExecutionStore
-from weather_trader.execution.weather import StationWeatherState, WeatherFeatureService
-from weather_trader.stations.metadata import get_station
+from weather_trader.execution.weather import CelsiusWeatherFeatureService, StationWeatherState, WeatherFeatureService
+from weather_trader.stations.metadata import get_station_any
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,7 @@ class ResearchConfig:
     max_obs_age_minutes: int = 30
     bankroll_usd: float = 1000.0
     market_limit: int = 50000
+    market_scope: str = "us"
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,12 @@ class ResearchCollector:
         self.config = config or ResearchConfig()
         self.discovery = discovery or MarketDiscoveryService()
         self.book_client = book_client or RestBookClient()
-        self.weather_service = weather_service or WeatherFeatureService(max_obs_age_minutes=self.config.max_obs_age_minutes)
+        if weather_service is not None:
+            self.weather_service = weather_service
+        elif self.config.market_scope == "global":
+            self.weather_service = CelsiusWeatherFeatureService(max_obs_age_minutes=self.config.max_obs_age_minutes)
+        else:
+            self.weather_service = WeatherFeatureService(max_obs_age_minutes=self.config.max_obs_age_minutes)
         self.decision_engine = decision_engine or DecisionEngine()
         self.station_date_decision_engine = StationDateDecisionEngine(self.decision_engine)
         self.fair_value_engines = [FairValueEngine(path) for path in model_paths]
@@ -77,7 +83,7 @@ class ResearchCollector:
         skipped = 0
 
         try:
-            markets = same_day_markets(self.discovery.discover(limit=self.config.market_limit), now)
+            markets = same_day_markets(self.discovery.discover(limit=self.config.market_limit, market_scope=self.config.market_scope), now)
             errors.extend(getattr(self.discovery, "last_warnings", []))
         except requests.RequestException as exc:
             errors.append(f"discovery: {exc}")
@@ -263,7 +269,7 @@ def due_delay_buckets(
     config: ResearchConfig,
     market_family: str = "HIGH_TEMP",
 ) -> list[str]:
-    station = get_station(weather.station)
+    station = get_station_any(weather.station)
     zone = ZoneInfo(station.timezone)
     latest_obs_utc = datetime.fromisoformat(weather.latest_obs_time)
     if latest_obs_utc.tzinfo is None:
@@ -315,7 +321,7 @@ def build_prediction_snapshot(
         (context for context in contexts if context.market.market_id == selected_market_id),
         None,
     )
-    station = get_station(weather.station)
+    station = get_station_any(weather.station)
     zone = ZoneInfo(station.timezone)
     latest_obs_utc = datetime.fromisoformat(weather.latest_obs_time)
     if latest_obs_utc.tzinfo is None:

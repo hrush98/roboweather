@@ -20,6 +20,13 @@ NGBOOST_MODEL = "ngboost_normal_pm_active_us12_obs_2022_2025"
 LOW_DYNAMIC_MODEL = "low_dynamic_bucket_obs_2022_2025"
 LOW_MVP_MODEL = "low_mvp_obs_2022_2025"
 
+GLOBAL_HIGH_MVP_MODEL = "mvp_international_celsius_high_obs_2022_2025"
+GLOBAL_HIGH_DYNAMIC_MODEL = "dynamic_bucket_international_celsius_high_obs_2022_2025"
+GLOBAL_HIGH_CATBOOST_MODEL = "catboost_bucket_international_celsius_high_obs_2022_2025"
+GLOBAL_HIGH_REGRESSION_MODEL = "high_regression_international_celsius_high_obs_2022_2025"
+GLOBAL_LOW_MVP_MODEL = "mvp_international_celsius_low_obs_2022_2025"
+GLOBAL_LOW_DYNAMIC_MODEL = "dynamic_bucket_international_celsius_low_obs_2022_2025"
+
 DYNAMIC_HRRR_V2_MODEL = "dynamic_bucket_hrrr_v2_obs_2022_2025"
 DYNAMIC_TUNED_HRRR_V2_MODEL = "dynamic_bucket_tuned_hrrr_v2_obs_2022_2025"
 CATBOOST_HRRR_V2_MODEL = "catboost_bucket_hrrr_v2_obs_2022_2025"
@@ -84,6 +91,30 @@ CONSENSUS_GROUPS["low_pm_active_us12_dynamic_mvp"] = (LOW_DYNAMIC_MODEL, LOW_MVP
 for _model_name in CONSENSUS_GROUPS["low_pm_active_us12_dynamic_mvp"]:
     CONSENSUS_GROUPS_BY_MODEL.setdefault(_model_name, ())
     CONSENSUS_GROUPS_BY_MODEL[_model_name] = (*CONSENSUS_GROUPS_BY_MODEL[_model_name], "low_pm_active_us12_dynamic_mvp")
+
+CONSENSUS_GROUPS.update(
+    {
+        "global_high_dynamic_mvp": (GLOBAL_HIGH_DYNAMIC_MODEL, GLOBAL_HIGH_MVP_MODEL),
+        "global_high_catboost_mvp": (GLOBAL_HIGH_CATBOOST_MODEL, GLOBAL_HIGH_MVP_MODEL),
+        "global_high_bucket_consensus": (GLOBAL_HIGH_DYNAMIC_MODEL, GLOBAL_HIGH_CATBOOST_MODEL),
+        "global_high_three_model_consensus": (
+            GLOBAL_HIGH_DYNAMIC_MODEL,
+            GLOBAL_HIGH_CATBOOST_MODEL,
+            GLOBAL_HIGH_MVP_MODEL,
+        ),
+        "global_low_dynamic_mvp": (GLOBAL_LOW_DYNAMIC_MODEL, GLOBAL_LOW_MVP_MODEL),
+    }
+)
+for _group_name in (
+    "global_high_dynamic_mvp",
+    "global_high_catboost_mvp",
+    "global_high_bucket_consensus",
+    "global_high_three_model_consensus",
+    "global_low_dynamic_mvp",
+):
+    for _model_name in CONSENSUS_GROUPS[_group_name]:
+        CONSENSUS_GROUPS_BY_MODEL.setdefault(_model_name, ())
+        CONSENSUS_GROUPS_BY_MODEL[_model_name] = (*CONSENSUS_GROUPS_BY_MODEL[_model_name], _group_name)
 
 
 @dataclass(frozen=True)
@@ -163,7 +194,76 @@ LOW_POLICIES: tuple[ResearchPolicySpec, ...] = (
 )
 
 
-POLICIES: tuple[ResearchPolicySpec, ...] = (*_broad_policy_specs(), *LOW_POLICIES)
+def _global_policy_specs() -> tuple[ResearchPolicySpec, ...]:
+    specs: list[ResearchPolicySpec] = []
+    model_aliases = {
+        "high_dynamic": GLOBAL_HIGH_DYNAMIC_MODEL,
+        "high_catboost": GLOBAL_HIGH_CATBOOST_MODEL,
+        "high_mvp": GLOBAL_HIGH_MVP_MODEL,
+        "high_regression": GLOBAL_HIGH_REGRESSION_MODEL,
+        "low_dynamic": GLOBAL_LOW_DYNAMIC_MODEL,
+        "low_mvp": GLOBAL_LOW_MVP_MODEL,
+    }
+    group_names = (
+        "global_high_dynamic_mvp",
+        "global_high_catboost_mvp",
+        "global_high_bucket_consensus",
+        "global_high_three_model_consensus",
+        "global_low_dynamic_mvp",
+    )
+    for alias, model_name in model_aliases.items():
+        for strategy_bucket in BROAD_STRATEGY_BUCKETS:
+            specs.append(
+                ResearchPolicySpec(
+                    name=f"global_{alias}_{_strategy_slug(strategy_bucket)}_first",
+                    source="model",
+                    strategy_bucket=strategy_bucket,
+                    model_name=model_name,
+                )
+            )
+    for group_name in group_names:
+        for strategy_bucket in BROAD_STRATEGY_BUCKETS:
+            specs.append(
+                ResearchPolicySpec(
+                    name=f"{group_name}_{_strategy_slug(strategy_bucket)}_first",
+                    source="consensus",
+                    strategy_bucket=strategy_bucket,
+                    model_group=group_name,
+                )
+            )
+    for group_name in group_names:
+        specs.extend(
+            (
+                ResearchPolicySpec(
+                    name=f"{group_name}_high_conviction_10m_first",
+                    source="consensus",
+                    strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+                    model_group=group_name,
+                    obs_delay_bucket="10m",
+                ),
+                ResearchPolicySpec(
+                    name=f"{group_name}_high_conviction_15m_first",
+                    source="consensus",
+                    strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+                    model_group=group_name,
+                    obs_delay_bucket="15m",
+                ),
+                ResearchPolicySpec(
+                    name=f"{group_name}_high_conviction_by_bucket_side_delay_first",
+                    source="consensus",
+                    strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+                    model_group=group_name,
+                    uniqueness_key_mode="station_date_bucket_side_obs_delay",
+                ),
+            )
+        )
+    return tuple(specs)
+
+
+GLOBAL_POLICIES: tuple[ResearchPolicySpec, ...] = _global_policy_specs()
+
+
+POLICIES: tuple[ResearchPolicySpec, ...] = (*_broad_policy_specs(), *LOW_POLICIES, *GLOBAL_POLICIES)
 
 
 class ResearchPolicyEvaluator:

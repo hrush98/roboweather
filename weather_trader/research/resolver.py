@@ -14,8 +14,10 @@ from weather_trader.execution.contracts import (
 from weather_trader.execution.positions import winning_side_for_bucket
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.features.build_same_day_features import prepare_station_observations
+from weather_trader.features.international_dataset_builder import _fahrenheit_observations_to_celsius
+from weather_trader.stations.hko_client import HKOClimateClient
 from weather_trader.stations.iem_asos_client import IEMASOSClient
-from weather_trader.stations.metadata import get_station
+from weather_trader.stations.metadata import get_international_station, get_station, get_station_any
 
 
 @dataclass(frozen=True)
@@ -38,10 +40,14 @@ class ResearchResolver:
         store: ExecutionStore,
         config: ResolverConfig | None = None,
         obs_client: IEMASOSClient | None = None,
+        hko_client: HKOClimateClient | None = None,
+        market_scope: str = "us",
     ) -> None:
         self.store = store
         self.config = config or ResolverConfig()
         self.obs_client = obs_client or IEMASOSClient()
+        self.hko_client = hko_client or HKOClimateClient()
+        self.market_scope = market_scope
 
     def resolve_due(self, as_of_utc: datetime | None = None) -> ResolveSummary:
         now = as_of_utc or datetime.now(timezone.utc)
@@ -72,7 +78,7 @@ class ResearchResolver:
         )
 
     def _is_due(self, station_id: str, market_date: date, as_of_utc: datetime) -> bool:
-        station = get_station(station_id)
+        station = get_station_any(station_id)
         zone = ZoneInfo(station.timezone)
         resolve_at_local = datetime.combine(
             market_date + timedelta(days=1),
@@ -82,6 +88,8 @@ class ResearchResolver:
         return as_of_utc >= resolve_at_local.astimezone(timezone.utc)
 
     def _resolve_station_date(self, station_id: str, market_date: date) -> StationDateOutcome:
+        if self.market_scope == "global":
+            return self._resolve_global_station_date(station_id, market_date)
         station = get_station(station_id)
         observations = self.obs_client.fetch_observations(
             station=station.station,
@@ -103,6 +111,44 @@ class ResearchResolver:
             source=self.config.source,
             resolved_at=resolved_at,
             final_low_tmpf=final_low,
+        )
+
+    def _resolve_global_station_date(self, station_id: str, market_date: date) -> StationDateOutcome:
+        station = get_international_station(station_id)
+        resolved_at = utc_now_iso()
+        if station.station == "VHHH":
+            high = self.hko_client.fetch_daily_temperature_series("high", station="HKO")
+            low = self.hko_client.fetch_daily_temperature_series("low", station="HKO")
+            daily = high.merge(low, on="local_date", how="outer")
+            row = daily.loc[daily["local_date"] == market_date]
+            if row.empty:
+                raise ValueError(f"No HKO daily observations for {station.station} on {market_date}")
+            return StationDateOutcome(
+                timestamp=resolved_at,
+                station=station.station,
+                market_date=market_date,
+                final_high_tmpf=float(row.iloc[0]["final_high_tmpf"]),
+                final_low_tmpf=float(row.iloc[0]["final_low_tmpf"]),
+                source="HKO_CLMMAXT_CLMMINT_C",
+                resolved_at=resolved_at,
+            )
+        observations = self.obs_client.fetch_observations(
+            station=station.station,
+            start=market_date,
+            end=market_date + timedelta(days=1),
+        )
+        prepared = prepare_station_observations(_fahrenheit_observations_to_celsius(observations), station)
+        day = prepared.loc[prepared["local_date"] == market_date]
+        if day.empty:
+            raise ValueError(f"No IEM observations for {station.station} on {market_date}")
+        return StationDateOutcome(
+            timestamp=resolved_at,
+            station=station.station,
+            market_date=market_date,
+            final_high_tmpf=round(float(day["tmpf"].max()), 1),
+            final_low_tmpf=round(float(day["tmpf"].min()), 1),
+            source="IEM_ASOS_METAR_C",
+            resolved_at=resolved_at,
         )
 
 
@@ -158,7 +204,7 @@ def _entry_price(snapshot: dict, side: TradeAction) -> float | None:
 def _parse_bucket(bucket: object) -> tuple[float | None, float | None]:
     if not bucket:
         return None, None
-    text = str(bucket).removesuffix("F")
+    text = str(bucket).removesuffix("F").removesuffix("C")
     if text.startswith(">="):
         return _float_or_none(text.removeprefix(">=")), None
     if text.startswith("<="):

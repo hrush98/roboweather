@@ -65,6 +65,50 @@ def test_market_parser_extracts_lowest_temperature_market() -> None:
     assert market.market_family == MarketFamily.LOW_TEMP
 
 
+def test_market_parser_extracts_international_celsius_buckets() -> None:
+    reader = PolymarketReader()
+
+    between = reader._parse_weather_market(
+        {
+            "id": "global-1",
+            "question": "Will the highest temperature in Tokyo be between 28-29°C on May 28?",
+            "slug": "highest-temperature-in-tokyo-on-may-28-2026-28-29c",
+            "bestAsk": "0.47",
+            "clobTokenIds": '["yes-token", "no-token"]',
+        }
+    )
+    tail = reader._parse_weather_market(
+        {
+            "id": "global-2",
+            "question": "Will the lowest temperature in Hong Kong be 24°C or below on May 28?",
+            "slug": "lowest-temperature-in-hong-kong-on-may-28-2026-24c-or-below",
+            "bestAsk": "0.52",
+            "clobTokenIds": '["yes-token", "no-token"]',
+        }
+    )
+    exact = reader._parse_weather_market(
+        {
+            "id": "global-3",
+            "question": "Will the highest temperature in London be 18°C on May 28?",
+            "slug": "highest-temperature-in-london-on-may-28-2026-18c",
+            "bestAsk": "0.35",
+            "clobTokenIds": '["yes-token", "no-token"]',
+        }
+    )
+
+    assert between is not None
+    assert between.station == "RJTT"
+    assert between.lower_f == 28.0
+    assert between.upper_f == 29.0
+    assert tail is not None
+    assert tail.station == "VHHH"
+    assert tail.upper_f == 24.0
+    assert tail.market_family == MarketFamily.LOW_TEMP
+    assert exact is not None
+    assert exact.lower_f == 18.0
+    assert exact.upper_f == 18.0
+
+
 def test_market_parser_maps_seattle_and_houston() -> None:
     reader = PolymarketReader()
 

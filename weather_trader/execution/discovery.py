@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from weather_trader.execution.contracts import MarketFamily, MarketSnapshot
 from weather_trader.markets.polymarket_reader import PolymarketReader, WeatherEventTarget
-from weather_trader.stations.metadata import get_station
+from weather_trader.stations.metadata import get_station, get_station_any
 
 
 @dataclass(frozen=True)
@@ -28,19 +28,35 @@ WEATHER_EVENT_CONFIGS: tuple[WeatherEventConfig, ...] = (
     WeatherEventConfig("seattle", "America/Los_Angeles"),
 )
 
+GLOBAL_WEATHER_EVENT_CONFIGS: tuple[WeatherEventConfig, ...] = (
+    WeatherEventConfig("hong-kong", "Asia/Hong_Kong"),
+    WeatherEventConfig("london", "Europe/London"),
+    WeatherEventConfig("tokyo", "Asia/Tokyo"),
+    WeatherEventConfig("seoul", "Asia/Seoul"),
+    WeatherEventConfig("shanghai", "Asia/Shanghai"),
+    WeatherEventConfig("singapore", "Asia/Singapore"),
+    WeatherEventConfig("mexico-city", "America/Mexico_City"),
+    WeatherEventConfig("paris", "Europe/Paris"),
+    WeatherEventConfig("amsterdam", "Europe/Amsterdam"),
+    WeatherEventConfig("munich", "Europe/Berlin"),
+)
+
+GLOBAL_CITY_SLUGS = frozenset(config.city_slug for config in GLOBAL_WEATHER_EVENT_CONFIGS)
+
 
 class MarketDiscoveryService:
     def __init__(self, reader: PolymarketReader | None = None) -> None:
         self.reader = reader or PolymarketReader()
         self.last_warnings: list[str] = []
 
-    def discover(self, limit: int = 50000, validate_stations: bool = True) -> list[MarketSnapshot]:
+    def discover(self, limit: int = 50000, validate_stations: bool = True, market_scope: str = "us") -> list[MarketSnapshot]:
         now = datetime.now(timezone.utc)
         discovered_at = now.isoformat()
         self.last_warnings = []
+        configs = _configs_for_scope(market_scope)
         targets = [
             WeatherEventTarget(config.city_slug, now.astimezone(ZoneInfo(config.timezone)).date(), family)
-            for config in WEATHER_EVENT_CONFIGS
+            for config in configs
             for family in (MarketFamily.HIGH_TEMP, MarketFamily.LOW_TEMP)
         ]
         event_items, missing_events = self.reader._fetch_weather_event_markets(targets)
@@ -50,6 +66,7 @@ class MarketDiscoveryService:
             event_items,
             discovered_at=discovered_at,
             validate_stations=validate_stations,
+            market_scope=market_scope,
         )
         if snapshots:
             return snapshots
@@ -65,6 +82,7 @@ class MarketDiscoveryService:
             source_items,
             discovered_at=discovered_at,
             validate_stations=validate_stations,
+            market_scope=market_scope,
         )
 
     def _items_to_snapshots(
@@ -72,6 +90,7 @@ class MarketDiscoveryService:
         items: list[dict],
         discovered_at: str,
         validate_stations: bool,
+        market_scope: str = "us",
     ) -> list[MarketSnapshot]:
         snapshots: list[MarketSnapshot] = []
         seen_market_ids: set[str] = set()
@@ -79,11 +98,13 @@ class MarketDiscoveryService:
             market = self.reader._parse_weather_market(item)
             if market is None:
                 continue
+            if not _market_in_scope(market.city, market_scope):
+                continue
             if market.market_id in seen_market_ids:
                 continue
             if validate_stations:
                 try:
-                    get_station(market.station)
+                    get_station_any(market.station) if market_scope in {"global", "all"} else get_station(market.station)
                 except KeyError:
                     continue
             seen_market_ids.add(market.market_id)
@@ -114,7 +135,7 @@ def same_day_markets(markets: list[MarketSnapshot], as_of_utc) -> list[MarketSna
     filtered: list[MarketSnapshot] = []
     for market in markets:
         try:
-            station = get_station(market.station)
+            station = get_station_any(market.station)
         except KeyError:
             continue
         local_date = as_of_utc.astimezone(__import__("zoneinfo").ZoneInfo(station.timezone)).date()
@@ -130,3 +151,25 @@ def _active_flag(item: dict) -> bool:
     if isinstance(value, str):
         return value.strip().lower() not in {"false", "0", "no"}
     return bool(value)
+
+
+def _configs_for_scope(market_scope: str) -> tuple[WeatherEventConfig, ...]:
+    if market_scope == "us":
+        return WEATHER_EVENT_CONFIGS
+    if market_scope == "global":
+        return GLOBAL_WEATHER_EVENT_CONFIGS
+    if market_scope == "all":
+        return (*WEATHER_EVENT_CONFIGS, *GLOBAL_WEATHER_EVENT_CONFIGS)
+    raise ValueError(f"Unsupported market_scope: {market_scope}")
+
+
+def _market_in_scope(city: str, market_scope: str) -> bool:
+    if market_scope == "all":
+        return True
+    slug = city.strip().lower().replace(" ", "-")
+    is_global = slug in GLOBAL_CITY_SLUGS
+    if market_scope == "global":
+        return is_global
+    if market_scope == "us":
+        return not is_global
+    raise ValueError(f"Unsupported market_scope: {market_scope}")

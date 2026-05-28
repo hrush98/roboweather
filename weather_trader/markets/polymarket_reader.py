@@ -9,7 +9,7 @@ import time
 import requests
 
 from weather_trader.execution.contracts import MarketFamily
-from weather_trader.stations.metadata import load_station_table
+from weather_trader.stations.metadata import load_international_station_table, load_station_table
 
 
 GAMMA_URL = "https://gamma-api.polymarket.com"
@@ -60,6 +60,18 @@ class PolymarketReader:
         self.city_map = {row["city"].lower(): row["station"] for row in table.to_dict(orient="records")}
         self.city_map["nyc"] = "KLGA"
         self.display_city = {row["station"]: row["city"] for row in table.to_dict(orient="records")}
+        international_table = load_international_station_table()
+        self.international_city_map = {
+            _city_slug(row["city"]): row["station"] for row in international_table.to_dict(orient="records")
+        }
+        self.international_display_city = {
+            row["station"]: row["city"] for row in international_table.to_dict(orient="records")
+        }
+        for city_slug, station in self.international_city_map.items():
+            self.city_map.setdefault(city_slug, station)
+            self.display_city.setdefault(station, self.international_display_city[station])
+        for row in international_table.to_dict(orient="records"):
+            self.city_map.setdefault(str(row["city"]).lower(), row["station"])
 
     def fetch_weather_markets(self, limit: int = 50000) -> list[WeatherMarket]:
         markets = []
@@ -271,6 +283,19 @@ def _retryable_request_error(exc: requests.RequestException) -> bool:
 
 
 def _parse_temperature_bucket(question_lower: str) -> tuple[float | None, float | None]:
+    between_c = re.search(r"between\s+(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)\s*°?\s*c", question_lower)
+    if between_c:
+        return float(between_c.group(1)), float(between_c.group(2))
+    or_higher_c = re.search(r"(-?\d+(?:\.\d+)?)\s*°?\s*c\s+or\s+higher", question_lower)
+    if or_higher_c:
+        return float(or_higher_c.group(1)), None
+    or_below_c = re.search(r"(-?\d+(?:\.\d+)?)\s*°?\s*c\s+or\s+below", question_lower)
+    if or_below_c:
+        return None, float(or_below_c.group(1))
+    exact_c = re.search(r"be\s+(-?\d+(?:\.\d+)?)\s*°?\s*c(?:\s+on|\?|$)", question_lower)
+    if exact_c:
+        value = float(exact_c.group(1))
+        return value, value
     between = re.search(r"between\s+(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*°?\s*f", question_lower)
     if between:
         return float(between.group(1)), float(between.group(2))
@@ -302,7 +327,14 @@ def _parse_resolution_station(item: dict) -> str | None:
     match = re.search(r"/(K[A-Z0-9]{3})(?:[./?#]|$)", text)
     if match:
         return match.group(1)
+    match = re.search(r"/([A-Z]{4})(?:[./?#]|$)", text)
+    if match:
+        return match.group(1)
     return None
+
+
+def _city_slug(city: str) -> str:
+    return city.strip().lower().replace(" ", "-")
 
 
 _MONTHS = {

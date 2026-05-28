@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 from weather_trader.execution.discovery import MarketDiscoveryService
+from weather_trader.execution.contracts import MarketFamily
 from weather_trader.markets.polymarket_reader import WeatherMarket
 
 
@@ -45,6 +46,17 @@ def test_discovery_preserves_gamma_active_flag() -> None:
     assert markets[0].active is False
 
 
+def test_global_discovery_targets_international_events_and_stations() -> None:
+    reader = FakeReader(event_items=[{"id": "global-market", "city": "Tokyo", "station": "RJTT"}], broad_items=[])
+    discovery = MarketDiscoveryService(reader=reader)
+
+    markets = discovery.discover(market_scope="global")
+
+    assert markets[0].station == "RJTT"
+    assert all(target.city_slug in {"tokyo", "hong-kong", "london", "seoul", "shanghai", "singapore", "mexico-city", "paris", "amsterdam", "munich"} for target in reader.targets)
+    assert {target.market_family for target in reader.targets} == {MarketFamily.HIGH_TEMP, MarketFamily.LOW_TEMP}
+
+
 class FakeReader:
     def __init__(self, event_items: list[dict], broad_items: list[dict], missing: list[str] | None = None) -> None:
         self.event_items = event_items
@@ -53,6 +65,7 @@ class FakeReader:
         self.broad_called = False
 
     def _fetch_weather_event_markets(self, targets):
+        self.targets = targets
         return self.event_items, self.missing
 
     def _fetch_gamma_markets(self, limit: int):
@@ -64,8 +77,8 @@ class FakeReader:
             market_id=item["id"],
             question="Will the highest temperature in Seattle be between 58-59°F on May 14?",
             slug="highest-temperature-in-seattle-on-may-14-2026-58-59f",
-            city="Seattle",
-            station="KSEA",
+            city=item.get("city", "Seattle"),
+            station=item.get("station", "KSEA"),
             threshold_f=58.0,
             lower_f=58.0,
             upper_f=59.0,

@@ -103,6 +103,32 @@ def test_research_loop_accepts_snapshot_collection_options(monkeypatch) -> None:
     assert captured["low_snapshot_end_local"] == "23:59"
     assert captured["disable_policy_evaluation"] is True
 
+
+def test_research_loop_accepts_market_scope(monkeypatch) -> None:
+    captured = {}
+
+    def fake_research_loop_command(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli, "ensure_directories", lambda: None)
+    monkeypatch.setattr(cli, "research_loop_command", fake_research_loop_command)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "roboweather",
+            "research-loop",
+            "--model",
+            "data/models/dynamic_bucket_international_celsius_high_obs_2022_2025.joblib",
+            "--market-scope",
+            "global",
+        ],
+    )
+
+    cli.main()
+
+    assert captured["market_scope"] == "global"
+
 def test_paper_policy_cycle_accepts_execution_options(monkeypatch) -> None:
     captured = {}
 
