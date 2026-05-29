@@ -499,11 +499,21 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
         pnl = _safe_float(row.get("unrealized_pnl"))
         current_bid = row.get("current_bid")
         entry_price = _safe_float(row.get("entry_price"))
+        avg_entry_price = row.get("avg_entry_price")
+        execution_entry = _safe_float(avg_entry_price) if avg_entry_price is not None else entry_price
         entry_fair = row.get("entry_fair")
         entry_fair_float = _safe_float(entry_fair)
         entry_edge = row.get("entry_edge")
         entry_edge_float = _safe_float(entry_edge)
         risk = _live_position_risk(row)
+        target = _safe_float(row.get("target_notional_usd"))
+        shares = _safe_float(row.get("filled_shares"))
+        cost = _safe_float(row.get("cost_usd"))
+        mark_value = (
+            _safe_float(row.get("mark_value"))
+            if row.get("mark_value") is not None
+            else (_safe_float(current_bid) * shares if current_bid is not None else 0.0)
+        )
         weather_pnl = _weather_money_pnl(row, outcome, risk, entry_price)
         exp_rr = _price_rr(entry_fair_float, entry_price) if entry_fair is not None else None
         live_rr = _price_rr(_safe_float(current_bid), entry_price) if current_bid is not None else None
@@ -548,10 +558,18 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
                 "side": side,
                 "bucket": bucket,
                 "rows": 0,
+                "target": 0.0,
+                "risk": 0.0,
+                "cost": 0.0,
+                "shares": 0.0,
                 "entry": 0.0,
+                "entry_weight": 0.0,
                 "fair": 0.0,
+                "fair_weight": 0.0,
                 "edge": 0.0,
+                "edge_weight": 0.0,
                 "mark": 0.0,
+                "mark_value": 0.0,
                 "pnl": 0.0,
                 "fair_count": 0,
                 "edge_count": 0,
@@ -569,14 +587,22 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
             },
         )
         group["rows"] += 1
-        group["entry"] += entry_price
+        group["target"] += target
+        group["risk"] += risk
+        group["cost"] += cost
+        group["shares"] += shares
+        group["entry"] += execution_entry * (shares or 1.0)
+        group["entry_weight"] += shares or 1.0
         if entry_fair is not None:
-            group["fair"] += entry_fair_float
+            group["fair"] += entry_fair_float * (risk or 1.0)
+            group["fair_weight"] += risk or 1.0
             group["fair_count"] += 1
         if entry_edge is not None:
-            group["edge"] += entry_edge_float
+            group["edge"] += entry_edge_float * (risk or 1.0)
+            group["edge_weight"] += risk or 1.0
             group["edge_count"] += 1
         group["mark"] += _safe_float(current_bid)
+        group["mark_value"] += mark_value
         group["pnl"] += pnl
         if current_bid is not None:
             group["max_bid"] = max(group["max_bid"], _safe_float(current_bid))
@@ -708,12 +734,11 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
 
     exposure_rows: list[dict[str, Any]] = []
     for group in exposure_index.values():
-        rows = group["rows"] or 1
-        entry = group["entry"] / rows
-        mark = group["mark"] / group["book_marked"] if group["book_marked"] else None
-        fair = group["fair"] / group["fair_count"] if group["fair_count"] else None
-        edge = group["edge"] / group["edge_count"] if group["edge_count"] else None
-        pnl_pct = group["pnl"] / group["entry"] if group["entry"] else None
+        entry = group["entry"] / group["entry_weight"] if group["entry_weight"] else None
+        mark = group["mark_value"] / group["shares"] if group["shares"] else (group["mark"] / group["book_marked"] if group["book_marked"] else None)
+        fair = group["fair"] / group["fair_weight"] if group["fair_weight"] else None
+        edge = group["edge"] / group["edge_weight"] if group["edge_weight"] else None
+        pnl_pct = _ratio(group["pnl"], group["risk"])
         status = group["status"] or "LIVE"
         if group["max_bid"] >= 0.95:
             status = "DONE"
@@ -728,11 +753,12 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
                 "edge": edge,
                 "mark": mark,
                 "pnl_pct": pnl_pct,
-                "expected_rr": _price_rr(fair, entry),
+                "expected_rr": _price_rr(fair, entry or 0.0),
                 "status": status,
                 "book_status": _book_status(book_pct),
                 "book_mark_pct": book_pct,
-                "live_minus_exp": pnl_pct - _price_rr(fair, entry) if pnl_pct is not None and fair is not None else None,
+                "live_rr": pnl_pct,
+                "live_minus_exp": pnl_pct - _price_rr(fair, entry or 0.0) if pnl_pct is not None and fair is not None else None,
                 "weather_rr": _ratio(group["weather_pnl"], group["weather_risk"]),
             }
         )

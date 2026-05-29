@@ -274,6 +274,65 @@ def test_live_policy_view_uses_open_positions_and_policy_silos() -> None:
     assert view["exposure_rows"][0]["expected_rr"] == pytest.approx(1.5)
     assert view["station_rows"][0]["risk"] == pytest.approx(3.0)
     assert [row["station"] for row in view["policy_station_rows"]] == ["KDAL", "KATL"]
+    assert view["exposure_rows"][0]["cost"] == pytest.approx(3.0)
+    assert view["exposure_rows"][0]["shares"] == pytest.approx(30.0)
+    assert view["exposure_rows"][0]["mark"] == pytest.approx(0.32)
+    assert view["exposure_rows"][0]["live_rr"] == pytest.approx(0.22 / 3.0)
+
+
+def test_live_policy_view_aggregates_simple_contract_exposure() -> None:
+    live_rows = [
+        {
+            "timestamp": "2026-05-11T18:11:00Z",
+            "policy_name": "strategy_a",
+            "station": "KATL",
+            "market_date": "2026-05-11",
+            "selected_side": "BUY_NO",
+            "selected_bucket": "74-75F",
+            "entry_price": 0.79,
+            "entry_fair": 0.88,
+            "entry_edge": 0.09,
+            "target_notional_usd": 80.0,
+            "filled_shares": 100.0,
+            "avg_entry_price": 0.79,
+            "cost_usd": 79.0,
+            "state": "FILLED",
+            "current_bid": 0.80,
+            "unrealized_pnl": 1.0,
+        },
+        {
+            "timestamp": "2026-05-11T18:12:00Z",
+            "policy_name": "strategy_b",
+            "station": "KATL",
+            "market_date": "2026-05-11",
+            "selected_side": "BUY_NO",
+            "selected_bucket": "74-75F",
+            "entry_price": 0.80,
+            "entry_fair": 0.90,
+            "entry_edge": 0.10,
+            "target_notional_usd": 40.0,
+            "filled_shares": 50.0,
+            "avg_entry_price": 0.80,
+            "cost_usd": 40.0,
+            "state": "PARTIAL",
+            "current_bid": 0.82,
+            "unrealized_pnl": 1.0,
+        },
+    ]
+
+    view = _build_live_policy_view(live_rows, as_of_utc=datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc))
+
+    assert len(view["exposure_rows"]) == 1
+    exposure = view["exposure_rows"][0]
+    assert exposure["rows"] == 2
+    assert exposure["target"] == pytest.approx(120.0)
+    assert exposure["cost"] == pytest.approx(119.0)
+    assert exposure["shares"] == pytest.approx(150.0)
+    assert exposure["entry"] == pytest.approx((0.79 * 100.0 + 0.80 * 50.0) / 150.0)
+    assert exposure["mark"] == pytest.approx((0.80 * 100.0 + 0.82 * 50.0) / 150.0)
+    assert exposure["pnl"] == pytest.approx(2.0)
+    assert exposure["live_rr"] == pytest.approx(2.0 / 119.0)
+    assert exposure["status"] == "ITM"
 
 
 def test_live_policy_view_scores_prelim_weather_when_books_are_missing() -> None:
@@ -1225,6 +1284,11 @@ def test_tui_live_summary_and_positions_show_sizing_caps(tmp_path) -> None:
             summary_text = "\n".join(" ".join(str(cell) for cell in summary.get_row_at(index)) for index in range(summary.row_count))
             assert "open risk $4.50 / $150.00" in summary_text
             assert "largest station/date $4.50 / $25.00 KATL:2026-05-25" in summary_text
+            contracts = app.query_one("#live-contracts", DataTable)
+            contract_text = "\n".join(" ".join(str(cell) for cell in contracts.get_row_at(index)) for index in range(contracts.row_count))
+            assert "KATL" in contract_text
+            assert "$4.50" in contract_text
+
             positions = app.query_one("#live-positions", DataTable)
             position_text = "\n".join(" ".join(str(cell) for cell in positions.get_row_at(index)) for index in range(positions.row_count))
             assert "$10.00" in position_text

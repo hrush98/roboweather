@@ -40,7 +40,7 @@ class TableSort:
     reverse: bool
 
 
-OVERVIEW_TABLE_IDS = {"live-summary", "live-strategies", "live-stations", "live-positions"}
+OVERVIEW_TABLE_IDS = {"live-summary", "live-strategies", "live-stations", "live-contracts", "live-positions"}
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LIVE_RESOLUTION_POLL_INTERVAL_SECONDS = 6 * 60 * 60
 
@@ -319,11 +319,15 @@ class RoboWeatherTUI(App):
     }
 
     #live-strategies {
-        height: 12;
+        height: 10;
     }
 
     #live-stations {
-        height: 12;
+        height: 8;
+    }
+
+    #live-contracts {
+        height: 10;
     }
 
     #live-positions {
@@ -433,13 +437,12 @@ class RoboWeatherTUI(App):
                     yield DataTable(id="live-summary")
                     yield Static("Strategies", classes="section-title")
                     yield DataTable(id="live-strategies")
-                    with Horizontal(classes="split"):
-                        with Vertical(classes="stack"):
-                            yield Static("Stations", classes="section-title")
-                            yield DataTable(id="live-stations")
-                        with Vertical(classes="stack"):
-                            yield Static("Open Exposure", classes="section-title")
-                            yield DataTable(id="live-positions")
+                    yield Static("Stations", classes="section-title")
+                    yield DataTable(id="live-stations")
+                    yield Static("Live Positions", classes="section-title")
+                    yield DataTable(id="live-contracts")
+                    yield Static("Open Exposure", classes="section-title")
+                    yield DataTable(id="live-positions")
                 with TabPane("Orders", id="orders-tab"):
                     yield Static("Live Order Attempts", classes="section-title")
                     yield DataTable(id="live-orders")
@@ -513,6 +516,29 @@ class RoboWeatherTUI(App):
                 ("quote%", "mark_pct"),
                 ("yes", "buy_yes"),
                 ("no", "buy_no"),
+            ],
+        )
+
+        live_contracts = self.query_one("#live-contracts", DataTable)
+        live_contracts.cursor_type = "row"
+        _add_keyed_columns(
+            live_contracts,
+            [
+                ("state", "state"),
+                ("station", "station"),
+                ("date", "date"),
+                ("side", "side"),
+                ("bucket", "bucket"),
+                ("legs", "legs"),
+                ("target", "target"),
+                ("cost", "cost"),
+                ("filled", "filled"),
+                ("entry", "entry"),
+                ("bid", "bid"),
+                ("pnl", "pnl"),
+                ("live R/R", "live_rr"),
+                ("weather", "weather"),
+                ("high", "high"),
             ],
         )
 
@@ -928,6 +954,27 @@ class RoboWeatherTUI(App):
                 _fmt_pct(row.get("mark_pct")),
                 str(row.get("buy_yes", 0)),
                 str(row.get("buy_no", 0)),
+            )
+
+        contracts_table = self.query_one("#live-contracts", DataTable)
+        contracts_table.clear()
+        for row in view["exposure_rows"]:
+            contracts_table.add_row(
+                _status_text(row.get("status")),
+                str(row.get("station", "")),
+                str(row.get("market_date", "")),
+                str(row.get("side", "")),
+                str(row.get("bucket", "")),
+                str(row.get("rows", 0)),
+                _fmt_money(row.get("target")),
+                _fmt_money(row.get("cost")),
+                _fmt(row.get("shares")),
+                _fmt(row.get("entry")),
+                _fmt(row.get("mark")),
+                _money_text(row.get("pnl")),
+                _fmt_pct(row.get("live_rr")),
+                _status_text(row.get("weather_status")),
+                _fmt(row.get("weather_high")),
             )
 
         position_rows_by_key = {
