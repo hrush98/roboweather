@@ -563,7 +563,7 @@ class RoboWeatherTUI(App):
                     yield Static(id="live-performance-line")
                     yield Static("Daily PnL", classes="section-title")
                     yield Static(id="live-performance-bars")
-                    yield Static("Last 7 Days", classes="section-title")
+                    yield Static("Daily History", classes="section-title")
                     yield DataTable(id="live-performance-table")
                 with TabPane("Orders", id="orders-tab"):
                     yield Static("Live Order Attempts", classes="section-title")
@@ -1120,7 +1120,12 @@ class RoboWeatherTUI(App):
 
         performance_table = self.query_one("#live-performance-table", DataTable)
         performance_table.clear()
-        for row in performance.get("last_7_days", []):
+        performance_history = sorted(
+            performance.get("daily_rows", []),
+            key=lambda item: str(item.get("utc_date", "")),
+            reverse=True,
+        )
+        for row in performance_history:
             performance_table.add_row(
                 str(row.get("utc_date", "")),
                 str(row.get("positions", 0)),

@@ -1355,6 +1355,39 @@ def test_tui_live_summary_and_positions_show_sizing_caps(tmp_path) -> None:
             )
         )
         assert position_id is not None
+        older_position_id = store.insert_live_policy_position(
+            LivePolicyPosition(
+                timestamp="2026-05-24T12:00:00+00:00",
+                strategy_name="older-live-performance-test",
+                station="KDAL",
+                market_date=date(2026, 5, 24),
+                market_family=MarketFamily.HIGH_TEMP,
+                scope_key="older-station-date-bucket-side-obs-delay:80-81F:BUY_YES:15m",
+                selected_market_id="older-market-sizing",
+                selected_token_id="older-token-sizing",
+                selected_side=TradeAction.BUY_YES,
+                selected_bucket="80-81F",
+                obs_delay_bucket="15m",
+                entry_price=0.5,
+                entry_fair=0.8,
+                entry_edge=0.3,
+                target_notional_usd=5.0,
+                target_shares=10.0,
+                state=LivePositionState.RESERVED,
+                source_prediction_snapshot_ids=[2],
+            )
+        )
+        assert older_position_id is not None
+        store.update_live_policy_position_settlement(
+            older_position_id,
+            resolved_at="2026-05-24T20:00:00+00:00",
+            resolution_source="iem",
+            winning_token_id="older-token-sizing",
+            winning_side=TradeAction.BUY_YES,
+            settlement_value_usd=10.0,
+            realized_pnl=5.0,
+            realized_rr=1.0,
+        )
     finally:
         store.close()
 
@@ -1378,7 +1411,9 @@ def test_tui_live_summary_and_positions_show_sizing_caps(tmp_path) -> None:
             assert "Days" in performance_line.content
             assert "scale" in performance_line.content
             assert "Last 7 days by day" in performance_bars.content
-            assert performance_table.row_count >= 1
+            assert performance_table.row_count >= 2
+            assert str(performance_table.get_row_at(0)[0]) == "2026-05-25"
+            assert str(performance_table.get_row_at(1)[0]) == "2026-05-24"
 
             positions = app.query_one("#live-positions", DataTable)
             position_text = "\n".join(" ".join(str(cell) for cell in positions.get_row_at(index)) for index in range(positions.row_count))
