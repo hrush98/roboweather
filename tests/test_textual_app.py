@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import pytest
-from textual.widgets import Button, DataTable, Input
+from textual.widgets import Button, DataTable, Input, Static
 
 from weather_trader.ui.process_supervisor import ProcessSnapshot, ProcessSpec, ProcessSupervisor
 from weather_trader.ui.textual_app import RoboWeatherTUI, _live_start_label
@@ -333,6 +333,87 @@ def test_live_policy_view_aggregates_simple_contract_exposure() -> None:
     assert exposure["pnl"] == pytest.approx(2.0)
     assert exposure["live_rr"] == pytest.approx(2.0 / 119.0)
     assert exposure["status"] == "ITM"
+
+
+def test_live_performance_summary_builds_cumulative_series(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "tui.sqlite")
+    try:
+        first_id = store.insert_live_policy_position(
+            LivePolicyPosition(
+                timestamp="2026-05-10T12:00:00+00:00",
+                strategy_name="perf-a",
+                station="KATL",
+                market_date=date(2026, 5, 10),
+                market_family=MarketFamily.HIGH_TEMP,
+                scope_key="perf-a",
+                selected_market_id="market-a",
+                selected_token_id="token-a",
+                selected_side=TradeAction.BUY_NO,
+                selected_bucket="74-75F",
+                obs_delay_bucket="15m",
+                entry_price=0.4,
+                entry_fair=0.6,
+                entry_edge=0.2,
+                target_notional_usd=4.0,
+                target_shares=10.0,
+                state=LivePositionState.RESERVED,
+                source_prediction_snapshot_ids=[1],
+            )
+        )
+        second_id = store.insert_live_policy_position(
+            LivePolicyPosition(
+                timestamp="2026-05-11T12:00:00+00:00",
+                strategy_name="perf-b",
+                station="KDAL",
+                market_date=date(2026, 5, 11),
+                market_family=MarketFamily.HIGH_TEMP,
+                scope_key="perf-b",
+                selected_market_id="market-b",
+                selected_token_id="token-b",
+                selected_side=TradeAction.BUY_YES,
+                selected_bucket="80-81F",
+                obs_delay_bucket="15m",
+                entry_price=0.5,
+                entry_fair=0.65,
+                entry_edge=0.15,
+                target_notional_usd=5.0,
+                target_shares=10.0,
+                state=LivePositionState.RESERVED,
+                source_prediction_snapshot_ids=[2],
+            )
+        )
+        assert first_id is not None and second_id is not None
+        store.update_live_policy_position_settlement(
+            first_id,
+            resolved_at="2026-05-10T20:00:00+00:00",
+            resolution_source="iem",
+            winning_token_id="token-a",
+            winning_side=TradeAction.BUY_NO,
+            settlement_value_usd=4.0,
+            realized_pnl=1.5,
+            realized_rr=0.375,
+        )
+        store.update_live_policy_position_settlement(
+            second_id,
+            resolved_at="2026-05-11T20:00:00+00:00",
+            resolution_source="iem",
+            winning_token_id="token-b",
+            winning_side=TradeAction.BUY_YES,
+            settlement_value_usd=5.0,
+            realized_pnl=-0.5,
+            realized_rr=-0.1,
+        )
+        summary = store.live_performance_summary()
+    finally:
+        store.close()
+
+    assert [row["utc_date"] for row in summary["daily_rows"]] == ["2026-05-10", "2026-05-11"]
+    assert summary["daily_rows"][0]["daily_pnl"] == pytest.approx(1.5)
+    assert summary["daily_rows"][0]["cumulative_pnl"] == pytest.approx(1.5)
+    assert summary["daily_rows"][1]["daily_pnl"] == pytest.approx(-0.5)
+    assert summary["daily_rows"][1]["cumulative_pnl"] == pytest.approx(1.0)
+    assert summary["last_7_days"] == summary["daily_rows"]
+    assert summary["total_pnl"] == pytest.approx(1.0)
 
 
 def test_live_policy_view_scores_prelim_weather_when_books_are_missing() -> None:
@@ -1288,6 +1369,13 @@ def test_tui_live_summary_and_positions_show_sizing_caps(tmp_path) -> None:
             contract_text = "\n".join(" ".join(str(cell) for cell in contracts.get_row_at(index)) for index in range(contracts.row_count))
             assert "KATL" in contract_text
             assert "$4.50" in contract_text
+
+            performance_line = app.query_one("#live-performance-line", Static)
+            performance_bars = app.query_one("#live-performance-bars", Static)
+            performance_table = app.query_one("#live-performance-table", DataTable)
+            assert "Cumulative PnL since live start" in performance_line.content
+            assert "Last 7 days" in performance_bars.content
+            assert performance_table.row_count >= 1
 
             positions = app.query_one("#live-positions", DataTable)
             position_text = "\n".join(" ".join(str(cell) for cell in positions.get_row_at(index)) for index in range(positions.row_count))

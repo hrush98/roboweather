@@ -40,7 +40,7 @@ class TableSort:
     reverse: bool
 
 
-OVERVIEW_TABLE_IDS = {"live-summary", "live-strategies", "live-stations", "live-contracts", "live-positions"}
+OVERVIEW_TABLE_IDS = {"live-summary", "live-strategies", "live-stations", "live-contracts", "live-positions", "live-performance-table"}
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LIVE_RESOLUTION_POLL_INTERVAL_SECONDS = 6 * 60 * 60
 
@@ -170,6 +170,79 @@ def _sizing_multiplier(row: dict[str, Any]) -> str:
     if policy is None or price is None:
         return ""
     return f"p{float(policy):.2f} x px{float(price):.2f}"
+
+
+_CHART_LEVELS = "▁▂▃▄▅▆▇█"
+
+
+def _compress_series(values: list[float], max_points: int = 48) -> list[float]:
+    if len(values) <= max_points:
+        return values
+    step = len(values) / max_points
+    compressed: list[float] = []
+    for index in range(max_points):
+        start = int(round(index * step))
+        end = int(round((index + 1) * step))
+        if end <= start:
+            end = min(len(values), start + 1)
+        compressed.append(values[min(len(values) - 1, end - 1)])
+    return compressed
+
+
+def _sparkline(values: list[float]) -> str:
+    if not values:
+        return ""
+    minimum = min(values)
+    maximum = max(values)
+    if maximum == minimum:
+        return _CHART_LEVELS[0] * len(values)
+    scale = len(_CHART_LEVELS) - 1
+    span = maximum - minimum
+    chars = []
+    for value in values:
+        level = int(round((value - minimum) / span * scale))
+        level = max(0, min(scale, level))
+        chars.append(_CHART_LEVELS[level])
+    return "".join(chars)
+
+
+def _render_cumulative_performance(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No live performance yet."
+    cumulative = [float(row.get("cumulative_pnl") or 0.0) for row in rows]
+    cumulative = _compress_series(cumulative, max_points=60)
+    spark = _sparkline(cumulative)
+    min_value = min(cumulative)
+    max_value = max(cumulative)
+    first_value = cumulative[0]
+    last_value = cumulative[-1]
+    left_date = str(rows[0].get("utc_date", ""))
+    right_date = str(rows[-1].get("utc_date", ""))
+    return "\n".join([
+        "Cumulative PnL since live start",
+        f"{max_value:>11.2f} ┤ {spark}",
+        f"{min_value:>11.2f} └ {left_date} → {right_date}  Δ {last_value - first_value:+.2f}  last {last_value:+.2f}",
+    ])
+
+
+def _render_daily_bar_chart(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "No live performance yet."
+    max_abs = max(abs(float(row.get("daily_pnl") or 0.0)) for row in rows) or 1.0
+    scale_width = 26
+    lines = ["Last 7 days"]
+    for row in rows:
+        value = float(row.get("daily_pnl") or 0.0)
+        width = int(round(abs(value) / max_abs * scale_width)) if value else 0
+        width = max(1, width) if value else 0
+        bar = "█" * width
+        if value < 0:
+            bar = f"{bar:>{scale_width}}"
+        else:
+            bar = f"{bar:<{scale_width}}"
+        lines.append(f"{str(row.get('utc_date', '')):<10} │ {bar} {value:+.2f}")
+    return "\n".join(lines)
+
 
 def _default_target_date(db_path: Path) -> str:
     store = ExecutionStore(db_path)
@@ -330,6 +403,18 @@ class RoboWeatherTUI(App):
         height: 10;
     }
 
+    #live-performance-line {
+        height: 9;
+    }
+
+    #live-performance-bars {
+        height: 11;
+    }
+
+    #live-performance-table {
+        height: 1fr;
+    }
+
     #live-positions {
         height: 1fr;
     }
@@ -441,6 +526,10 @@ class RoboWeatherTUI(App):
                     yield DataTable(id="live-stations")
                     yield Static("Live Positions", classes="section-title")
                     yield DataTable(id="live-contracts")
+                    yield Static("Performance", classes="section-title")
+                    yield Static(id="live-performance-line")
+                    yield Static(id="live-performance-bars")
+                    yield DataTable(id="live-performance-table")
                     yield Static("Open Exposure", classes="section-title")
                     yield DataTable(id="live-positions")
                 with TabPane("Orders", id="orders-tab"):
@@ -542,6 +631,18 @@ class RoboWeatherTUI(App):
             ],
         )
 
+        live_performance_table = self.query_one("#live-performance-table", DataTable)
+        live_performance_table.cursor_type = "row"
+        _add_keyed_columns(
+            live_performance_table,
+            [
+                ("date", "utc_date"),
+                ("positions", "positions"),
+                ("daily pnl", "daily_pnl"),
+                ("cumulative pnl", "cumulative_pnl"),
+            ],
+        )
+
         live_positions = self.query_one("#live-positions", DataTable)
         live_positions.cursor_type = "row"
         _add_keyed_columns(
@@ -603,6 +704,10 @@ class RoboWeatherTUI(App):
         signals = self.query_one("#signals", DataTable)
         signals.cursor_type = "row"
         signals.add_columns("time", "station", "bucket", "fair yes", "yes ask", "fair no", "no ask", "edge", "signal", "reason")
+
+        performance_table = self.query_one("#live-performance-table", DataTable)
+        performance_table.cursor_type = "row"
+        performance_table.add_columns("date", "positions", "daily pnl", "cumulative pnl")
 
         self.refresh_table()
         self.refresh_processes()
@@ -839,6 +944,7 @@ class RoboWeatherTUI(App):
             live_events = store.recent_live_trade_events(limit=100)
             live_risk = store.recent_live_risk_snapshots(limit=5)
             exposure = store.live_exposure_summary()
+            performance = store.live_performance_summary()
             strategies = store.live_strategies(active_only=False)
             overview = store.research_status_overview(self.target_date)
         finally:
@@ -975,6 +1081,22 @@ class RoboWeatherTUI(App):
                 _fmt_pct(row.get("live_rr")),
                 _status_text(row.get("weather_status")),
                 _fmt(row.get("weather_high")),
+            )
+
+        performance_line = self.query_one("#live-performance-line", Static)
+        performance_line.update(_render_cumulative_performance(performance.get("daily_rows", [])))
+
+        performance_bars = self.query_one("#live-performance-bars", Static)
+        performance_bars.update(_render_daily_bar_chart(performance.get("last_7_days", [])))
+
+        performance_table = self.query_one("#live-performance-table", DataTable)
+        performance_table.clear()
+        for row in performance.get("last_7_days", []):
+            performance_table.add_row(
+                str(row.get("utc_date", "")),
+                str(row.get("positions", 0)),
+                _money_text(row.get("daily_pnl")),
+                _money_text(row.get("cumulative_pnl")),
             )
 
         position_rows_by_key = {

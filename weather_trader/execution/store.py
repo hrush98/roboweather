@@ -2148,6 +2148,45 @@ class ExecutionStore:
             daily[key] = daily.get(key, 0.0) + risk
         return daily
 
+    def live_performance_summary(self) -> dict[str, Any]:
+        rows = self.connection.execute(
+            """
+            select
+                substr(timestamp, 1, 10) as utc_date,
+                count(*) as positions,
+                sum(case
+                    when state = 'SETTLED' then coalesce(realized_pnl, unrealized_pnl, 0.0)
+                    when state in ('RESERVED', 'SUBMITTED', 'FILLED', 'PARTIAL', 'DELAYED', 'UNKNOWN') then coalesce(unrealized_pnl, 0.0)
+                    else 0.0
+                end) as daily_pnl
+            from live_policy_positions
+            where state != 'REJECTED'
+            group by substr(timestamp, 1, 10)
+            order by utc_date
+            """
+        ).fetchall()
+        daily_rows: list[dict[str, Any]] = []
+        cumulative = 0.0
+        for row in rows:
+            daily_pnl = float(row["daily_pnl"] or 0.0)
+            cumulative += daily_pnl
+            daily_rows.append(
+                {
+                    "utc_date": str(row["utc_date"] or ""),
+                    "positions": int(row["positions"] or 0),
+                    "daily_pnl": daily_pnl,
+                    "cumulative_pnl": cumulative,
+                }
+            )
+        last_7_days = daily_rows[-7:]
+        return {
+            "daily_rows": daily_rows,
+            "last_7_days": last_7_days,
+            "total_pnl": cumulative,
+            "start_date": daily_rows[0]["utc_date"] if daily_rows else None,
+            "end_date": daily_rows[-1]["utc_date"] if daily_rows else None,
+        }
+
     def next_live_attempt_seq(self, live_position_id: int) -> int:
         row = self.connection.execute(
             "select max(attempt_seq) seq from live_order_attempts where live_position_id = ?",
