@@ -93,8 +93,8 @@ def test_live_strategy_plans_include_moonshot_and_ngboost_medium() -> None:
     assert edge_core.min_entry_price == pytest.approx(0.05)
 
     moonshot = plans[2]
-    assert moonshot.target_notional_usd == pytest.approx(1.0)
-    assert moonshot.strategy.max_notional_usd == pytest.approx(1.0)
+    assert moonshot.target_notional_usd == pytest.approx(2.0)
+    assert moonshot.strategy.max_notional_usd == pytest.approx(2.0)
     assert moonshot.strategy.entry_price_min == pytest.approx(0.05)
     assert len(moonshot.policies) == 2
     assert moonshot.policies[0].model_name == DYNAMIC_TUNED_MODEL

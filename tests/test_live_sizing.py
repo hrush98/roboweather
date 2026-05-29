@@ -37,7 +37,7 @@ def _decision(**overrides):
 def test_core_consensus_and_moonshot_sizes() -> None:
     assert _decision(strategy_name=EDGE_CORE_POLICY_NAME).target_notional_usd == pytest.approx(10.0)
     assert _decision(strategy_name=LIVE_POLICY_NAME).target_notional_usd == pytest.approx(6.0)
-    assert _decision(strategy_name=MOONSHOT_POLICY_NAME, entry_price=0.05).target_notional_usd == pytest.approx(1.0)
+    assert _decision(strategy_name=MOONSHOT_POLICY_NAME, entry_price=0.05).target_notional_usd == pytest.approx(2.0)
 
 
 def test_explicit_strategy_target_notional_overrides_multiplier() -> None:
@@ -71,16 +71,16 @@ def test_price_bands_and_rounding_floor_to_half_dollar() -> None:
 
 
 def test_risk_caps_clip_or_block() -> None:
-    assert _decision(exposure={"open_risk_usd": 370.25}).target_notional_usd == pytest.approx(4.5)
-    assert _decision(exposure={"open_risk_usd": 375.0}).blocked_reason == RISK_TOTAL_OPEN_CAP
-    assert _decision(exposure={"daily_new_risk_usd": {"2026-05-25": 245.25}}).target_notional_usd == pytest.approx(4.5)
-    assert _decision(exposure={"daily_new_risk_usd": {"2026-05-25": 250.0}}).blocked_reason == RISK_DAILY_NEW_CAP
-    assert _decision(exposure={"station_date_exposure_usd": {"KATL:2026-05-25": 55.25}}).target_notional_usd == pytest.approx(4.5)
-    assert _decision(exposure={"station_date_exposure_usd": {"KATL:2026-05-25": 60.0}}).blocked_reason == RISK_STATION_DATE_CAP
-    assert _decision(exposure={"station_date_side_exposure_usd": {"KATL:2026-05-25:BUY_NO": 35.25}}).target_notional_usd == pytest.approx(4.5)
-    assert _decision(exposure={"station_date_side_exposure_usd": {"KATL:2026-05-25:BUY_NO": 40.0}}).blocked_reason == RISK_STATION_DATE_SIDE_CAP
-    assert _decision(exposure={"exact_bucket_side_exposure_usd": {"KATL:2026-05-25:BUY_NO:72-73F": 20.25}}).target_notional_usd == pytest.approx(4.5)
-    assert _decision(exposure={"exact_bucket_side_exposure_usd": {"KATL:2026-05-25:BUY_NO:72-73F": 25.0}}).blocked_reason == RISK_EXACT_BUCKET_SIDE_CAP
+    assert _decision(exposure={"open_risk_usd": 445.25}).target_notional_usd == pytest.approx(4.5)
+    assert _decision(exposure={"open_risk_usd": 450.0}).blocked_reason == RISK_TOTAL_OPEN_CAP
+    assert _decision(exposure={"daily_new_risk_usd": {"2026-05-25": 295.25}}).target_notional_usd == pytest.approx(4.5)
+    assert _decision(exposure={"daily_new_risk_usd": {"2026-05-25": 300.0}}).blocked_reason == RISK_DAILY_NEW_CAP
+    assert _decision(exposure={"station_date_exposure_usd": {"KATL:2026-05-25": 70.25}}).target_notional_usd == pytest.approx(4.5)
+    assert _decision(exposure={"station_date_exposure_usd": {"KATL:2026-05-25": 75.0}}).blocked_reason == RISK_STATION_DATE_CAP
+    assert _decision(exposure={"station_date_side_exposure_usd": {"KATL:2026-05-25:BUY_NO": 50.25}}).target_notional_usd == pytest.approx(4.5)
+    assert _decision(exposure={"station_date_side_exposure_usd": {"KATL:2026-05-25:BUY_NO": 55.0}}).blocked_reason == RISK_STATION_DATE_SIDE_CAP
+    assert _decision(exposure={"exact_bucket_side_exposure_usd": {"KATL:2026-05-25:BUY_NO:72-73F": 25.25}}).target_notional_usd == pytest.approx(4.5)
+    assert _decision(exposure={"exact_bucket_side_exposure_usd": {"KATL:2026-05-25:BUY_NO:72-73F": 30.0}}).blocked_reason == RISK_EXACT_BUCKET_SIDE_CAP
 
 
 def test_liquidity_depth_caps_or_blocks() -> None:
