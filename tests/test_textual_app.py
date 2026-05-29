@@ -7,7 +7,7 @@ from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import pytest
-from textual.widgets import Button, DataTable, Input, Static
+from textual.widgets import Button, DataTable, Input, Static, TabPane
 
 from weather_trader.ui.process_supervisor import ProcessSnapshot, ProcessSpec, ProcessSupervisor
 from weather_trader.ui.textual_app import RoboWeatherTUI, _live_start_label
@@ -1370,11 +1370,14 @@ def test_tui_live_summary_and_positions_show_sizing_caps(tmp_path) -> None:
             assert "KATL" in contract_text
             assert "$4.50" in contract_text
 
+            app.query_one("#performance-tab", TabPane)
             performance_line = app.query_one("#live-performance-line", Static)
             performance_bars = app.query_one("#live-performance-bars", Static)
             performance_table = app.query_one("#live-performance-table", DataTable)
-            assert "Cumulative PnL since live start" in performance_line.content
-            assert "Last 7 days" in performance_bars.content
+            assert "Cumulative PnL by day" in performance_line.content
+            assert "Days" in performance_line.content
+            assert "scale" in performance_line.content
+            assert "Last 7 days by day" in performance_bars.content
             assert performance_table.row_count >= 1
 
             positions = app.query_one("#live-positions", DataTable)

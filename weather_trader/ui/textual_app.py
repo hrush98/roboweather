@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -172,56 +173,84 @@ def _sizing_multiplier(row: dict[str, Any]) -> str:
     return f"p{float(policy):.2f} x px{float(price):.2f}"
 
 
-_CHART_LEVELS = "▁▂▃▄▅▆▇█"
+def _nice_step(raw_step: float) -> float:
+    if raw_step <= 0:
+        return 1.0
+    magnitude = 10 ** math.floor(math.log10(raw_step))
+    normalized = raw_step / magnitude
+    if normalized <= 1:
+        nice = 1
+    elif normalized <= 2:
+        nice = 2
+    elif normalized <= 5:
+        nice = 5
+    else:
+        nice = 10
+    return nice * magnitude
 
 
-def _compress_series(values: list[float], max_points: int = 48) -> list[float]:
-    if len(values) <= max_points:
-        return values
-    step = len(values) / max_points
-    compressed: list[float] = []
-    for index in range(max_points):
-        start = int(round(index * step))
-        end = int(round((index + 1) * step))
-        if end <= start:
-            end = min(len(values), start + 1)
-        compressed.append(values[min(len(values) - 1, end - 1)])
-    return compressed
-
-
-def _sparkline(values: list[float]) -> str:
+def _chart_bounds(values: list[float], ticks: int = 5) -> tuple[float, float, float]:
     if not values:
-        return ""
-    minimum = min(values)
-    maximum = max(values)
-    if maximum == minimum:
-        return _CHART_LEVELS[0] * len(values)
-    scale = len(_CHART_LEVELS) - 1
-    span = maximum - minimum
-    chars = []
-    for value in values:
-        level = int(round((value - minimum) / span * scale))
-        level = max(0, min(scale, level))
-        chars.append(_CHART_LEVELS[level])
-    return "".join(chars)
+        return 0.0, 1.0, 1.0
+    low = min(min(values), 0.0)
+    high = max(max(values), 0.0)
+    if low == high:
+        high = low + 1.0
+    step = _nice_step((high - low) / max(1, ticks - 1))
+    low = math.floor(low / step) * step
+    high = math.ceil(high / step) * step
+    if low == high:
+        high += step
+    return low, high, step
+
+
+def _fmt_axis_money(value: float) -> str:
+    if abs(value) >= 1000:
+        return f"${value / 1000:.1f}k"
+    return f"${value:.0f}"
 
 
 def _render_cumulative_performance(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "No live performance yet."
-    cumulative = [float(row.get("cumulative_pnl") or 0.0) for row in rows]
-    cumulative = _compress_series(cumulative, max_points=60)
-    spark = _sparkline(cumulative)
-    min_value = min(cumulative)
-    max_value = max(cumulative)
-    first_value = cumulative[0]
-    last_value = cumulative[-1]
-    left_date = str(rows[0].get("utc_date", ""))
-    right_date = str(rows[-1].get("utc_date", ""))
+    visible_rows = rows[-60:]
+    values = [float(row.get("cumulative_pnl") or 0.0) for row in visible_rows]
+    y_min, y_max, step = _chart_bounds(values)
+    chart_height = 12
+    chart_width = max(12, min(72, len(visible_rows) * 3))
+    canvas = [[" " for _ in range(chart_width)] for _ in range(chart_height)]
+    span = y_max - y_min
+    if y_min <= 0 <= y_max:
+        zero_y = round((y_max - 0.0) / span * (chart_height - 1))
+        for x in range(chart_width):
+            canvas[zero_y][x] = "-"
+    for index, value in enumerate(values):
+        x = round(index * (chart_width - 1) / max(1, len(values) - 1))
+        y = round((y_max - value) / span * (chart_height - 1))
+        canvas[y][x] = "*"
+    tick_values = []
+    current = y_max
+    while current >= y_min - (step / 2):
+        tick_values.append(round(current, 10))
+        current -= step
+    tick_labels = {
+        round((y_max - tick) / span * (chart_height - 1)): _fmt_axis_money(tick)
+        for tick in tick_values
+    }
+    lines = ["Cumulative PnL by day"]
+    for y, canvas_row in enumerate(canvas):
+        label = tick_labels.get(y, "")
+        lines.append(f"{label:>7} | {''.join(canvas_row)}")
+    first_label = str(visible_rows[0].get("utc_date", ""))[5:]
+    last_label = str(visible_rows[-1].get("utc_date", ""))[5:]
+    x_axis = f"{'':>7} + {'-' * chart_width}"
+    label_line = f"{'Days':>7}   {first_label:<{chart_width - len(last_label)}}{last_label}"
+    last_value = values[-1]
     return "\n".join([
-        "Cumulative PnL since live start",
-        f"{max_value:>11.2f} ┤ {spark}",
-        f"{min_value:>11.2f} └ {left_date} → {right_date}  Δ {last_value - first_value:+.2f}  last {last_value:+.2f}",
+        *lines,
+        x_axis,
+        label_line,
+        f"{'':>7}   last {last_value:+.2f} | scale {_fmt_axis_money(y_min)} to {_fmt_axis_money(y_max)}",
     ])
 
 
@@ -229,18 +258,19 @@ def _render_daily_bar_chart(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "No live performance yet."
     max_abs = max(abs(float(row.get("daily_pnl") or 0.0)) for row in rows) or 1.0
-    scale_width = 26
-    lines = ["Last 7 days"]
+    scale_width = 34
+    lines = ["Last 7 days by day"]
     for row in rows:
         value = float(row.get("daily_pnl") or 0.0)
         width = int(round(abs(value) / max_abs * scale_width)) if value else 0
         width = max(1, width) if value else 0
-        bar = "█" * width
+        bar = "#" * width
         if value < 0:
             bar = f"{bar:>{scale_width}}"
         else:
             bar = f"{bar:<{scale_width}}"
-        lines.append(f"{str(row.get('utc_date', '')):<10} │ {bar} {value:+.2f}")
+        day = str(row.get("utc_date", ""))[5:] or str(row.get("utc_date", ""))
+        lines.append(f"{day:<5} | {bar} {value:+.2f}")
     return "\n".join(lines)
 
 
@@ -404,11 +434,11 @@ class RoboWeatherTUI(App):
     }
 
     #live-performance-line {
-        height: 9;
+        height: 18;
     }
 
     #live-performance-bars {
-        height: 11;
+        height: 10;
     }
 
     #live-performance-table {
@@ -526,12 +556,15 @@ class RoboWeatherTUI(App):
                     yield DataTable(id="live-stations")
                     yield Static("Live Positions", classes="section-title")
                     yield DataTable(id="live-contracts")
-                    yield Static("Performance", classes="section-title")
-                    yield Static(id="live-performance-line")
-                    yield Static(id="live-performance-bars")
-                    yield DataTable(id="live-performance-table")
                     yield Static("Open Exposure", classes="section-title")
                     yield DataTable(id="live-positions")
+                with TabPane("Performance", id="performance-tab"):
+                    yield Static("Cumulative PnL", classes="section-title")
+                    yield Static(id="live-performance-line")
+                    yield Static("Daily PnL", classes="section-title")
+                    yield Static(id="live-performance-bars")
+                    yield Static("Last 7 Days", classes="section-title")
+                    yield DataTable(id="live-performance-table")
                 with TabPane("Orders", id="orders-tab"):
                     yield Static("Live Order Attempts", classes="section-title")
                     yield DataTable(id="live-orders")
@@ -704,10 +737,6 @@ class RoboWeatherTUI(App):
         signals = self.query_one("#signals", DataTable)
         signals.cursor_type = "row"
         signals.add_columns("time", "station", "bucket", "fair yes", "yes ask", "fair no", "no ask", "edge", "signal", "reason")
-
-        performance_table = self.query_one("#live-performance-table", DataTable)
-        performance_table.cursor_type = "row"
-        performance_table.add_columns("date", "positions", "daily pnl", "cumulative pnl")
 
         self.refresh_table()
         self.refresh_processes()
