@@ -21,6 +21,7 @@ from weather_trader.execution.engine import PaperTradingEngine
 from weather_trader.execution.grouping import GroupMarketContext, GroupSelection
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import CelsiusWeatherFeatureService, StationWeatherState
+from weather_trader.research import collector as collector_module
 from weather_trader.research.collector import ResearchCollector, ResearchConfig, build_prediction_snapshot, due_delay_buckets
 from weather_trader.research.resolver import ResearchResolver, score_snapshot
 
@@ -353,6 +354,27 @@ def test_build_prediction_snapshot_persists_sweep_and_bid_ladder(tmp_path) -> No
     assert row["selected_bid_ladder_total_notional_usd"] == 500
 
 
+def test_scoped_weather_feature_service_routes_by_station_scope(monkeypatch) -> None:
+    us_service = _RecordingWeatherService("KATL")
+    global_service = _RecordingWeatherService("RJTT")
+    monkeypatch.setattr(collector_module, "WeatherFeatureService", lambda max_obs_age_minutes=30: us_service)
+    monkeypatch.setattr(collector_module, "CelsiusWeatherFeatureService", lambda max_obs_age_minutes=30: global_service)
+
+    service = collector_module.ScopedWeatherFeatureService(max_obs_age_minutes=30)
+
+    assert service.get_state("KATL", datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc)).station == "KATL"
+    assert service.get_state("RJTT", datetime(2026, 5, 6, 1, 0, tzinfo=timezone.utc)).station == "RJTT"
+    assert us_service.calls == ["KATL"]
+    assert global_service.calls == ["RJTT"]
+
+
+def test_model_station_scope_keeps_us_and_global_models_separate() -> None:
+    assert collector_module._model_supports_station("dynamic_bucket_pm_active_us12_obs_2022_2025", "KATL")
+    assert not collector_module._model_supports_station("dynamic_bucket_pm_active_us12_obs_2022_2025", "RJTT")
+    assert collector_module._model_supports_station("dynamic_bucket_international_celsius_high_obs_2022_2025", "RJTT")
+    assert not collector_module._model_supports_station("dynamic_bucket_international_celsius_high_obs_2022_2025", "KATL")
+
+
 class _FailingDiscovery:
     def discover(self, limit: int = 50000, validate_stations: bool = True, market_scope: str = "us"):
         raise requests.ReadTimeout("gamma stalled")
@@ -375,6 +397,17 @@ class _EmptyBookClient:
 class _StaticWeatherService:
     def get_state(self, station_id: str, as_of_utc: datetime) -> StationWeatherState:
         return _weather(as_of_utc.isoformat())
+
+
+class _RecordingWeatherService:
+    def __init__(self, station: str) -> None:
+        self.station = station
+        self.calls: list[str] = []
+
+    def get_state(self, station_id: str, as_of_utc: datetime) -> StationWeatherState:
+        self.calls.append(station_id)
+        state = _weather(as_of_utc.isoformat())
+        return StationWeatherState(**{**state.__dict__, "station": self.station})
 
 
 class _InternationalObservationsClient:

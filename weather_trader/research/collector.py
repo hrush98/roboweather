@@ -26,7 +26,7 @@ from weather_trader.execution.grouping import GroupMarketContext, StationDateDec
 from weather_trader.execution.liquidity import selected_side_execution_modes, selected_side_liquidity
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import CelsiusWeatherFeatureService, StationWeatherState, WeatherFeatureService
-from weather_trader.stations.metadata import get_station_any
+from weather_trader.stations.metadata import get_station, get_station_any
 
 
 @dataclass(frozen=True)
@@ -70,6 +70,8 @@ class ResearchCollector:
             self.weather_service = weather_service
         elif self.config.market_scope == "global":
             self.weather_service = CelsiusWeatherFeatureService(max_obs_age_minutes=self.config.max_obs_age_minutes)
+        elif self.config.market_scope == "all":
+            self.weather_service = ScopedWeatherFeatureService(max_obs_age_minutes=self.config.max_obs_age_minutes)
         else:
             self.weather_service = WeatherFeatureService(max_obs_age_minutes=self.config.max_obs_age_minutes)
         self.decision_engine = decision_engine or DecisionEngine()
@@ -127,6 +129,8 @@ class ResearchCollector:
             for key, group_markets in markets_by_group.items():
                 station_id, _, market_family = key
                 if not engine.supports_market_family(market_family):
+                    continue
+                if not _model_supports_station(engine.model_name, station_id):
                     continue
                 try:
                     weather = weather_by_station.get(station_id)
@@ -261,6 +265,33 @@ class ResearchCollector:
             low_so_far=weather.low_so_far,
             hrrr_remaining_min=weather.hrrr_remaining_min,
         )
+
+
+class ScopedWeatherFeatureService:
+    def __init__(self, max_obs_age_minutes: int = 30) -> None:
+        self.us_service = WeatherFeatureService(max_obs_age_minutes=max_obs_age_minutes)
+        self.global_service = CelsiusWeatherFeatureService(max_obs_age_minutes=max_obs_age_minutes)
+
+    def get_state(self, station_id: str, as_of_utc: datetime) -> StationWeatherState:
+        if _station_scope(station_id) == "global":
+            return self.global_service.get_state(station_id, as_of_utc)
+        return self.us_service.get_state(station_id, as_of_utc)
+
+
+def _model_supports_station(model_name: str, station_id: str) -> bool:
+    return _model_scope(model_name) == _station_scope(station_id)
+
+
+def _model_scope(model_name: str) -> str:
+    return "global" if "international_celsius" in model_name else "us"
+
+
+def _station_scope(station_id: str) -> str:
+    try:
+        get_station(station_id)
+    except KeyError:
+        return "global"
+    return "us"
 
 
 def due_delay_buckets(
