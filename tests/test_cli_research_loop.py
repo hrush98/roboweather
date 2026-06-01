@@ -129,6 +129,31 @@ def test_research_loop_accepts_market_scope(monkeypatch) -> None:
 
     assert captured["market_scope"] == "global"
 
+
+def test_resolve_research_accepts_all_market_scope(monkeypatch) -> None:
+    captured = {}
+
+    def fake_resolve_research_command(*args):
+        captured["args"] = args
+
+    monkeypatch.setattr(cli, "ensure_directories", lambda: None)
+    monkeypatch.setattr(cli, "resolve_research_command", fake_resolve_research_command)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "roboweather",
+            "resolve-research",
+            "--market-scope",
+            "all",
+        ],
+    )
+
+    cli.main()
+
+    assert captured["args"][2] == "all"
+
+
 def test_paper_policy_cycle_accepts_execution_options(monkeypatch) -> None:
     captured = {}
 

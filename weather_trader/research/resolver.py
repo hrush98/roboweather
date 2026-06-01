@@ -88,7 +88,7 @@ class ResearchResolver:
         return as_of_utc >= resolve_at_local.astimezone(timezone.utc)
 
     def _resolve_station_date(self, station_id: str, market_date: date) -> StationDateOutcome:
-        if self.market_scope == "global":
+        if _is_international_station(station_id):
             return self._resolve_global_station_date(station_id, market_date)
         station = get_station(station_id)
         observations = self.obs_client.fetch_observations(
@@ -121,17 +121,26 @@ class ResearchResolver:
             low = self.hko_client.fetch_daily_temperature_series("low", station="HKO")
             daily = high.merge(low, on="local_date", how="outer")
             row = daily.loc[daily["local_date"] == market_date]
-            if row.empty:
-                raise ValueError(f"No HKO daily observations for {station.station} on {market_date}")
-            return StationDateOutcome(
-                timestamp=resolved_at,
-                station=station.station,
-                market_date=market_date,
-                final_high_tmpf=float(row.iloc[0]["final_high_tmpf"]),
-                final_low_tmpf=float(row.iloc[0]["final_low_tmpf"]),
-                source="HKO_CLMMAXT_CLMMINT_C",
-                resolved_at=resolved_at,
-            )
+            if not row.empty:
+                return StationDateOutcome(
+                    timestamp=resolved_at,
+                    station=station.station,
+                    market_date=market_date,
+                    final_high_tmpf=float(row.iloc[0]["final_high_tmpf"]),
+                    final_low_tmpf=float(row.iloc[0]["final_low_tmpf"]),
+                    source="HKO_CLMMAXT_CLMMINT_C",
+                    resolved_at=resolved_at,
+                )
+            return self._resolve_global_metar_station_date(station_id, market_date, resolved_at)
+        return self._resolve_global_metar_station_date(station_id, market_date, resolved_at)
+
+    def _resolve_global_metar_station_date(
+        self,
+        station_id: str,
+        market_date: date,
+        resolved_at: str,
+    ) -> StationDateOutcome:
+        station = get_international_station(station_id)
         observations = self.obs_client.fetch_observations(
             station=station.station,
             start=market_date,
@@ -220,3 +229,11 @@ def _float_or_none(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _is_international_station(station_id: str) -> bool:
+    try:
+        get_international_station(station_id)
+    except KeyError:
+        return False
+    return True

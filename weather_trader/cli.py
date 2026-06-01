@@ -324,7 +324,7 @@ def main() -> None:
     resolve_research = subparsers.add_parser("resolve-research", help="Resolve and score due research snapshots")
     resolve_research.add_argument("--db", default=str(PAPER_DIR / "roboweather.sqlite"))
     resolve_research.add_argument("--resolve-after-local-hour", type=int, default=6)
-    resolve_research.add_argument("--market-scope", choices=["us", "global"], default="us")
+    resolve_research.add_argument("--market-scope", choices=["us", "global", "all"], default="us")
 
     paper_policy_cycle = subparsers.add_parser("paper-policy-cycle", help="Promote allowlisted research policies into paper execution")
     paper_policy_cycle.add_argument("--db", default=DEFAULT_RESEARCH_DB)

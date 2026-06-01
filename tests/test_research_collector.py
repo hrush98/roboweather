@@ -177,6 +177,35 @@ def test_global_resolver_uses_hko_daily_high_and_low(tmp_path) -> None:
     assert outcome.source == "HKO_CLMMAXT_CLMMINT_C"
 
 
+def test_all_scope_resolver_routes_international_station_to_global_source(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+    resolver = ResearchResolver(store=store, hko_client=_HKOClient(), market_scope="all")
+
+    outcome = resolver._resolve_station_date("VHHH", date(2026, 5, 6))
+
+    assert outcome.station == "VHHH"
+    assert outcome.final_high_tmpf == 31.2
+    assert outcome.final_low_tmpf == 25.4
+    assert outcome.source == "HKO_CLMMAXT_CLMMINT_C"
+
+
+def test_global_resolver_falls_back_to_metar_when_hko_daily_missing(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+    resolver = ResearchResolver(
+        store=store,
+        obs_client=_InternationalObservationsClient(),
+        hko_client=_EmptyHKOClient(),
+        market_scope="all",
+    )
+
+    outcome = resolver._resolve_station_date("VHHH", date(2026, 5, 6))
+
+    assert outcome.station == "VHHH"
+    assert outcome.final_high_tmpf == 21.0
+    assert outcome.final_low_tmpf == 21.0
+    assert outcome.source == "IEM_ASOS_METAR_C"
+
+
 def test_research_collector_records_discovery_timeout_without_crashing(tmp_path) -> None:
     store = ExecutionStore(tmp_path / "research.sqlite")
     collector = ResearchCollector(store=store, model_paths=[], discovery=_FailingDiscovery())
@@ -431,6 +460,12 @@ class _HKOClient:
         column = "final_low_tmpf" if metric == "low" else "final_high_tmpf"
         value = 25.4 if metric == "low" else 31.2
         return pd.DataFrame({"local_date": [date(2026, 5, 6)], column: [value]})
+
+
+class _EmptyHKOClient:
+    def fetch_daily_temperature_series(self, metric, station="HKO"):
+        column = "final_low_tmpf" if metric == "low" else "final_high_tmpf"
+        return pd.DataFrame({"local_date": [], column: []})
 
 
 def _selection(side: TradeAction, expected_value: float = 0.1, fair_yes: float = 0.7, fair_no: float = 0.3) -> GroupSelection:
