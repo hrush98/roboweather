@@ -125,6 +125,7 @@ class ResearchPolicySpec:
     model_name: str | None = None
     model_group: str | None = None
     obs_delay_bucket: str | None = None
+    selected_side: TradeAction | None = None
     scope_by_strategy: bool = False
     station_allow_set: frozenset[str] | None = None
     station_exclude_set: frozenset[str] | None = None
@@ -257,6 +258,40 @@ def _global_policy_specs() -> tuple[ResearchPolicySpec, ...]:
                 ),
             )
         )
+    specs.extend(
+        (
+            ResearchPolicySpec(
+                "global_low_mvp_hc_buy_no_50_75_by_bucket_side_delay_first",
+                "model",
+                StrategyBucket.HIGH_CONVICTION,
+                model_name=GLOBAL_LOW_MVP_MODEL,
+                selected_side=TradeAction.BUY_NO,
+                entry_price_min=0.50,
+                entry_price_max=0.75,
+                uniqueness_key_mode="station_date_bucket_side_obs_delay",
+            ),
+            ResearchPolicySpec(
+                "global_low_dynamic_hc_buy_no_50_75_by_bucket_side_delay_first",
+                "model",
+                StrategyBucket.HIGH_CONVICTION,
+                model_name=GLOBAL_LOW_DYNAMIC_MODEL,
+                selected_side=TradeAction.BUY_NO,
+                entry_price_min=0.50,
+                entry_price_max=0.75,
+                uniqueness_key_mode="station_date_bucket_side_obs_delay",
+            ),
+            ResearchPolicySpec(
+                "global_low_consensus_hc_buy_no_50_75_by_bucket_side_delay_first",
+                "consensus",
+                StrategyBucket.HIGH_CONVICTION,
+                model_group="global_low_dynamic_mvp",
+                selected_side=TradeAction.BUY_NO,
+                entry_price_min=0.50,
+                entry_price_max=0.75,
+                uniqueness_key_mode="station_date_bucket_side_obs_delay",
+            ),
+        )
+    )
     return tuple(specs)
 
 
@@ -446,6 +481,7 @@ class ResearchPolicyEvaluator:
                     "model_name": policy.model_name,
                     "strategy_bucket": str(policy.strategy_bucket) if policy.strategy_bucket else None,
                     "obs_delay_bucket": policy.obs_delay_bucket,
+                    "selected_side": str(policy.selected_side) if policy.selected_side else None,
                     "scope_by_strategy": policy.scope_by_strategy,
                     "station_allow_set": sorted(policy.station_allow_set) if policy.station_allow_set else None,
                     "station_exclude_set": sorted(policy.station_exclude_set) if policy.station_exclude_set else None,
@@ -473,6 +509,8 @@ def _passes_policy_filters(policy: ResearchPolicySpec, item: dict[str, Any]) -> 
     if policy.station_allow_set is not None and station not in policy.station_allow_set:
         return False
     if policy.station_exclude_set is not None and station in policy.station_exclude_set:
+        return False
+    if policy.selected_side is not None and item.get("selected_side") != str(policy.selected_side):
         return False
 
     entry_price = _entry_price(item)

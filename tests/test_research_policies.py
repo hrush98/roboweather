@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import date
 
-from weather_trader.execution.contracts import MarketSnapshot, PredictionSnapshot, StrategyBucket, TradeAction
+from weather_trader.execution.contracts import MarketFamily, MarketSnapshot, PredictionSnapshot, StrategyBucket, TradeAction
 from weather_trader.execution.store import ExecutionStore
-from weather_trader.research.policies import DYNAMIC_TUNED_MODEL, GLOBAL_HIGH_DYNAMIC_MODEL, GLOBAL_HIGH_MVP_MODEL, MVP_MODEL, POLICIES, ResearchPolicyEvaluator, ResearchPolicySpec
+from weather_trader.research.policies import DYNAMIC_TUNED_MODEL, GLOBAL_HIGH_DYNAMIC_MODEL, GLOBAL_HIGH_MVP_MODEL, GLOBAL_LOW_MVP_MODEL, MVP_MODEL, POLICIES, ResearchPolicyEvaluator, ResearchPolicySpec
 
 
 def test_research_policy_evaluator_records_consensus_and_dedupes(tmp_path) -> None:
@@ -459,6 +459,51 @@ def test_consensus_by_bucket_side_delay_dedupes_repeated_loop_snapshots(tmp_path
     assert positions[0]["selected_side"] == "BUY_NO"
 
 
+def test_research_policy_selected_side_filter(tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+    store.upsert_market(_market(station="RJTT", city="Tokyo", selected_bucket="20-21C"))
+    store.insert_prediction_snapshot(
+        _snapshot(
+            model_name=GLOBAL_LOW_MVP_MODEL,
+            strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+            selected_side=TradeAction.BUY_NO,
+            selected_bucket="20-21C",
+            selected_edge=0.2,
+            selected_fair_no=0.85,
+            selected_no_ask=0.6,
+            station="RJTT",
+            market_family=MarketFamily.LOW_TEMP,
+        )
+    )
+    store.insert_prediction_snapshot(
+        _snapshot(
+            model_name=GLOBAL_LOW_MVP_MODEL,
+            strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+            selected_side=TradeAction.BUY_YES,
+            selected_bucket="22-23C",
+            selected_edge=0.2,
+            selected_fair_yes=0.85,
+            selected_yes_ask=0.6,
+            station="RJTT",
+            market_family=MarketFamily.LOW_TEMP,
+            timestamp="2026-05-07T16:00:02+00:00",
+        )
+    )
+    policy = ResearchPolicySpec(
+        "global_low_mvp_buy_no_only",
+        "model",
+        StrategyBucket.HIGH_CONVICTION,
+        model_name=GLOBAL_LOW_MVP_MODEL,
+        selected_side=TradeAction.BUY_NO,
+    )
+
+    assert ResearchPolicyEvaluator(store, (policy,)).evaluate() == 1
+
+    positions = store.recent_research_policy_positions(limit=10)
+    assert positions[0]["selected_side"] == "BUY_NO"
+    assert positions[0]["raw_policy"]["policy"]["selected_side"] == "BUY_NO"
+
+
 def test_consensus_station_date_first_still_keeps_one_row_per_station_date(tmp_path) -> None:
     store = ExecutionStore(tmp_path / "research.sqlite")
     store.upsert_market(_market())
@@ -591,6 +636,7 @@ def _snapshot(
     timestamp: str = "2026-05-07T16:00:01+00:00",
     decision_time_local: str = "2026-05-07T12:00:00-04:00",
     latest_obs_time_utc: str = "2026-05-07T15:45:00+00:00",
+    market_family: MarketFamily = MarketFamily.HIGH_TEMP,
 ) -> PredictionSnapshot:
     return PredictionSnapshot(
         timestamp=timestamp,
@@ -623,6 +669,7 @@ def _snapshot(
         skip_reason=None,
         candidate_count=1,
         candidate_distribution=[],
+        market_family=market_family,
         selected_best_ask=selected_best_ask,
         selected_depth_at_ask=selected_depth_at_ask,
         selected_book_timestamp=selected_book_timestamp,
