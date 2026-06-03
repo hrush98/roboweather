@@ -49,6 +49,18 @@ def test_explicit_strategy_target_notional_overrides_multiplier() -> None:
     assert decision.price_multiplier == pytest.approx(1.0)
 
 
+def test_consensus_buy_yes_explicit_target_is_halved() -> None:
+    decision = _decision(
+        strategy_name=LIVE_POLICY_NAME,
+        selected_side=TradeAction.BUY_YES,
+        target_notional_usd=30.0,
+    )
+
+    assert decision.target_notional_usd == pytest.approx(15.0)
+    assert decision.pre_cap_target_usd == pytest.approx(15.0)
+    assert decision.raw_json["side_multiplier"] == pytest.approx(0.5)
+
+
 def test_price_bands_and_rounding_floor_to_half_dollar() -> None:
     assert _decision(entry_price=0.09).target_notional_usd == pytest.approx(2.5)
     assert _decision(entry_price=0.10).target_notional_usd == pytest.approx(6.0)
@@ -75,12 +87,12 @@ def test_risk_caps_clip_or_block() -> None:
     assert _decision(exposure={"open_risk_usd": 450.0}).blocked_reason == RISK_TOTAL_OPEN_CAP
     assert _decision(exposure={"daily_new_risk_usd": {"2026-05-25": 295.25}}).target_notional_usd == pytest.approx(4.5)
     assert _decision(exposure={"daily_new_risk_usd": {"2026-05-25": 300.0}}).blocked_reason == RISK_DAILY_NEW_CAP
-    assert _decision(exposure={"station_date_exposure_usd": {"KATL:2026-05-25": 70.25}}).target_notional_usd == pytest.approx(4.5)
-    assert _decision(exposure={"station_date_exposure_usd": {"KATL:2026-05-25": 75.0}}).blocked_reason == RISK_STATION_DATE_CAP
-    assert _decision(exposure={"station_date_side_exposure_usd": {"KATL:2026-05-25:BUY_NO": 50.25}}).target_notional_usd == pytest.approx(4.5)
-    assert _decision(exposure={"station_date_side_exposure_usd": {"KATL:2026-05-25:BUY_NO": 55.0}}).blocked_reason == RISK_STATION_DATE_SIDE_CAP
-    assert _decision(exposure={"exact_bucket_side_exposure_usd": {"KATL:2026-05-25:BUY_NO:72-73F": 25.25}}).target_notional_usd == pytest.approx(4.5)
-    assert _decision(exposure={"exact_bucket_side_exposure_usd": {"KATL:2026-05-25:BUY_NO:72-73F": 30.0}}).blocked_reason == RISK_EXACT_BUCKET_SIDE_CAP
+    assert _decision(exposure={"station_date_exposure_usd": {"KATL:2026-05-25": 120.25}}).target_notional_usd == pytest.approx(4.5)
+    assert _decision(exposure={"station_date_exposure_usd": {"KATL:2026-05-25": 125.0}}).blocked_reason == RISK_STATION_DATE_CAP
+    assert _decision(exposure={"station_date_side_exposure_usd": {"KATL:2026-05-25:BUY_NO": 80.25}}).target_notional_usd == pytest.approx(4.5)
+    assert _decision(exposure={"station_date_side_exposure_usd": {"KATL:2026-05-25:BUY_NO": 85.0}}).blocked_reason == RISK_STATION_DATE_SIDE_CAP
+    assert _decision(exposure={"exact_bucket_side_exposure_usd": {"KATL:2026-05-25:BUY_NO:72-73F": 45.25}}).target_notional_usd == pytest.approx(4.5)
+    assert _decision(exposure={"exact_bucket_side_exposure_usd": {"KATL:2026-05-25:BUY_NO:72-73F": 50.0}}).blocked_reason == RISK_EXACT_BUCKET_SIDE_CAP
 
 
 def test_liquidity_depth_caps_or_blocks() -> None:

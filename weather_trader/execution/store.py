@@ -80,8 +80,10 @@ class ExecutionStore:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(self.path)
+        self.connection = sqlite3.connect(self.path, timeout=30.0)
         self.connection.row_factory = sqlite3.Row
+        self.connection.execute("pragma busy_timeout = 30000")
+        self.connection.execute("pragma journal_mode = WAL")
         self.initialize()
 
     def close(self) -> None:
@@ -1784,6 +1786,80 @@ class ExecutionStore:
         )
         self.connection.commit()
 
+    def reconcile_live_policy_positions_from_attempts(self) -> int:
+        rows = self.connection.execute(
+            """
+            select
+                lpp.id,
+                lpp.state,
+                lpp.target_notional_usd,
+                lpp.target_shares,
+                lpp.filled_shares as position_filled_shares,
+                lpp.avg_entry_price as position_avg_entry_price,
+                lpp.cost_usd as position_cost_usd,
+                lpp.raw_json,
+                sum(loa.filled_shares) as attempt_filled_shares,
+                sum(loa.cost_usd) as attempt_cost_usd
+            from live_policy_positions lpp
+            join live_order_attempts loa on loa.live_position_id = lpp.id
+            where lpp.state in ('RESERVED', 'SUBMITTED', 'FILLED', 'PARTIAL', 'DELAYED', 'UNKNOWN')
+                and loa.final_state in ('FILLED', 'PARTIAL')
+                and loa.filled_shares > 0
+                and loa.cost_usd > 0
+            group by lpp.id
+            """
+        ).fetchall()
+        repaired = 0
+        for row in rows:
+            filled_shares = float(row["attempt_filled_shares"] or 0.0)
+            cost_usd = float(row["attempt_cost_usd"] or 0.0)
+            if filled_shares <= 0.0 or cost_usd <= 0.0:
+                continue
+            avg_entry_price = cost_usd / filled_shares
+            target_notional = float(row["target_notional_usd"] or 0.0)
+            target_shares = float(row["target_shares"] or 0.0)
+            if (target_shares > 0.0 and filled_shares + 1e-6 >= target_shares) or (target_notional > 0.0 and cost_usd + 0.01 >= target_notional):
+                state = "FILLED"
+            else:
+                state = "PARTIAL"
+            position_filled = float(row["position_filled_shares"] or 0.0)
+            position_cost = float(row["position_cost_usd"] or 0.0)
+            position_avg = row["position_avg_entry_price"]
+            position_avg_float = float(position_avg) if position_avg is not None else None
+            if (
+                row["state"] == state
+                and abs(position_filled - filled_shares) < 1e-6
+                and abs(position_cost - cost_usd) < 1e-6
+                and position_avg_float is not None
+                and abs(position_avg_float - avg_entry_price) < 1e-6
+            ):
+                continue
+            raw_json = json.loads(row["raw_json"]) if row["raw_json"] else {}
+            raw_json.update(
+                {
+                    "state": state,
+                    "filled_shares": filled_shares,
+                    "avg_entry_price": avg_entry_price,
+                    "cost_usd": cost_usd,
+                    "reconciled_from_order_attempts": {
+                        "filled_shares": filled_shares,
+                        "cost_usd": cost_usd,
+                        "avg_entry_price": avg_entry_price,
+                    },
+                }
+            )
+            self.connection.execute(
+                """
+                update live_policy_positions
+                set state = ?, filled_shares = ?, avg_entry_price = ?, cost_usd = ?, raw_json = ?
+                where id = ?
+                """,
+                (state, filled_shares, avg_entry_price, cost_usd, json.dumps(raw_json, sort_keys=True), row["id"]),
+            )
+            repaired += 1
+        self.connection.commit()
+        return repaired
+
     def live_unsettled_positions(self, *, max_market_date: date | str | None = None, limit: int = 1000) -> list[dict[str, Any]]:
         date_filter = "and lpp.market_date <= ?" if max_market_date is not None else ""
         params: tuple[Any, ...] = ((_date_text(max_market_date), limit) if max_market_date is not None else (limit,))
@@ -2041,10 +2117,12 @@ class ExecutionStore:
                 outcomes.resolved_at as outcome_resolved_at,
                 case
                     when lb.best_bid is not null and lpp.filled_shares > 0 then lb.best_bid * lpp.filled_shares
+                    when lb.best_bid is null and lb.best_ask is not null and lb.best_ask < 0.01 and lpp.filled_shares > 0 then 0.0
                     else lpp.mark_value
                 end as mark_value,
                 case
                     when lb.best_bid is not null and lpp.filled_shares > 0 then (lb.best_bid * lpp.filled_shares) - lpp.cost_usd
+                    when lb.best_bid is null and lb.best_ask is not null and lb.best_ask < 0.01 and lpp.filled_shares > 0 then -lpp.cost_usd
                     else lpp.unrealized_pnl
                 end as unrealized_pnl
             from live_policy_positions lpp

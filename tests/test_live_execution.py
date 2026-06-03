@@ -11,6 +11,8 @@ from weather_trader.execution.clob_executor import AllowanceCheck, CancelSubmiss
 from weather_trader.execution.contracts import (
     BookLevel,
     BookSnapshot,
+    LiveOrderAttempt,
+    LiveOrderMode,
     LivePositionState,
     LiveStrategy,
     MarketFamily,
@@ -358,6 +360,51 @@ def test_live_position_insert_is_idempotent_by_scope(tmp_path: Path) -> None:
     assert len(store.live_open_positions()) == 1
 
 
+def test_reconcile_live_policy_positions_from_attempts_repairs_target_fill_overwrite(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    position_id = store.insert_live_policy_position(_live_position())
+    assert position_id is not None
+    store.update_live_policy_position_execution(
+        position_id,
+        state=str(LivePositionState.FILLED),
+        filled_shares=7.5,
+        avg_entry_price=0.4,
+        cost_usd=3.0,
+    )
+    store.insert_live_order_attempt(
+        LiveOrderAttempt(
+            timestamp="2026-05-20T18:00:00+00:00",
+            live_position_id=position_id,
+            attempt_seq=1,
+            token_id="no-token",
+            side=TradeAction.BUY_NO,
+            order_mode=LiveOrderMode.FAK,
+            limit_price=0.4,
+            target_notional_usd=3.0,
+            target_shares=7.5,
+            external_order_id="order-1",
+            external_status="matched",
+            final_state=LivePositionState.PARTIAL,
+            final_reason="matched",
+            filled_shares=2.0,
+            avg_price=0.35,
+            cost_usd=0.7,
+            raw_payload={"success": True},
+        )
+    )
+
+    repaired = store.reconcile_live_policy_positions_from_attempts()
+
+    assert repaired == 1
+    row = store.live_open_positions()[0]
+    assert row["state"] == "PARTIAL"
+    assert row["filled_shares"] == pytest.approx(2.0)
+    assert row["cost_usd"] == pytest.approx(0.7)
+    assert row["avg_entry_price"] == pytest.approx(0.35)
+    raw = json.loads(row["raw_json"])
+    assert raw["reconciled_from_order_attempts"]["filled_shares"] == pytest.approx(2.0)
+
+
 def test_live_dashboard_positions_join_strategy_books_and_marks(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
     store.upsert_live_strategy(default_live_strategy(max_notional_usd=3.0))
@@ -389,6 +436,34 @@ def test_live_dashboard_positions_join_strategy_books_and_marks(tmp_path: Path) 
     assert rows[0]["mark_value"] == pytest.approx(4.65)
     assert rows[0]["unrealized_pnl"] == pytest.approx(1.65)
     assert store.latest_live_market_date() == "2026-05-20"
+
+
+def test_live_dashboard_marks_no_bid_sub_cent_ask_as_zero(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    position_id = store.insert_live_policy_position(_live_position())
+    assert position_id is not None
+    store.update_live_policy_position_execution(
+        position_id,
+        state=str(LivePositionState.PARTIAL),
+        filled_shares=12.29,
+        avg_entry_price=0.4,
+        cost_usd=4.916,
+    )
+    store.insert_book_snapshot(
+        BookSnapshot(
+            token_id="no-token",
+            bids=[],
+            asks=[BookLevel(price=0.001, size=100.0)],
+            timestamp="2026-05-20T18:00:00+00:00",
+        )
+    )
+
+    rows = store.live_dashboard_positions(market_date=date(2026, 5, 20))
+
+    assert rows[0]["current_bid"] is None
+    assert rows[0]["current_ask"] == pytest.approx(0.001)
+    assert rows[0]["mark_value"] == pytest.approx(0.0)
+    assert rows[0]["unrealized_pnl"] == pytest.approx(-4.916)
 
 
 def test_live_submit_uses_three_dollar_fak_buy(tmp_path: Path) -> None:
@@ -444,13 +519,13 @@ class FakeSubmitter:
         return AllowanceCheck(True, 100.0, 100.0)
 
     def get_order(self, order_id: str) -> dict[str, object]:
-        return {"success": True, "status": "matched"}
+        return {"success": True, "status": "matched", "makingAmount": "3.0", "takingAmount": "7.5"}
 
     def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
         assert token_id == "no-token"
         assert side == "BUY"
         assert amount == pytest.approx(3.0)
-        return OrderSubmission(True, "order-1", "matched", None, {"success": True, "status": "matched"})
+        return OrderSubmission(True, "order-1", "matched", None, {"success": True, "status": "matched", "makingAmount": "3.0", "takingAmount": "7.5"})
 
     def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
         raise AssertionError("unexpected GTC order")
@@ -753,6 +828,40 @@ class PartialRemainderSubmitter(FakeSubmitter):
         return CancelSubmission(True, [order_id], None, None, {"canceled": [order_id]})
 
 
+class MatchedUnderfillSubmitter(PartialRemainderSubmitter):
+    def get_order(self, order_id: str) -> dict[str, object]:
+        if order_id == "order-1":
+            self.get_order_calls.append(order_id)
+            return {"success": True, "status": "matched", "makingAmount": "0.1", "takingAmount": "0.2"}
+        return super().get_order(order_id)
+
+    def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+        self.place_calls.append(amount)
+        if len(self.place_calls) == 1:
+            return OrderSubmission(True, "order-1", "matched", None, {"success": True, "status": "matched", "makingAmount": "0.1", "takingAmount": "0.2"})
+        return OrderSubmission(True, "order-2", "partial", None, {"success": True, "status": "partial", "makingAmount": "0.1", "takingAmount": "0.2"})
+
+
+class PolymarketRefreshUnderfillSubmitter(PartialRemainderSubmitter):
+    def get_order(self, order_id: str) -> dict[str, object]:
+        if order_id == "order-1":
+            self.get_order_calls.append(order_id)
+            return {
+                "success": True,
+                "status": "matched",
+                "original_size": "25",
+                "price": "0.4",
+                "size_matched": "0.2",
+            }
+        return super().get_order(order_id)
+
+    def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+        self.place_calls.append(amount)
+        if len(self.place_calls) == 1:
+            return OrderSubmission(True, "order-1", "matched", None, {"success": True, "status": "matched", "makingAmount": "0.1", "takingAmount": "0.2"})
+        return OrderSubmission(True, "order-2", "partial", None, {"success": True, "status": "partial", "makingAmount": "0.1", "takingAmount": "0.2"})
+
+
 class StaticBookClient:
     def __init__(self, book: BookSnapshot) -> None:
         self.book = book
@@ -875,6 +984,89 @@ def test_live_submit_partial_fak_rolls_remainder_into_resting_fallback(tmp_path:
 
 
 
+def test_live_submit_matched_underfill_rolls_remainder_into_resting_fallback_for_any_strategy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    submitter = MatchedUnderfillSubmitter()
+    book_client = StaticBookClient(_retry_book(price=0.35, size=2.44))
+    sleeps: list[float] = []
+    monkeypatch.setattr(live_execution.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setenv("LIVE_MIN_ORDER_NOTIONAL", "0.01")
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live", retry_wait_seconds=5.0),
+        book_client=book_client,
+        submitter=submitter,
+    )
+    base_position = _live_position()
+    position = base_position.__class__(
+        **{
+            **base_position.__dict__,
+            "strategy_name": EDGE_CORE_POLICY_NAME,
+            "target_notional_usd": 7.0,
+            "target_shares": 14.0,
+        }
+    )
+    position_id = store.insert_live_policy_position(position)
+    assert position_id is not None
+
+    state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
+
+    assert state == LivePositionState.PARTIAL
+    assert sleeps == [5.0, 120.0]
+    assert len(submitter.place_calls) == 2
+    assert submitter.get_order_calls == ["order-1", "gtc-1"]
+    assert submitter.cancel_calls == ["gtc-1"]
+    assert len(submitter.gtc_calls) == 1
+    attempts = store.connection.execute("select attempt_seq, order_mode, final_state from live_order_attempts order by attempt_seq").fetchall()
+    assert [(row["attempt_seq"], row["order_mode"], row["final_state"]) for row in attempts] == [
+        (1, "FAK", "PARTIAL"),
+        (2, "FAK", "PARTIAL"),
+        (3, "GTC", "PARTIAL"),
+    ]
+    row = store.live_open_positions()[0]
+    assert row["state"] == "PARTIAL"
+    assert row["cost_usd"] == pytest.approx(3.6)
+
+
+
+def test_live_submit_polymarket_refresh_underfill_reaches_resting_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    submitter = PolymarketRefreshUnderfillSubmitter()
+    book_client = StaticBookClient(_retry_book(price=0.35, size=2.44))
+    sleeps: list[float] = []
+    monkeypatch.setattr(live_execution.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setenv("LIVE_MIN_ORDER_NOTIONAL", "0.01")
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live", retry_wait_seconds=5.0),
+        book_client=book_client,
+        submitter=submitter,
+    )
+    base_position = _live_position()
+    position = base_position.__class__(
+        **{
+            **base_position.__dict__,
+            "target_notional_usd": 10.0,
+            "target_shares": 25.0,
+        }
+    )
+    position_id = store.insert_live_policy_position(position)
+    assert position_id is not None
+
+    state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
+
+    assert state == LivePositionState.PARTIAL
+    assert sleeps == [5.0, 120.0]
+    assert submitter.get_order_calls == ["order-1", "gtc-1"]
+    assert len(submitter.gtc_calls) == 1
+    attempts = store.connection.execute("select attempt_seq, order_mode, final_state from live_order_attempts order by attempt_seq").fetchall()
+    assert [(row["attempt_seq"], row["order_mode"], row["final_state"]) for row in attempts] == [
+        (1, "FAK", "PARTIAL"),
+        (2, "FAK", "PARTIAL"),
+        (3, "GTC", "PARTIAL"),
+    ]
+
+
 def test_live_submit_does_not_retry_when_first_order_fills_during_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     submitter = RefreshThenFillSubmitter()
     book_client = StaticBookClient(_retry_book(price=0.35, size=2.44))
@@ -985,13 +1177,19 @@ def test_resting_fallback_updates_position_when_filled_during_ttl(tmp_path: Path
     assert attempt["filled_shares"] == pytest.approx(8.1)
 
 
-def test_resting_fallback_is_consensus_only(tmp_path: Path) -> None:
+def test_resting_fallback_is_enabled_for_all_live_strategies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(live_execution.time, "sleep", lambda seconds: None)
     submitter = RestingFallbackSubmitter(after_ttl={"success": True, "status": "live"})
     store = ExecutionStore(tmp_path / "live.sqlite")
     engine = LiveExecutionEngine(
         store,
         LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live"),
-        book_client=StaticBookClient(_retry_book()),
+        book_client=StaticBookClient(BookSnapshot(
+            token_id="no-token",
+            bids=[BookLevel(price=0.33, size=100.0)],
+            asks=[BookLevel(price=0.42, size=100.0)],
+            timestamp="2026-05-20T18:00:06+00:00",
+        )),
         submitter=submitter,
     )
     position = _live_position().__class__(**{**_live_position().__dict__, "strategy_name": EDGE_CORE_POLICY_NAME})
@@ -1001,8 +1199,8 @@ def test_resting_fallback_is_consensus_only(tmp_path: Path) -> None:
     state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
 
     assert state == LivePositionState.REJECTED
-    assert submitter.gtc_calls == []
-    assert store.connection.execute("select count(*) count from live_order_attempts").fetchone()["count"] == 1
+    assert len(submitter.gtc_calls) == 1
+    assert store.connection.execute("select count(*) count from live_order_attempts").fetchone()["count"] == 2
 
 
 def test_resting_order_parameters_respect_entry_and_fair_caps(tmp_path: Path) -> None:
@@ -1038,6 +1236,7 @@ def test_live_submit_uses_exchange_returned_fill_amounts(tmp_path: Path) -> None
 
     assert state == LivePositionState.FILLED
     row = store.live_open_positions()[0]
+    assert row["state"] == "FILLED"
     assert row["cost_usd"] == pytest.approx(2.4)
     assert row["filled_shares"] == pytest.approx(8.0)
     assert row["avg_entry_price"] == pytest.approx(0.3)

@@ -10,6 +10,7 @@ from weather_trader.live.settings import LiveSettings
 
 CORE_POLICY_MULTIPLIER = 1.0
 CONSENSUS_POLICY_MULTIPLIER = 0.6
+CONSENSUS_BUY_YES_MULTIPLIER = 0.5
 MOONSHOT_FIXED_NOTIONAL_USD = 2.0
 ROUNDING_STEP_USD = 0.5
 
@@ -82,6 +83,8 @@ class LiveSizingModel:
                 policy_multiplier = CONSENSUS_POLICY_MULTIPLIER if "consensus" in strategy_name else CORE_POLICY_MULTIPLIER
                 price_multiplier = _price_multiplier(entry_price)
                 pre_cap = base * policy_multiplier * price_multiplier
+        side_multiplier = _side_multiplier(strategy_name, side)
+        pre_cap *= side_multiplier
 
         station_date_key = f"{station}:{market_date_text}"
         station_date_side_key = f"{station}:{market_date_text}:{side}"
@@ -138,6 +141,7 @@ class LiveSizingModel:
             "base_notional_usd": base,
             "policy_multiplier": policy_multiplier,
             "price_multiplier": price_multiplier,
+            "side_multiplier": side_multiplier,
             "pre_cap_target_usd": pre_cap,
             "caps": caps,
             "rounding_step_usd": ROUNDING_STEP_USD,
@@ -148,6 +152,12 @@ class LiveSizingModel:
             "strategy_name": strategy_name,
         }
         return LiveSizingDecision(rounded, base, policy_multiplier, price_multiplier, pre_cap, caps, blocked_reason, raw)
+
+
+def _side_multiplier(strategy_name: str, side: str) -> float:
+    if side == str(TradeAction.BUY_YES) and "consensus" in strategy_name.lower():
+        return CONSENSUS_BUY_YES_MULTIPLIER
+    return 1.0
 
 
 def _price_multiplier(price: float) -> float:

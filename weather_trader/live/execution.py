@@ -50,11 +50,11 @@ LIVE_MODEL_GROUP = "obs_bucket_consensus"
 DEFAULT_LIVE_ENTRY_PRICE_MAX = 0.50
 LIVE_ENTRY_PRICE_MAX = DEFAULT_LIVE_ENTRY_PRICE_MAX
 EDGE_CORE_MIN_EDGE = 0.25
-CONSENSUS_NOTIONAL_USD = 30.0
-EDGE_CORE_NOTIONAL_USD = 25.0
+CONSENSUS_NOTIONAL_USD = 50.0
+EDGE_CORE_NOTIONAL_USD = 50.0
 MOONSHOT_MIN_EDGE = 0.90
 MOONSHOT_NOTIONAL_USD = 2.0
-NGBOOST_BEST_BUY_YES_NOTIONAL_USD = 7.5
+NGBOOST_BEST_BUY_YES_NOTIONAL_USD = 10.0
 LIVE_MODEL_PATHS = (
     MODELS_DIR / f"{DYNAMIC_TUNED_MODEL}.joblib",
     MODELS_DIR / f"{CATBOOST_MODEL}.joblib",
@@ -106,6 +106,7 @@ class LiveCycleResult:
     rejected: int
     skipped: int
     errors: list[str]
+    debug: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -409,33 +410,59 @@ class LiveExecutionEngine:
     def run_once(self, as_of_utc: datetime | None = None) -> LiveCycleResult:
         now = as_of_utc or datetime.now(timezone.utc)
         errors: list[str] = []
+        debug: dict[str, Any] = {
+            "timestamp": now.isoformat(),
+            "mode": self.config.mode,
+            "market_limit": self.config.market_limit,
+            "max_obs_age_minutes": self.config.max_obs_age_minutes,
+            "max_book_age_seconds": self.config.max_book_age_seconds,
+            "min_entry_price": self.config.min_entry_price,
+            "max_entry_price": self.config.max_entry_price,
+            "models": [str(path) for path in self.config.model_paths],
+        }
         for plan in self.strategy_plans:
             self.store.upsert_live_strategy(plan.strategy)
-            self.store.insert_live_trade_event(
-                LiveTradeEvent(utc_now_iso(), None, plan.strategy.name, LiveTradeEventType.STRATEGY_REGISTERED, "strategy active", {})
-            )
         try:
-            markets = same_day_markets(self.discovery.discover(limit=self.config.market_limit), now)
+            discovered_markets = self.discovery.discover(limit=self.config.market_limit)
+            same_day = same_day_markets(discovered_markets, now)
+            markets = same_day
             markets = [
                 market
                 for market in markets
                 if market.market_family == MarketFamily.HIGH_TEMP and market.station in PM_ACTIVE_US12_STATIONS
             ]
         except requests.RequestException as exc:
-            return LiveCycleResult(0, 0, 0, 0, 0, [f"discovery: {exc}"])
+            debug["discovery_error"] = str(exc)
+            return LiveCycleResult(0, 0, 0, 0, 0, [f"discovery: {exc}"], debug)
+        debug.update(
+            {
+                "discovered_markets": len(discovered_markets),
+                "same_day_markets": len(same_day),
+                "live_high_temp_markets": len(markets),
+                "discovery_warnings": list(getattr(self.discovery, "last_warnings", []))[:25],
+            }
+        )
         for market in markets:
             self.store.upsert_market(market)
         books = self._fetch_books(markets)
+        debug["books"] = len(books)
         weather_by_station = self._fetch_weather(markets, now, errors)
-        candidates = self._build_candidates(markets, books, weather_by_station, now, errors)
+        debug["weather"] = {
+            "requested_stations": len({market.station for market in markets}),
+            "loaded_stations": len(weather_by_station),
+            "missing_stations": sorted({market.station for market in markets} - set(weather_by_station)),
+        }
+        candidates = self._build_candidates(markets, books, weather_by_station, now, errors, debug)
 
         reserved = submitted = rejected = skipped = 0
+        reject_reasons: dict[str, int] = {}
         market_by_id = {market.market_id: market for market in markets}
         book_by_market_side = _book_by_market_side(markets, books)
         for candidate in candidates:
             market = market_by_id.get(candidate.position.selected_market_id)
             if market is None:
                 skipped += 1
+                reject_reasons["MISSING_MARKET"] = reject_reasons.get("MISSING_MARKET", 0) + 1
                 continue
             selected_book = book_by_market_side.get((candidate.position.selected_market_id, str(candidate.position.selected_side)))
             reject_reason = self._candidate_reject_reason(candidate, selected_book)
@@ -446,6 +473,7 @@ class LiveExecutionEngine:
             position_id = self.store.insert_live_policy_position(position)
             if position_id is None:
                 skipped += 1
+                reject_reasons["DUPLICATE_POSITION"] = reject_reasons.get("DUPLICATE_POSITION", 0) + 1
                 continue
             reserved += 1
             self.store.insert_live_trade_event(
@@ -453,6 +481,7 @@ class LiveExecutionEngine:
             )
             if reject_reason is not None:
                 rejected += 1
+                reject_reasons[reject_reason] = reject_reasons.get(reject_reason, 0) + 1
                 self._record_rejected(position_id, position, reject_reason)
                 continue
             result_state = self._submit(position_id, position, market=market, initial_book=selected_book, as_of_utc=now, errors=errors)
@@ -460,8 +489,18 @@ class LiveExecutionEngine:
                 submitted += 1
             elif result_state == LivePositionState.REJECTED:
                 rejected += 1
+                reject_reasons[str(result_state)] = reject_reasons.get(str(result_state), 0) + 1
         self._record_risk_snapshot()
-        return LiveCycleResult(len(candidates), reserved, submitted, rejected, skipped, errors)
+        debug["result"] = {
+            "candidates": len(candidates),
+            "reserved": reserved,
+            "submitted": submitted,
+            "rejected": rejected,
+            "skipped": skipped,
+            "reject_reasons": reject_reasons,
+            "errors": errors[:25],
+        }
+        return LiveCycleResult(len(candidates), reserved, submitted, rejected, skipped, errors, debug)
 
     def _fetch_books(self, markets: list[MarketSnapshot]) -> dict[str, BookSnapshot]:
         token_ids = sorted({token for market in markets for token in (market.yes_token_id, market.no_token_id) if token})
@@ -491,6 +530,7 @@ class LiveExecutionEngine:
         weather_by_station: dict[str, StationWeatherState],
         as_of_utc: datetime,
         errors: list[str],
+        debug: dict[str, Any] | None = None,
     ) -> list[Any]:
         snapshots: list[dict[str, Any]] = []
         snapshot_id = 1
@@ -498,6 +538,9 @@ class LiveExecutionEngine:
         for market in markets:
             grouped.setdefault(group_key(market), []).append(market)
         research_config = ResearchConfig(max_obs_age_minutes=self.config.max_obs_age_minutes, bankroll_usd=1000.0, market_limit=self.config.market_limit)
+        debug_groups: list[dict[str, Any]] = []
+        model_snapshot_counts: dict[str, int] = {}
+        due_group_count = 0
         for engine in self.fair_value_engines:
             for key, group_markets in grouped.items():
                 station_id, market_date, market_family = key
@@ -509,6 +552,7 @@ class LiveExecutionEngine:
                 due_buckets = due_delay_buckets(weather, as_of_utc, research_config, market_family=market_family)
                 if not due_buckets:
                     continue
+                due_group_count += 1
                 try:
                     fair_values = engine.price_markets(group_markets, weather)
                     contexts = [
@@ -537,28 +581,84 @@ class LiveExecutionEngine:
                             item["id"] = snapshot_id
                             snapshot_id += 1
                             snapshots.append(item)
+                            model_snapshot_counts[engine.model_name] = model_snapshot_counts.get(engine.model_name, 0) + 1
+                            if len(debug_groups) < 100:
+                                debug_groups.append(
+                                    {
+                                        "model": engine.model_name,
+                                        "station": station_id,
+                                        "market_date": str(market_date),
+                                        "market_family": str(market_family),
+                                        "strategy_bucket": str(strategy_bucket),
+                                        "obs_delay_bucket": str(bucket),
+                                        "selected_side": item.get("selected_side"),
+                                        "selected_bucket": item.get("selected_bucket"),
+                                        "selected_market_id": item.get("selected_market_id"),
+                                        "selected_edge": item.get("selected_edge"),
+                                        "selected_yes_ask": item.get("selected_yes_ask"),
+                                        "selected_no_ask": item.get("selected_no_ask"),
+                                        "skip_reason": item.get("skip_reason"),
+                                    }
+                                )
                 except Exception as exc:
                     errors.append(f"model:{engine.model_name}:group:{station_id}:{market_date}: {exc}")
         consensus = self.policy_evaluator._build_consensus(snapshots)
         candidates: list[LiveCandidate] = []
+        plan_debug: list[dict[str, Any]] = []
         for plan in self.strategy_plans:
             plan_candidates: dict[tuple[object, ...], LiveCandidate] = {}
+            policy_debug: list[dict[str, Any]] = []
             for policy in plan.policies:
                 filtered = self.policy_evaluator._candidates_for_policy(policy, snapshots, consensus)
+                pre_side_count = len(filtered)
                 if plan.selected_side is not None:
                     filtered = [item for item in filtered if item.get("selected_side") == str(plan.selected_side)]
-                for candidate in self.policy_evaluator._first_by_scope(policy, filtered):
+                first_by_scope = self.policy_evaluator._first_by_scope(policy, filtered)
+                position_count = 0
+                for candidate in first_by_scope:
                     position = self.policy_evaluator._position_from_candidate(policy, candidate)
                     if position is None:
                         continue
+                    position_count += 1
                     key = (position.station, position.market_date, position.market_family, position.scope_key)
                     existing = plan_candidates.get(key)
                     if existing is None or position.timestamp < existing.position.timestamp:
                         plan_candidates[key] = LiveCandidate(plan, position)
+                policy_debug.append(
+                    {
+                        "policy": policy.name,
+                        "source": policy.source,
+                        "model_name": policy.model_name,
+                        "model_group": policy.model_group,
+                        "strategy_bucket": str(policy.strategy_bucket) if policy.strategy_bucket else None,
+                        "pre_side_filter": pre_side_count,
+                        "post_side_filter": len(filtered),
+                        "first_by_scope": len(first_by_scope),
+                        "positions": position_count,
+                    }
+                )
             for candidate in sorted(plan_candidates.values(), key=lambda item: (item.position.timestamp, item.position.station, item.position.scope_key)):
                 position = candidate.position
                 if position is not None:
                     candidates.append(candidate)
+            plan_debug.append(
+                {
+                    "strategy": plan.strategy.name,
+                    "selected_side": str(plan.selected_side) if plan.selected_side else None,
+                    "candidates": len(plan_candidates),
+                    "policies": policy_debug,
+                }
+            )
+        if debug is not None:
+            debug["candidate_build"] = {
+                "groups": len(grouped),
+                "due_model_groups": due_group_count,
+                "snapshots": len(snapshots),
+                "snapshots_by_model": model_snapshot_counts,
+                "consensus": len(consensus),
+                "sample_snapshots": debug_groups,
+                "plans": plan_debug,
+            }
         return candidates
 
     def _build_signal(
@@ -745,10 +845,12 @@ class LiveExecutionEngine:
         if market is None or initial_book is None:
             return first_attempt.state
 
+        first_order_open = first_attempt.state in {LivePositionState.SUBMITTED, LivePositionState.DELAYED, LivePositionState.UNKNOWN}
         time.sleep(float(self.config.retry_wait_seconds))
         refreshed = self._refresh_order_state(first_attempt.response.order_id, position, limit_price, position.target_notional_usd)
         if refreshed is not None:
             refreshed_state, refreshed_filled_shares, refreshed_cost_usd, refreshed_avg_price, refreshed_raw = refreshed
+            first_order_open = refreshed_state in {LivePositionState.SUBMITTED, LivePositionState.DELAYED, LivePositionState.UNKNOWN}
             if refreshed_filled_shares > 0 or refreshed_state in {LivePositionState.FILLED, LivePositionState.PARTIAL}:
                 self.store.update_live_policy_position_execution(
                     position_id,
@@ -778,7 +880,8 @@ class LiveExecutionEngine:
                         {"order_id": first_attempt.response.order_id, "state": str(refreshed_state), "raw": refreshed_raw},
                     )
                 )
-                return refreshed_state
+                if refreshed_state != LivePositionState.PARTIAL:
+                    return refreshed_state
             self.store.insert_live_trade_event(
                 LiveTradeEvent(
                     utc_now_iso(),
@@ -922,6 +1025,7 @@ class LiveExecutionEngine:
             target_notional_usd,
             assume_filled=assume_filled,
         )
+        state = _state_from_fill_amount(state, cost_usd, target_notional_usd, filled_shares, target_shares)
         return LiveAttemptResult(response, state, limit_price, target_notional_usd, target_shares, filled_shares, cost_usd, avg_price)
 
     def _submit_resting_fallback(
@@ -1085,6 +1189,7 @@ class LiveExecutionEngine:
         )
         state = _state_from_response(response)
         filled_shares, cost_usd, avg_price = _buy_fill_from_response(response, state, position, limit_price, target_notional_usd, assume_filled=False)
+        state = _state_from_fill_amount(state, cost_usd, target_notional_usd, filled_shares, target_shares)
         return LiveAttemptResult(response, state, limit_price, target_notional_usd, target_shares, filled_shares, cost_usd, avg_price)
 
     def _cancel_resting_order(self, order_id: str) -> CancelSubmission:
@@ -1095,7 +1200,7 @@ class LiveExecutionEngine:
             return CancelSubmission(False, [], {order_id: str(exc)}, str(exc), {"exception_type": type(exc).__name__, "exception": str(exc)})
 
     def _resting_fallback_enabled(self, position: LivePolicyPosition) -> bool:
-        return bool(self.config.enable_resting_fallback and self.config.mode == "live" and position.strategy_name == LIVE_POLICY_NAME)
+        return bool(self.config.enable_resting_fallback and self.config.mode == "live")
 
     def _resting_order_parameters(
         self,
@@ -1241,6 +1346,10 @@ class LiveExecutionEngine:
             target_notional_usd,
             assume_filled=False,
         )
+        target_shares = quantize_shares(target_notional_usd / limit_price) if limit_price > 0 else 0.0
+        state = _state_from_fill_amount(state, cost_usd, target_notional_usd, filled_shares, target_shares)
+        if _refresh_payload_is_partially_matched(raw_payload):
+            state = LivePositionState.PARTIAL
         return state, filled_shares, cost_usd, avg_price, raw_payload
 
     def _refresh_retry_book(self, token_id: str, errors: list[str]) -> BookSnapshot | None:
@@ -1333,13 +1442,47 @@ def _buy_fill_from_response(
     if actual_cost is not None and actual_shares is not None and actual_cost > 0.0 and actual_shares > 0.0:
         avg_price = actual_cost / actual_shares
         return quantize_shares(actual_shares), quantize_usdc(actual_cost), quantize_price(avg_price)
+    matched_shares = _float_response_field(response.raw, "size_matched")
+    order_price = _float_response_field(response.raw, "price")
+    if matched_shares is not None and order_price is not None and matched_shares > 0.0 and order_price > 0.0:
+        actual_cost = matched_shares * order_price
+        return quantize_shares(matched_shares), quantize_usdc(actual_cost), quantize_price(order_price)
     if assume_filled and target_notional_usd > 0.0 and limit_price > 0.0:
         filled_shares = quantize_shares(target_notional_usd / limit_price)
         return filled_shares, quantize_usdc(target_notional_usd), limit_price
-    if state in {LivePositionState.FILLED, LivePositionState.PARTIAL} and target_notional_usd > 0.0 and limit_price > 0.0:
-        filled_shares = quantize_shares(target_notional_usd / limit_price)
-        return filled_shares, quantize_usdc(target_notional_usd), limit_price
     return 0.0, 0.0, None
+
+
+def _state_from_fill_amount(
+    state: LivePositionState,
+    cost_usd: float,
+    target_notional_usd: float,
+    filled_shares: float,
+    target_shares: float,
+) -> LivePositionState:
+    if state not in {LivePositionState.FILLED, LivePositionState.PARTIAL}:
+        return state
+    target = max(0.0, float(target_notional_usd))
+    cost = max(0.0, float(cost_usd))
+    shares = max(0.0, float(filled_shares))
+    target_share_count = max(0.0, float(target_shares))
+    if state == LivePositionState.PARTIAL:
+        return state
+    if target_share_count > 0.0 and shares + 1e-6 >= target_share_count:
+        return LivePositionState.FILLED
+    if target > 0.0 and cost + 0.01 >= target:
+        return LivePositionState.FILLED
+    if cost > 0.0 or shares > 0.0:
+        return LivePositionState.PARTIAL
+    return state
+
+
+def _refresh_payload_is_partially_matched(raw: dict[str, Any]) -> bool:
+    matched_shares = _float_response_field(raw, "size_matched")
+    original_shares = _float_response_field(raw, "original_size")
+    if matched_shares is None or original_shares is None:
+        return False
+    return 0.0 < matched_shares < original_shares
 
 
 def _float_response_field(raw: dict[str, Any], key: str) -> float | None:
@@ -1350,6 +1493,7 @@ def _float_response_field(raw: dict[str, Any], key: str) -> float | None:
         return None if value is None else float(value)
     except (TypeError, ValueError):
         return None
+
 
 def _book_by_market_side(markets: list[MarketSnapshot], books: dict[str, BookSnapshot]) -> dict[tuple[str, str], BookSnapshot]:
     result: dict[tuple[str, str], BookSnapshot] = {}

@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Static, TabbedContent, TabPane
 
@@ -171,6 +172,28 @@ def _sizing_multiplier(row: dict[str, Any]) -> str:
     if policy is None or price is None:
         return ""
     return f"p{float(policy):.2f} x px{float(price):.2f}"
+
+
+def _live_position_risk_value(row: dict[str, Any]) -> float:
+    try:
+        cost = float(row.get("cost_usd") or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        cost = 0.0
+    if cost > 0:
+        return cost
+    try:
+        return float(row.get("target_notional_usd") or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+
+
+def _has_effective_book_mark(row: dict[str, Any]) -> bool:
+    if row.get("current_bid") is not None:
+        return True
+    try:
+        return row.get("current_ask") is not None and float(row.get("current_ask")) < 0.01
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 def _nice_step(raw_step: float) -> float:
@@ -688,7 +711,7 @@ class RoboWeatherTUI(App):
                 ("date", "date"),
                 ("side", "side"),
                 ("bucket", "bucket"),
-                ("target", "target"),
+                ("risk", "risk"),
                 ("base", "base"),
                 ("cap", "cap"),
                 ("mult", "multiplier"),
@@ -914,7 +937,10 @@ class RoboWeatherTUI(App):
             table.add_row(group, setting, str(value))
 
     def refresh_processes(self) -> None:
-        process_table = self.query_one("#process-table", DataTable)
+        try:
+            process_table = self.query_one("#process-table", DataTable)
+        except NoMatches:
+            return
         process_table.clear()
         snapshots = {snapshot.name: snapshot for snapshot in self.process_supervisor.snapshots()}
         for snapshot in snapshots.values():
@@ -987,7 +1013,7 @@ class RoboWeatherTUI(App):
         latest_event = live_events[0] if live_events else {}
         latest_risk = live_risk[0] if live_risk else {}
         latest_book_age = _age_minutes(overview.get("latest_book_ts"))
-        marked = sum(1 for row in live_rows if row.get("current_bid") is not None)
+        marked = sum(1 for row in live_rows if _has_effective_book_mark(row))
         filled = [row for row in live_rows if float(row.get("filled_shares") or 0.0) > 0]
         total_cost = sum(float(row.get("cost_usd") or 0.0) for row in live_rows)
         total_target = sum(float(row.get("target_notional_usd") or 0.0) for row in live_rows)
@@ -1152,7 +1178,7 @@ class RoboWeatherTUI(App):
                 str(row.get("market_date", "")),
                 str(row.get("side", "")),
                 str(row.get("bucket", "")),
-                _fmt_money(raw.get("target_notional_usd")),
+                _fmt_money(_live_position_risk_value(raw)),
                 _fmt_money(_sizing_value(raw, "base_notional_usd")),
                 _sizing_cap(raw),
                 _sizing_multiplier(raw),

@@ -2,6 +2,10 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-06-03
+
+- Added the US high-temperature HRRR v2 model family to the default research-loop model set for MARKET_SCOPE=us and MARKET_SCOPE=all: dynamic bucket, tuned dynamic bucket, CatBoost bucket, MVP, high regression, and NGBoost. This activates HRRR research snapshot collection while leaving live execution on the existing obs-family strategy stack until HRRR replay is reviewed.
+
 ## 2026-05-28
 
 - Added `docs/live-trading-journal.md` as the current live trading state and rationale tracker.

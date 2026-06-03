@@ -6,33 +6,33 @@ Git history remains the source of truth for code changes. This journal is the so
 
 ## Current Live State
 
-Updated: 2026-05-28
+Updated: 2026-06-02
 
 ### Active policies
 
 | Policy | Side | Target notional | Entry cap | Notes |
 | --- | --- | ---: | ---: | --- |
-| Consensus HC late | mixed | $30 | <= $0.50 | Primary live strategy. Uses the consensus high-conviction late-window policy. |
-| Core capped | BUY_NO | $25 | <= $0.50 | Core dynamic policy after removing higher-priced entries. |
-| NGBoost BUY_YES | BUY_YES | $7.50 | <= $0.50 | Small exploratory allocation. Keep size low until live evidence improves. |
+| Consensus HC late | mixed | $50 BUY_NO; $25 BUY_YES | <= $0.50 | Primary live strategy. Uses the consensus high-conviction late-window policy. |
+| Core capped | BUY_NO | $50 | <= $0.50 | Core dynamic policy after removing higher-priced entries. |
+| NGBoost BUY_YES | BUY_YES | $10 | <= $0.50 | Dedicated BUY_YES allocation. Keep smaller than core NO until live evidence improves. |
 | Moonshot | BUY_NO | $2 | <= $0.50 | Small tail allocation. Original tiny moonshot remains constrained by its tighter policy price rules. |
 
 ### Risk caps
 
 | Cap | Current value |
 | --- | ---: |
-| Max order | $30 |
-| Station/date | $75 |
-| Station/date/side | $55 |
-| Exact bucket/side | $30 |
+| Max order | $50 |
+| Station/date | $125 |
+| Station/date/side | $85 |
+| Exact bucket/side | $50 |
 | Total open risk | $450 |
 | Daily new risk | $300 |
 
 ### Execution rules
 
 - Live entries are capped at `<= 0.50` because historical replay showed materially better return on risk below this price.
-- Orders use FAK first, with retry handling for transient depth/order-version failures. Partial FAK fills continue into a 120-second resting remainder for the leftover notional.
-- Consensus HC may place a single resting fallback limit order after eligible FAK failure paths.
+- Orders use FAK first, with retry handling for transient depth/order-version failures. Explicit partial fills continue into a 120-second resting remainder for the leftover notional. Matched/filled responses with returned fill amounts are treated as partial only when the unfilled remainder exceeds $3.
+- Any live strategy may place a single resting fallback limit order after eligible FAK failure paths.
 - Resting fallback TTL is 120 seconds and targets the remaining notional after the FAK retry path; keep whatever fills before the cancel.
 - The resting fallback is intentionally narrow: it is for improving fill odds without adding a broad passive market-making system.
 - Live settlement in the live DB updates only when the Polymarket live resolver runs. Polymarket UI may show resolution before `live_policy_positions` is marked `SETTLED`.
@@ -42,6 +42,7 @@ Updated: 2026-05-28
 - The TUI config page still shows legacy base notional from bankroll and fixed fraction. Actual live policy sizing now comes from fixed per-policy targets.
 - Research policy scoring uses official weather outcomes from IEM ASOS. Live PnL settlement uses Polymarket resolution.
 - Same-day weather snapshots are useful for preliminary reads, but official Polymarket resolution is what determines live settlement.
+- Polymarket's portfolio P/L is account-level. The live SQLite ledger tracks the bot's positions, fills, and settlements, so any mismatch means the bot ledger is missing some mark, settlement, or timing state relative to the exchange view.
 
 ## Rationale
 
@@ -55,20 +56,45 @@ The working assumption is that higher-priced bucket NO entries often have less a
 
 The system moved from small exploratory sizing to policy-specific fixed sizing after the capped replay looked stronger:
 
-- Consensus HC: $30 because it is the highest-conviction promoted strategy.
-- Core capped: $25 because it remains strong but is slightly secondary to consensus.
-- NGBoost BUY_YES: $7.50 because BUY_YES has been weaker historically and remains exploratory.
+- Consensus HC: $50 for BUY_NO and $25 for BUY_YES because consensus BUY_YES remains weaker historically.
+- Core capped: $50 because the lower-frequency capped box has stronger return per dollar of risk than looser higher-frequency slices.
+- NGBoost BUY_YES: $10 because it is the dedicated BUY_YES strategy but remains smaller than core NO sizing.
 - Moonshot: $2 because tail entries are high variance and should not drive daily risk.
 
-The max order cap is set to $30 so the largest intended order cannot exceed the current primary-policy size.
+The max order cap is set to $50 so the largest intended order cannot exceed the current primary-policy size.
 
 ### Resting fallback
 
-FAK retries address temporary book/depth/order-version issues. When those still fail for Consensus HC, a short-lived passive order can capture fills inside or near the intended risk price without leaving stale exposure in the market.
+FAK retries address temporary book/depth/order-version issues. When those still fail for an eligible live strategy, a short-lived passive order can capture fills inside or near the intended risk price without leaving stale exposure in the market.
 
 The 120-second TTL is a deliberate compromise: weather does not normally reprice enough in two minutes to invalidate the original edge, but the order should not remain open after the cycle context has aged.
 
 ## Journal
+
+### 2026-06-03
+
+- Research loop default model set now includes US high-temperature HRRR v2 equivalents as extra models for `MARKET_SCOPE=us` and `MARKET_SCOPE=all`: dynamic bucket, tuned dynamic bucket, CatBoost bucket, MVP, high regression, and NGBoost. This is research collection only; live execution remains on the existing obs-family strategy stack until HRRR research-policy replay is reviewed.
+- Observability lesson: active research/live model names must be surfaced in status/TUI so trained-but-unloaded model families are visible before sizing decisions.
+
+### 2026-06-02
+
+- Live fixed targets moved to Consensus HC $50 BUY_NO / $25 BUY_YES and Core capped $50. NGBoost BUY_YES remains $10 and Moonshot remains $2.
+- Risk caps moved to max order $50, station/date $125, station/date/side $85, exact bucket/side $50, total open risk $450, daily new risk $300.
+- Rationale: keep the tighter `<= 0.50` eligibility box for R/R and risk efficiency, then size up inside the lower-frequency trade set rather than loosening into weaker high-price rows.
+
+### 2026-06-01
+
+- TUI-launched live loop default polling cadence changed from 360 seconds to 90 seconds when `INTERVAL_SECONDS` is unset.
+- Live loop now writes a separate JSONL debug log for candidate-funnel diagnostics without adding detail to TUI stdout.
+- Live accounting now treats `live_order_attempts` as the source of truth for filled shares/cost after FAK partials; June 1 KATL BUY_YES rows were reconciled from $24.50 / 120.535896 shares to $12.29 / 68.414614 shares.
+
+### 2026-05-29
+
+- Research loop default market scope is now `all`, so a normal restart captures both US and global markets.
+- Live sizing moved to Consensus HC $40 BUY_NO / $20 BUY_YES, Core capped $35, NGBoost BUY_YES $10, and Moonshot $2.
+- Current risk caps are max order $40, station/date $100, station/date/side $70, exact bucket/side $40, total open risk $450, daily new risk $300.
+- Resting fallback now applies to all live strategies after eligible retry/partial paths, not only Consensus HC.
+- Exchange `matched`/`filled` responses with returned fill amounts now respect the returned notional: unfilled remainder `<= $3` is treated as filled dust; larger remainders stay partial and can continue into retry/resting fallback.
 
 ### 2026-05-28
 

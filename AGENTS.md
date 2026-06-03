@@ -5,6 +5,10 @@
 - Before committing, inspect `git status --short` and avoid staging unrelated user changes accidentally.
 - When you figure out a useful repeatable workflow, command pattern, data source, or repo-specific practice, document it here so future agents do not have to rediscover it.
 - Treat `docs/live-trading-journal.md` as the live trading state and rationale tracker. Update it when live policy mix, sizing, entry caps, risk caps, execution behavior, or material trading lessons change.
+- Update docs/changelog.md for meaningful system changes, including data source changes, model activation/deactivation, research-loop defaults, live execution behavior, sizing/risk policy, and operator workflow changes.
+- Use the `roboweather` conda environment for Python commands in this repo:
+  - `/home/maxrush/miniconda3/envs/roboweather/bin/python`
+  - Example: `/home/maxrush/miniconda3/envs/roboweather/bin/python -m pytest tests/test_live_execution.py`
 
 ## Research SQLite analysis workflow
 

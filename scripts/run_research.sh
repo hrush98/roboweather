@@ -17,12 +17,12 @@ Environment overrides:
   MODEL=                # defaults depend on MARKET_SCOPE
   THRESHOLD_MODEL=      # defaults depend on MARKET_SCOPE
   EXTRA_MODELS=          # defaults depend on MARKET_SCOPE
-  MARKET_SCOPE=global    # us|global|all; process default is global research
+  MARKET_SCOPE=all       # us|global|all; process default captures US and global research
   DB=                    # defaults to global or US active research DB by MARKET_SCOPE
   ALLOW_SYNCED_SQLITE=0
   MARKET_LIMIT=50000
   BANKROLL=1000
-  INTERVAL_SECONDS=360
+  INTERVAL_SECONDS=360          # research-loop default; live-loop defaults to 90 when unset
   MAX_CYCLES=
   MAX_OBS_AGE_MINUTES=30
   ENTRY_START_LOCAL=10:00
@@ -68,7 +68,7 @@ if [[ -z "${PYTHON:-}" ]]; then
   fi
 fi
 
-MARKET_SCOPE="${MARKET_SCOPE:-global}"
+MARKET_SCOPE="${MARKET_SCOPE:-all}"
 case "${MARKET_SCOPE}" in
   global)
     DEFAULT_MODEL="data/models/dynamic_bucket_international_celsius_high_obs_2022_2025.joblib"
@@ -79,13 +79,13 @@ case "${MARKET_SCOPE}" in
   us)
     DEFAULT_MODEL="data/models/dynamic_bucket_tuned_pm_active_us12_obs_2022_2025.joblib"
     DEFAULT_THRESHOLD_MODEL="data/models/mvp_pm_active_us12_obs_2022_2025.joblib"
-    DEFAULT_EXTRA_MODELS="data/models/dynamic_bucket_pm_active_us12_obs_2022_2025.joblib data/models/high_regression_pm_active_us12_obs_2022_2025.joblib data/models/ngboost_normal_pm_active_us12_obs_2022_2025.joblib data/models/catboost_bucket_pm_active_us12_obs_2022_2025.joblib data/models/low_dynamic_bucket_obs_2022_2025.joblib data/models/low_mvp_obs_2022_2025.joblib"
+    DEFAULT_EXTRA_MODELS="data/models/dynamic_bucket_pm_active_us12_obs_2022_2025.joblib data/models/high_regression_pm_active_us12_obs_2022_2025.joblib data/models/ngboost_normal_pm_active_us12_obs_2022_2025.joblib data/models/catboost_bucket_pm_active_us12_obs_2022_2025.joblib data/models/dynamic_bucket_hrrr_v2_obs_2022_2025.joblib data/models/dynamic_bucket_tuned_hrrr_v2_obs_2022_2025.joblib data/models/catboost_bucket_hrrr_v2_obs_2022_2025.joblib data/models/mvp_hrrr_v2_obs_2022_2025.joblib data/models/high_regression_hrrr_v2_obs_2022_2025.joblib data/models/ngboost_normal_hrrr_v2_obs_2022_2025.joblib data/models/low_dynamic_bucket_obs_2022_2025.joblib data/models/low_mvp_obs_2022_2025.joblib"
     DEFAULT_DB="$HOME/.local/state/roboweather/research_2026-05-08_multimodel.sqlite"
     ;;
   all)
     DEFAULT_MODEL="data/models/dynamic_bucket_tuned_pm_active_us12_obs_2022_2025.joblib"
     DEFAULT_THRESHOLD_MODEL="data/models/mvp_pm_active_us12_obs_2022_2025.joblib"
-    DEFAULT_EXTRA_MODELS="data/models/dynamic_bucket_pm_active_us12_obs_2022_2025.joblib data/models/high_regression_pm_active_us12_obs_2022_2025.joblib data/models/ngboost_normal_pm_active_us12_obs_2022_2025.joblib data/models/catboost_bucket_pm_active_us12_obs_2022_2025.joblib data/models/low_dynamic_bucket_obs_2022_2025.joblib data/models/low_mvp_obs_2022_2025.joblib data/models/dynamic_bucket_international_celsius_high_obs_2022_2025.joblib data/models/mvp_international_celsius_high_obs_2022_2025.joblib data/models/catboost_bucket_international_celsius_high_obs_2022_2025.joblib data/models/high_regression_international_celsius_high_obs_2022_2025.joblib data/models/ngboost_normal_international_celsius_high_obs_2022_2025.joblib data/models/dynamic_bucket_international_celsius_low_obs_2022_2025.joblib data/models/mvp_international_celsius_low_obs_2022_2025.joblib"
+    DEFAULT_EXTRA_MODELS="data/models/dynamic_bucket_pm_active_us12_obs_2022_2025.joblib data/models/high_regression_pm_active_us12_obs_2022_2025.joblib data/models/ngboost_normal_pm_active_us12_obs_2022_2025.joblib data/models/catboost_bucket_pm_active_us12_obs_2022_2025.joblib data/models/dynamic_bucket_hrrr_v2_obs_2022_2025.joblib data/models/dynamic_bucket_tuned_hrrr_v2_obs_2022_2025.joblib data/models/catboost_bucket_hrrr_v2_obs_2022_2025.joblib data/models/mvp_hrrr_v2_obs_2022_2025.joblib data/models/high_regression_hrrr_v2_obs_2022_2025.joblib data/models/ngboost_normal_hrrr_v2_obs_2022_2025.joblib data/models/low_dynamic_bucket_obs_2022_2025.joblib data/models/low_mvp_obs_2022_2025.joblib data/models/dynamic_bucket_international_celsius_high_obs_2022_2025.joblib data/models/mvp_international_celsius_high_obs_2022_2025.joblib data/models/catboost_bucket_international_celsius_high_obs_2022_2025.joblib data/models/high_regression_international_celsius_high_obs_2022_2025.joblib data/models/ngboost_normal_international_celsius_high_obs_2022_2025.joblib data/models/dynamic_bucket_international_celsius_low_obs_2022_2025.joblib data/models/mvp_international_celsius_low_obs_2022_2025.joblib"
     DEFAULT_DB="$HOME/.local/state/roboweather/research_2026-05-08_multimodel.sqlite"
     ;;
   *)
@@ -100,7 +100,11 @@ DB="${DB:-${DEFAULT_DB}}"
 LIVE_DB="${LIVE_DB:-$HOME/.local/state/roboweather/live_trading.sqlite}"
 MARKET_LIMIT="${MARKET_LIMIT:-50000}"
 BANKROLL="${BANKROLL:-1000}"
-INTERVAL_SECONDS="${INTERVAL_SECONDS:-360}"
+if [[ "${mode}" == "live-loop" ]]; then
+  INTERVAL_SECONDS="${INTERVAL_SECONDS:-90}"
+else
+  INTERVAL_SECONDS="${INTERVAL_SECONDS:-360}"
+fi
 MAX_CYCLES="${MAX_CYCLES:-}"
 MAX_OBS_AGE_MINUTES="${MAX_OBS_AGE_MINUTES:-30}"
 ENTRY_START_LOCAL="${ENTRY_START_LOCAL:-10:00}"
@@ -213,6 +217,7 @@ fi
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 log_path="data/logs/research_${mode}_${timestamp}.log"
 live_log_path="data/logs/live_${mode}_${timestamp}.log"
+live_debug_log_path="${LIVE_DEBUG_LOG:-data/logs/live_debug_${mode}_${timestamp}.jsonl}"
 
 echo "mode=${mode}"
 echo "model=${MODEL}"
@@ -223,6 +228,9 @@ echo "market_scope=${MARKET_SCOPE}"
 echo "db=${DB}"
 echo "live_db=${LIVE_DB}"
 echo "log=${log_path}"
+if [[ "${mode}" == "live-loop" ]]; then
+  echo "live_debug_log=${live_debug_log_path}"
+fi
 
 case "${mode}" in
   loop)
@@ -291,6 +299,7 @@ case "${mode}" in
     if [[ -n "${MAX_ENTRY_PRICE:-}" ]]; then
       command+=(--max-entry-price "${MAX_ENTRY_PRICE}")
     fi
+    command+=(--debug-log "${live_debug_log_path}")
     if [[ "${LIVE_MODE:-dry-run}" != "dry-run" ]]; then
       command+=(--mode "${LIVE_MODE}")
     fi

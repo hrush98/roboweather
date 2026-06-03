@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 import json
 
@@ -276,6 +277,7 @@ def main() -> None:
     live_cycle.add_argument("--model", dest="model_paths", action="append", default=[])
     live_cycle.add_argument("--skip-allowance-check", action="store_true")
     live_cycle.add_argument("--retry-wait-seconds", type=float, default=5.0)
+    live_cycle.add_argument("--debug-log", default=None, help="Append live-cycle debug JSONL to this path")
 
     live_loop = subparsers.add_parser("live-loop", help="Run repeated live execution cycles")
     live_loop.add_argument("--live-db", default=str(DEFAULT_LIVE_DB))
@@ -292,6 +294,7 @@ def main() -> None:
     live_loop.add_argument("--model", dest="model_paths", action="append", default=[])
     live_loop.add_argument("--skip-allowance-check", action="store_true")
     live_loop.add_argument("--retry-wait-seconds", type=float, default=5.0)
+    live_loop.add_argument("--debug-log", default=None, help="Append live-loop debug JSONL to this path")
 
     resolve_live = subparsers.add_parser("resolve-live", help="Resolve settled live positions from official Polymarket outcomes")
     resolve_live.add_argument("--db", default=str(DEFAULT_LIVE_DB))
@@ -499,6 +502,7 @@ def main() -> None:
             model_paths=args.model_paths,
             require_allowance_check=not args.skip_allowance_check,
             retry_wait_seconds=args.retry_wait_seconds,
+            debug_log_path=args.debug_log,
         )
         return
     if args.command == "live-loop":
@@ -517,6 +521,7 @@ def main() -> None:
             model_paths=args.model_paths,
             require_allowance_check=not args.skip_allowance_check,
             retry_wait_seconds=args.retry_wait_seconds,
+            debug_log_path=args.debug_log,
         )
         return
     if args.command == "resolve-live":
@@ -1559,6 +1564,7 @@ def live_cycle_command(
     model_paths: list[str] | None,
     require_allowance_check: bool,
     retry_wait_seconds: float,
+    debug_log_path: str | None = None,
 ) -> None:
     if max_notional_usd is not None:
         consensus_notional_usd = max_notional_usd
@@ -1580,6 +1586,7 @@ def live_cycle_command(
             retry_wait_seconds=retry_wait_seconds,
         )
         result = LiveExecutionEngine(store, config).run_once()
+        _append_live_debug_log(debug_log_path, result.debug)
         print(
             json.dumps(
                 {
@@ -1602,6 +1609,11 @@ def live_cycle_command(
         store.close()
 
 
+def _is_sqlite_lock_error(exc: sqlite3.OperationalError) -> bool:
+    message = str(exc).lower()
+    return "database is locked" in message or "database is busy" in message
+
+
 def live_loop_command(
     live_db_path: str,
     mode: str,
@@ -1617,6 +1629,7 @@ def live_loop_command(
     model_paths: list[str] | None,
     require_allowance_check: bool,
     retry_wait_seconds: float,
+    debug_log_path: str | None = None,
 ) -> None:
     if max_notional_usd is not None:
         consensus_notional_usd = max_notional_usd
@@ -1642,27 +1655,67 @@ def live_loop_command(
         while True:
             cycle += 1
             started = time.time()
-            result = engine.run_once()
-            print(
-                json.dumps(
-                    {
-                        "cycle": cycle,
-                        "live_db": live_db_path,
-                        "mode": mode,
-                        "max_entry_price": max_entry_price,
-                        "consensus_notional_usd": consensus_notional_usd,
-                        "core_notional_usd": edge_core_notional_usd,
-                        "candidates": result.candidates,
-                        "reserved": result.reserved,
-                        "submitted": result.submitted,
-                        "rejected": result.rejected,
-                        "skipped": result.skipped,
-                        "errors": result.errors[:10],
-                    },
-                    indent=2,
-                ),
-                flush=True,
-            )
+            try:
+                result = engine.run_once()
+            except sqlite3.OperationalError as exc:
+                if not _is_sqlite_lock_error(exc):
+                    raise
+                elapsed = time.time() - started
+                errors = [f"sqlite: {exc}"]
+                debug_payload = {
+                    "cycle": cycle,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "mode": mode,
+                    "live_db": live_db_path,
+                    "elapsed_seconds": elapsed,
+                    "errors": errors,
+                }
+                _append_live_debug_log(debug_log_path, debug_payload)
+                print(
+                    json.dumps(
+                        {
+                            "cycle": cycle,
+                            "live_db": live_db_path,
+                            "mode": mode,
+                            "max_entry_price": max_entry_price,
+                            "consensus_notional_usd": consensus_notional_usd,
+                            "core_notional_usd": edge_core_notional_usd,
+                            "candidates": 0,
+                            "reserved": 0,
+                            "submitted": 0,
+                            "rejected": 0,
+                            "skipped": 0,
+                            "errors": errors,
+                        },
+                        indent=2,
+                    ),
+                    flush=True,
+                )
+            else:
+                debug_payload = dict(result.debug or {})
+                debug_payload["cycle"] = cycle
+                debug_payload["elapsed_seconds"] = time.time() - started
+                _append_live_debug_log(debug_log_path, debug_payload)
+                print(
+                    json.dumps(
+                        {
+                            "cycle": cycle,
+                            "live_db": live_db_path,
+                            "mode": mode,
+                            "max_entry_price": max_entry_price,
+                            "consensus_notional_usd": consensus_notional_usd,
+                            "core_notional_usd": edge_core_notional_usd,
+                            "candidates": result.candidates,
+                            "reserved": result.reserved,
+                            "submitted": result.submitted,
+                            "rejected": result.rejected,
+                            "skipped": result.skipped,
+                            "errors": result.errors[:10],
+                        },
+                        indent=2,
+                    ),
+                    flush=True,
+                )
             if max_cycles is not None and cycle >= max_cycles:
                 break
             time.sleep(max(1.0, interval_seconds - (time.time() - started)))
@@ -1670,6 +1723,15 @@ def live_loop_command(
         print("live-loop stopped")
     finally:
         store.close()
+
+
+def _append_live_debug_log(path: str | None, payload: dict[str, object] | None) -> None:
+    if not path or payload is None:
+        return
+    debug_path = Path(path)
+    debug_path.parent.mkdir(parents=True, exist_ok=True)
+    with debug_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True, default=str) + "\n")
 
 
 def resolve_live_command(db_path: str, min_market_age_days: int, limit: int, dry_run: bool) -> None:

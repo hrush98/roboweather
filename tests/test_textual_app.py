@@ -10,7 +10,7 @@ import pytest
 from textual.widgets import Button, DataTable, Input, Static, TabPane
 
 from weather_trader.ui.process_supervisor import ProcessSnapshot, ProcessSpec, ProcessSupervisor
-from weather_trader.ui.textual_app import RoboWeatherTUI, _live_start_label
+from weather_trader.ui.textual_app import RoboWeatherTUI, _live_position_risk_value, _live_start_label
 from weather_trader.ui.dashboard_rollups import _build_live_policy_view, _build_policy_view, _build_position_view, _bucket_label
 from weather_trader.execution.contracts import (
     BookLevel,
@@ -467,6 +467,48 @@ def test_live_policy_view_scores_prelim_weather_when_books_are_missing() -> None
     kdal = next(row for row in view["exposure_rows"] if row["station"] == "KDAL")
     assert kdal["weather_status"] == "PRELIM_LOSS"
     assert kdal["weather_pnl"] == pytest.approx(-0.20)
+
+
+def test_live_policy_view_counts_sub_cent_ask_without_bid_as_marked_zero() -> None:
+    live_rows = [
+        {
+            "timestamp": "2026-05-11T23:11:00Z",
+            "policy_name": "pm_us12_mvp_hc_15m_first",
+            "model_group": "mvp_pm_active_us12_obs_2022_2025",
+            "strategy_bucket": "HIGH_CONVICTION",
+            "obs_delay_bucket": "15m",
+            "station": "KATL",
+            "market_date": "2026-05-11",
+            "selected_side": "BUY_NO",
+            "selected_bucket": "74-75F",
+            "entry_price": 0.40,
+            "current_bid": None,
+            "current_ask": 0.001,
+            "filled_shares": 30.725,
+            "cost_usd": 12.29,
+            "mark_value": 0.0,
+            "unrealized_pnl": -12.29,
+            "high_so_far": 79.0,
+        }
+    ]
+
+    view = _build_live_policy_view(live_rows, as_of_utc=datetime(2026, 5, 11, 23, 30, tzinfo=timezone.utc))
+
+    policy = view["policy_rows"][0]
+    exposure = view["exposure_rows"][0]
+    position = view["position_rows"][0]
+    assert policy["book_status"] == "MARKED"
+    assert policy["mark_pct"] == pytest.approx(1.0)
+    assert policy["avg_bid"] == pytest.approx(0.0)
+    assert exposure["book_status"] == "MARKED"
+    assert exposure["mark"] == pytest.approx(0.0)
+    assert position["bid"] == pytest.approx(0.0)
+    assert position["live_rr"] == pytest.approx(-1.0)
+
+
+def test_live_position_risk_value_prefers_filled_cost_over_target() -> None:
+    assert _live_position_risk_value({"target_notional_usd": 24.50, "cost_usd": 12.29}) == pytest.approx(12.29)
+    assert _live_position_risk_value({"target_notional_usd": 24.50, "cost_usd": 0.0}) == pytest.approx(24.50)
 
 
 def test_live_policy_view_marks_prelim_loss_before_cutoff_when_high_has_cleared_bucket() -> None:
@@ -1310,7 +1352,7 @@ def test_tui_config_tab_renders_effective_live_sizing_values(tmp_path) -> None:
             text = "\n".join(" ".join(str(cell) for cell in config.get_row_at(index)) for index in range(config.row_count))
             assert "Sizing bankroll $2000.00" in text
             assert "Sizing base notional $10.00" in text
-            assert "Risk caps total open $150.00" in text
+            assert "Risk caps total open $450.00" in text
             assert "Strategy tiers consensus multiplier 0.60x" in text
             assert "Price bands < 0.10 0.25x except moonshot" in text
 
@@ -1396,8 +1438,8 @@ def test_tui_live_summary_and_positions_show_sizing_caps(tmp_path) -> None:
         async with app.run_test(size=(160, 40)):
             summary = app.query_one("#live-summary", DataTable)
             summary_text = "\n".join(" ".join(str(cell) for cell in summary.get_row_at(index)) for index in range(summary.row_count))
-            assert "open risk $4.50 / $150.00" in summary_text
-            assert "largest station/date $4.50 / $25.00 KATL:2026-05-25" in summary_text
+            assert "open risk $4.50 / $450.00" in summary_text
+            assert "largest station/date $4.50 / $125.00 KATL:2026-05-25" in summary_text
             contracts = app.query_one("#live-contracts", DataTable)
             contract_text = "\n".join(" ".join(str(cell) for cell in contracts.get_row_at(index)) for index in range(contracts.row_count))
             assert "KATL" in contract_text

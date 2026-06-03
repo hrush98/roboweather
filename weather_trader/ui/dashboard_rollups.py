@@ -86,6 +86,16 @@ def _price_rr(price: float | None, entry: float) -> float | None:
     return (price - entry) / entry
 
 
+def _effective_current_bid(row: dict[str, Any]) -> float | None:
+    bid = row.get("current_bid")
+    if bid is not None:
+        return _safe_float(bid)
+    ask = row.get("current_ask")
+    if ask is not None and _safe_float(ask, default=1.0) < 0.01:
+        return 0.0
+    return None
+
+
 def _live_position_risk(row: dict[str, Any]) -> float:
     cost = _safe_float(row.get("cost_usd"))
     if cost > 0:
@@ -497,7 +507,7 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
         market_date = str(row.get("market_date", ""))
         key = (station, market_date, f"{side}|{bucket}")
         pnl = _safe_float(row.get("unrealized_pnl"))
-        current_bid = row.get("current_bid")
+        current_bid = _effective_current_bid(row)
         entry_price = _safe_float(row.get("entry_price"))
         avg_entry_price = row.get("avg_entry_price")
         execution_entry = _safe_float(avg_entry_price) if avg_entry_price is not None else entry_price
@@ -827,7 +837,8 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
         station_group["mtm"] += _safe_float(row.get("unrealized_pnl"))
         if _safe_float(row.get("unrealized_pnl")) > 0:
             station_group["wins"] += 1
-        if row.get("current_bid") is not None and _safe_float(row.get("current_bid")) >= 0.95:
+        current_bid = _effective_current_bid(row)
+        if current_bid is not None and current_bid >= 0.95:
             station_group["done"] += 1
 
     policy_station_rows = list(policy_station_index.values())
