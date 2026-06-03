@@ -16,6 +16,8 @@ from sklearn.preprocessing import OrdinalEncoder
 
 from weather_trader.models.bucket_classifier import (
     GROUP_COLUMNS,
+    HRRR_RICH_FEATURE_COLUMNS,
+    METAR_ENRICHED_FEATURE_COLUMNS,
     LadderConfig,
     build_grouped_metrics,
     build_synthetic_bucket_dataset,
@@ -31,6 +33,7 @@ REGRESSION_FEATURE_COLUMNS = [
     "max_temp_so_far",
     "temp_change_1h",
     "temp_change_3h",
+    *METAR_ENRICHED_FEATURE_COLUMNS,
     "dewpoint",
     "wind_speed",
     "wind_dir_sin",
@@ -39,6 +42,7 @@ REGRESSION_FEATURE_COLUMNS = [
     "hrrr_current_temp",
     "hrrr_remaining_max",
     "hrrr_current_temp_minus_current_temp",
+    *HRRR_RICH_FEATURE_COLUMNS,
 ]
 CAT_COLUMNS = ["station"]
 WINDOWS = {

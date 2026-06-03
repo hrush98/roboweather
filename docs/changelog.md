@@ -4,6 +4,10 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-06-03
 
+- Added METAR-rich ASOS enrichment fields to dataset construction, model feature rows, and live/research fair-value feature assembly: relative humidity, wet-bulb approximation, pressure, pressure tendency, visibility, hourly precipitation, altimeter, feels-like temperature, min-so-far, range-so-far, and threshold/bucket distances from min-so-far.
+- Retrained PM-active US12 high-temperature model families for METAR-rich, HRRR-rich, and combined METAR+HRRR-rich feature sets; saved model artifacts and report directories under `data/models` and `data/reports`.
+- Added `scripts/model_registry.py`, `data/reports/model_registry.csv`, and `docs/model-performance-log.md` as the canonical model-performance registry/log, including a focused PM-active US12 enrichment comparison.
+
 - Added the US high-temperature HRRR v2 model family to the default research-loop model set for MARKET_SCOPE=us and MARKET_SCOPE=all: dynamic bucket, tuned dynamic bucket, CatBoost bucket, MVP, high regression, and NGBoost. This activates HRRR research snapshot collection while leaving live execution on the existing obs-family strategy stack until HRRR replay is reviewed.
 
 ## 2026-05-28

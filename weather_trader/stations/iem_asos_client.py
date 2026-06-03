@@ -17,6 +17,10 @@ DEFAULT_FIELDS = [
     "drct",
     "relh",
     "mslp",
+    "p01i",
+    "vsby",
+    "alti",
+    "feel",
     "skyc1",
     "skyc2",
     "skyc3",
@@ -93,7 +97,9 @@ class IEMASOSClient:
         if "valid" not in frame.columns:
             raise ValueError("IEM response missing 'valid' column")
         frame["valid"] = pd.to_datetime(frame["valid"], utc=True)
-        for numeric_column in ("tmpf", "dwpf", "sknt", "drct", "relh", "mslp"):
+        if "p01i" in frame.columns:
+            frame["p01i"] = frame["p01i"].replace({"T": 0.0, "T ": 0.0, " T": 0.0})
+        for numeric_column in ("tmpf", "dwpf", "sknt", "drct", "relh", "mslp", "p01i", "vsby", "alti", "feel"):
             if numeric_column in frame.columns:
                 frame[numeric_column] = pd.to_numeric(frame[numeric_column], errors="coerce")
         return frame.sort_values("valid").reset_index(drop=True)

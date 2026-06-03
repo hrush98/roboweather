@@ -15,6 +15,41 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OrdinalEncoder
 
 
+METAR_ENRICHED_FEATURE_COLUMNS = [
+    "temp_range_so_far",
+    "relative_humidity",
+    "wet_bulb_approx",
+    "pressure_mslp",
+    "pressure_tendency_3h",
+    "visibility_miles",
+    "precip_1h_in",
+    "altimeter_inhg",
+    "feels_like",
+]
+
+HRRR_RICH_FEATURE_COLUMNS = [
+    "hrrr_temp_next_3h_max",
+    "hrrr_temp_next_3h_mean",
+    "hrrr_temp_trend_next_3h",
+    "hrrr_dewpoint_current",
+    "hrrr_dewpoint_next_3h_mean",
+    "hrrr_dewpoint_remaining_mean",
+    "hrrr_rh_current",
+    "hrrr_rh_next_3h_mean",
+    "hrrr_rh_remaining_mean",
+    "hrrr_wind_speed_current",
+    "hrrr_wind_speed_next_3h_mean",
+    "hrrr_wind_speed_remaining_max",
+    "hrrr_gust_remaining_max",
+    "hrrr_cloud_cover_current",
+    "hrrr_cloud_cover_next_3h_mean",
+    "hrrr_cloud_cover_remaining_mean",
+    "hrrr_cloud_cover_remaining_max",
+    "hrrr_shortwave_next_3h_mean",
+    "hrrr_shortwave_remaining_max",
+    "hrrr_forecast_hours_count",
+]
+
 FEATURE_COLUMNS = [
     "station",
     "hour_local",
@@ -26,6 +61,7 @@ FEATURE_COLUMNS = [
     "threshold_minus_current_temp",
     "threshold_minus_max_so_far",
     "threshold_minus_min_so_far",
+    *METAR_ENRICHED_FEATURE_COLUMNS,
     "temp_change_1h",
     "temp_change_3h",
     "dewpoint",
@@ -39,6 +75,8 @@ FEATURE_COLUMNS = [
     "hrrr_remaining_max_minus_threshold",
     "hrrr_remaining_min_minus_threshold",
     "hrrr_current_temp_minus_current_temp",
+    "hrrr_temp_next_3h_max_minus_threshold",
+    *HRRR_RICH_FEATURE_COLUMNS,
 ]
 CAT_COLUMNS = ["station"]
 NUM_COLUMNS = [column for column in FEATURE_COLUMNS if column not in CAT_COLUMNS]

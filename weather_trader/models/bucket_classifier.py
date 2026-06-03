@@ -44,6 +44,18 @@ BASE_FEATURE_COLUMNS = [
     "is_left_tail",
     "is_right_tail",
 ]
+METAR_ENRICHED_FEATURE_COLUMNS = [
+    "temp_range_so_far",
+    "relative_humidity",
+    "wet_bulb_approx",
+    "pressure_mslp",
+    "pressure_tendency_3h",
+    "visibility_miles",
+    "precip_1h_in",
+    "altimeter_inhg",
+    "feels_like",
+]
+
 HRRR_FEATURE_COLUMNS = [
     "hrrr_current_temp",
     "hrrr_remaining_max",
@@ -56,7 +68,29 @@ HRRR_FEATURE_COLUMNS = [
     "hrrr_remaining_min_minus_lower",
     "hrrr_remaining_min_minus_upper",
 ]
-FEATURE_COLUMNS = BASE_FEATURE_COLUMNS + HRRR_FEATURE_COLUMNS
+HRRR_RICH_FEATURE_COLUMNS = [
+    "hrrr_temp_next_3h_max",
+    "hrrr_temp_next_3h_mean",
+    "hrrr_temp_trend_next_3h",
+    "hrrr_dewpoint_current",
+    "hrrr_dewpoint_next_3h_mean",
+    "hrrr_dewpoint_remaining_mean",
+    "hrrr_rh_current",
+    "hrrr_rh_next_3h_mean",
+    "hrrr_rh_remaining_mean",
+    "hrrr_wind_speed_current",
+    "hrrr_wind_speed_next_3h_mean",
+    "hrrr_wind_speed_remaining_max",
+    "hrrr_gust_remaining_max",
+    "hrrr_cloud_cover_current",
+    "hrrr_cloud_cover_next_3h_mean",
+    "hrrr_cloud_cover_remaining_mean",
+    "hrrr_cloud_cover_remaining_max",
+    "hrrr_shortwave_next_3h_mean",
+    "hrrr_shortwave_remaining_max",
+    "hrrr_forecast_hours_count",
+]
+FEATURE_COLUMNS = BASE_FEATURE_COLUMNS + METAR_ENRICHED_FEATURE_COLUMNS + HRRR_FEATURE_COLUMNS + HRRR_RICH_FEATURE_COLUMNS
 
 
 @dataclass(frozen=True)
@@ -600,7 +634,16 @@ def _candidate_row(
         "min_temp_so_far": min_so_far,
         "temp_change_1h": getattr(item, "temp_change_1h", np.nan),
         "temp_change_3h": getattr(item, "temp_change_3h", np.nan),
+        "temp_range_so_far": getattr(item, "temp_range_so_far", max_so_far - min_so_far if pd.notna(max_so_far) and pd.notna(min_so_far) else np.nan),
+        "pressure_tendency_3h": getattr(item, "pressure_tendency_3h", np.nan),
         "dewpoint": getattr(item, "dewpoint", np.nan),
+        "relative_humidity": getattr(item, "relative_humidity", np.nan),
+        "wet_bulb_approx": getattr(item, "wet_bulb_approx", np.nan),
+        "pressure_mslp": getattr(item, "pressure_mslp", np.nan),
+        "visibility_miles": getattr(item, "visibility_miles", np.nan),
+        "precip_1h_in": getattr(item, "precip_1h_in", np.nan),
+        "altimeter_inhg": getattr(item, "altimeter_inhg", np.nan),
+        "feels_like": getattr(item, "feels_like", np.nan),
         "wind_speed": getattr(item, "wind_speed", np.nan),
         "wind_dir_sin": getattr(item, "wind_dir_sin", np.nan),
         "wind_dir_cos": getattr(item, "wind_dir_cos", np.nan),
@@ -620,6 +663,8 @@ def _candidate_row(
     hrrr_current = getattr(item, "hrrr_current_temp", np.nan)
     hrrr_remaining = getattr(item, "hrrr_remaining_max", np.nan)
     hrrr_remaining_min = getattr(item, "hrrr_remaining_min", np.nan)
+    for column in HRRR_RICH_FEATURE_COLUMNS:
+        row[column] = getattr(item, column, np.nan)
     row.update(
         {
             "hrrr_current_temp": hrrr_current,

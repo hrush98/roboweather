@@ -32,10 +32,19 @@ class StationWeatherState:
     wind_dir_sin: float
     wind_dir_cos: float
     cloud_cover_code: float
-    hrrr_current_temp: float | None
-    hrrr_remaining_max: float | None
-    hrrr_remaining_min: float | None
-    stale: bool
+    temp_range_so_far: float = float("nan")
+    relative_humidity: float = float("nan")
+    wet_bulb_approx: float = float("nan")
+    pressure_mslp: float = float("nan")
+    pressure_tendency_3h: float = float("nan")
+    visibility_miles: float = float("nan")
+    precip_1h_in: float = float("nan")
+    altimeter_inhg: float = float("nan")
+    feels_like: float = float("nan")
+    hrrr_current_temp: float | None = None
+    hrrr_remaining_max: float | None = None
+    hrrr_remaining_min: float | None = None
+    stale: bool = False
 
 
 class WeatherFeatureService:
@@ -122,6 +131,15 @@ class WeatherFeatureService:
             wind_dir_sin=_float_or_nan(latest.get("wind_dir_sin", np.nan)),
             wind_dir_cos=_float_or_nan(latest.get("wind_dir_cos", np.nan)),
             cloud_cover_code=_float_or_nan(latest.get("cloud_cover_code", np.nan)),
+            temp_range_so_far=_float_or_nan(high_so_far - low_so_far),
+            relative_humidity=_float_or_nan(latest.get("relative_humidity", np.nan)),
+            wet_bulb_approx=_float_or_nan(latest.get("wet_bulb_approx", np.nan)),
+            pressure_mslp=_float_or_nan(latest.get("pressure_mslp", np.nan)),
+            pressure_tendency_3h=_float_or_nan(latest.get("pressure_tendency_3h", np.nan)),
+            visibility_miles=_float_or_nan(latest.get("visibility_miles", np.nan)),
+            precip_1h_in=_float_or_nan(latest.get("precip_1h_in", np.nan)),
+            altimeter_inhg=_float_or_nan(latest.get("altimeter_inhg", np.nan)),
+            feels_like=_float_or_nan(latest.get("feels_like", np.nan)),
             hrrr_current_temp=_none_if_nan(hrrr_current),
             hrrr_remaining_max=_none_if_nan(hrrr_remaining),
             hrrr_remaining_min=_none_if_nan(hrrr_remaining_min),
@@ -187,6 +205,15 @@ class CelsiusWeatherFeatureService(WeatherFeatureService):
             wind_dir_sin=_float_or_nan(latest.get("wind_dir_sin", np.nan)),
             wind_dir_cos=_float_or_nan(latest.get("wind_dir_cos", np.nan)),
             cloud_cover_code=_float_or_nan(latest.get("cloud_cover_code", np.nan)),
+            temp_range_so_far=_float_or_nan(float(valid_temp["tmpf"].max()) - float(valid_temp["tmpf"].min())),
+            relative_humidity=_float_or_nan(latest.get("relative_humidity", np.nan)),
+            wet_bulb_approx=_float_or_nan(latest.get("wet_bulb_approx", np.nan)),
+            pressure_mslp=_float_or_nan(latest.get("pressure_mslp", np.nan)),
+            pressure_tendency_3h=_float_or_nan(latest.get("pressure_tendency_3h", np.nan)),
+            visibility_miles=_float_or_nan(latest.get("visibility_miles", np.nan)),
+            precip_1h_in=_float_or_nan(latest.get("precip_1h_in", np.nan)),
+            altimeter_inhg=_float_or_nan(latest.get("altimeter_inhg", np.nan)),
+            feels_like=_float_or_nan(latest.get("feels_like", np.nan)),
             hrrr_current_temp=None,
             hrrr_remaining_max=None,
             hrrr_remaining_min=None,
