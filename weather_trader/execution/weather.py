@@ -44,6 +44,26 @@ class StationWeatherState:
     hrrr_current_temp: float | None = None
     hrrr_remaining_max: float | None = None
     hrrr_remaining_min: float | None = None
+    hrrr_temp_next_3h_max: float = float("nan")
+    hrrr_temp_next_3h_mean: float = float("nan")
+    hrrr_temp_trend_next_3h: float = float("nan")
+    hrrr_dewpoint_current: float = float("nan")
+    hrrr_dewpoint_next_3h_mean: float = float("nan")
+    hrrr_dewpoint_remaining_mean: float = float("nan")
+    hrrr_rh_current: float = float("nan")
+    hrrr_rh_next_3h_mean: float = float("nan")
+    hrrr_rh_remaining_mean: float = float("nan")
+    hrrr_wind_speed_current: float = float("nan")
+    hrrr_wind_speed_next_3h_mean: float = float("nan")
+    hrrr_wind_speed_remaining_max: float = float("nan")
+    hrrr_gust_remaining_max: float = float("nan")
+    hrrr_cloud_cover_current: float = float("nan")
+    hrrr_cloud_cover_next_3h_mean: float = float("nan")
+    hrrr_cloud_cover_remaining_mean: float = float("nan")
+    hrrr_cloud_cover_remaining_max: float = float("nan")
+    hrrr_shortwave_next_3h_mean: float = float("nan")
+    hrrr_shortwave_remaining_max: float = float("nan")
+    hrrr_forecast_hours_count: float = float("nan")
     stale: bool = False
 
 
@@ -102,15 +122,16 @@ class WeatherFeatureService:
             latest_obs_time = latest_obs_time.replace(tzinfo=timezone.utc)
         age_minutes = max(0.0, (as_of_utc - latest_obs_time.astimezone(timezone.utc)).total_seconds() / 60.0)
 
+        hrrr_features: dict[str, float] = {}
         hrrr_current = np.nan
         hrrr_remaining = np.nan
         hrrr_remaining_min = np.nan
         if self.hrrr_available:
             try:
-                hrrr = self.hrrr_client.fetch_remaining_day_features(station=station, as_of_utc=as_of_utc)
-                hrrr_current = hrrr.get("hrrr_current_temp", np.nan)
-                hrrr_remaining = hrrr.get("hrrr_remaining_max", np.nan)
-                hrrr_remaining_min = hrrr.get("hrrr_remaining_min", np.nan)
+                hrrr_features = self.hrrr_client.fetch_remaining_day_features(station=station, as_of_utc=as_of_utc)
+                hrrr_current = hrrr_features.get("hrrr_current_temp", np.nan)
+                hrrr_remaining = hrrr_features.get("hrrr_remaining_max", np.nan)
+                hrrr_remaining_min = hrrr_features.get("hrrr_remaining_min", np.nan)
             except Exception:
                 pass
 
@@ -143,6 +164,7 @@ class WeatherFeatureService:
             hrrr_current_temp=_none_if_nan(hrrr_current),
             hrrr_remaining_max=_none_if_nan(hrrr_remaining),
             hrrr_remaining_min=_none_if_nan(hrrr_remaining_min),
+            **_hrrr_rich_state_fields(hrrr_features),
             stale=age_minutes > self.max_obs_age_minutes,
         )
         self._cache[key] = state
@@ -222,6 +244,32 @@ class CelsiusWeatherFeatureService(WeatherFeatureService):
         self._cache[key] = state
         self._cache_fetched_at[key] = as_of_utc
         return state
+
+
+def _hrrr_rich_state_fields(features: dict[str, float]) -> dict[str, float]:
+    names = (
+        "hrrr_temp_next_3h_max",
+        "hrrr_temp_next_3h_mean",
+        "hrrr_temp_trend_next_3h",
+        "hrrr_dewpoint_current",
+        "hrrr_dewpoint_next_3h_mean",
+        "hrrr_dewpoint_remaining_mean",
+        "hrrr_rh_current",
+        "hrrr_rh_next_3h_mean",
+        "hrrr_rh_remaining_mean",
+        "hrrr_wind_speed_current",
+        "hrrr_wind_speed_next_3h_mean",
+        "hrrr_wind_speed_remaining_max",
+        "hrrr_gust_remaining_max",
+        "hrrr_cloud_cover_current",
+        "hrrr_cloud_cover_next_3h_mean",
+        "hrrr_cloud_cover_remaining_mean",
+        "hrrr_cloud_cover_remaining_max",
+        "hrrr_shortwave_next_3h_mean",
+        "hrrr_shortwave_remaining_max",
+        "hrrr_forecast_hours_count",
+    )
+    return {name: _float_or_nan(features.get(name, np.nan)) for name in names}
 
 
 def _float_or_nan(value) -> float:

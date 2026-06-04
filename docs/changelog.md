@@ -2,6 +2,12 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-06-04
+
+- Changed the research runner default to snapshot-only policy capture (`EVALUATE_POLICIES=0`) so TUI-started research loops collect broad `prediction_snapshots` without expanding `research_policy_positions`; set `EVALUATE_POLICIES=1` to materialize fixed policies.
+- Added HRRR-rich and METAR+HRRR-rich PM-active US12 high-temperature model artifacts to the default US/all research-loop model set.
+- Extended live/research HRRR inference feature assembly for the rich model families: remaining min/max, next-3h temperature summaries, dewpoint, relative humidity, wind/gust, cloud cover, shortwave, and forecast count now flow into model feature rows and snapshot raw JSON.
+
 ## 2026-06-03
 
 - Added METAR-rich ASOS enrichment fields to dataset construction, model feature rows, and live/research fair-value feature assembly: relative humidity, wet-bulb approximation, pressure, pressure tendency, visibility, hourly precipitation, altimeter, feels-like temperature, min-so-far, range-so-far, and threshold/bucket distances from min-so-far.

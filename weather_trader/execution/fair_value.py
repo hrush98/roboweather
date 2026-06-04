@@ -190,6 +190,8 @@ class FairValueEngine:
         is_low = market.market_family == MarketFamily.LOW_TEMP
         hrrr_remaining = _hrrr_remaining_for_market(market, weather)
         hrrr_remaining = hrrr_remaining if hrrr_remaining is not None else np.nan
+        hrrr_remaining_max = weather.hrrr_remaining_max if weather.hrrr_remaining_max is not None else np.nan
+        hrrr_remaining_min = weather.hrrr_remaining_min if weather.hrrr_remaining_min is not None else np.nan
         hrrr_current = weather.hrrr_current_temp if weather.hrrr_current_temp is not None else np.nan
         temp_so_far_key = "min_temp_so_far" if is_low else "max_temp_so_far"
         temp_so_far = weather.low_so_far if is_low else weather.high_so_far
@@ -223,11 +225,13 @@ class FairValueEngine:
             "altimeter_inhg": weather.altimeter_inhg,
             "feels_like": weather.feels_like,
             "hrrr_current_temp": hrrr_current,
-            "hrrr_remaining_max": hrrr_remaining,
-            "hrrr_remaining_min": hrrr_remaining,
-            "hrrr_remaining_max_minus_threshold": hrrr_remaining - threshold,
-            "hrrr_remaining_min_minus_threshold": hrrr_remaining - threshold,
+            "hrrr_remaining_max": hrrr_remaining_max,
+            "hrrr_remaining_min": hrrr_remaining_min,
+            "hrrr_remaining_max_minus_threshold": hrrr_remaining_max - threshold,
+            "hrrr_remaining_min_minus_threshold": hrrr_remaining_min - threshold,
             "hrrr_current_temp_minus_current_temp": hrrr_current - weather.current_temp,
+            "hrrr_temp_next_3h_max_minus_threshold": weather.hrrr_temp_next_3h_max - threshold,
+            **_hrrr_rich_features(weather),
             temp_so_far_key: temp_so_far,
             threshold_gap_key: threshold - temp_so_far,
             hrrr_gap_key: hrrr_remaining - threshold,
@@ -241,6 +245,8 @@ class FairValueEngine:
         is_low = market.market_family == MarketFamily.LOW_TEMP
         hrrr_remaining = _hrrr_remaining_for_market(market, weather)
         hrrr_remaining = hrrr_remaining if hrrr_remaining is not None else np.nan
+        hrrr_remaining_max = weather.hrrr_remaining_max if weather.hrrr_remaining_max is not None else np.nan
+        hrrr_remaining_min = weather.hrrr_remaining_min if weather.hrrr_remaining_min is not None else np.nan
         hrrr_current = weather.hrrr_current_temp if weather.hrrr_current_temp is not None else np.nan
         return {
             "station": weather.station,
@@ -277,15 +283,16 @@ class FairValueEngine:
             "is_left_tail": int(lower is None),
             "is_right_tail": int(upper is None),
             "hrrr_current_temp": hrrr_current,
-            "hrrr_remaining_max": hrrr_remaining,
-            "hrrr_remaining_min": hrrr_remaining,
+            "hrrr_remaining_max": hrrr_remaining_max,
+            "hrrr_remaining_min": hrrr_remaining_min,
             "hrrr_current_temp_minus_current_temp": hrrr_current - weather.current_temp,
+            **_hrrr_rich_features(weather),
             "hrrr_lower_minus_current_temp": lower - hrrr_current if lower is not None else np.nan,
             "hrrr_upper_minus_current_temp": upper - hrrr_current if upper is not None else np.nan,
-            "hrrr_remaining_max_minus_lower": hrrr_remaining - lower if lower is not None else np.nan,
-            "hrrr_remaining_max_minus_upper": hrrr_remaining - upper if upper is not None else np.nan,
-            "hrrr_remaining_min_minus_lower": hrrr_remaining - lower if lower is not None else np.nan,
-            "hrrr_remaining_min_minus_upper": hrrr_remaining - upper if upper is not None else np.nan,
+            "hrrr_remaining_max_minus_lower": hrrr_remaining_max - lower if lower is not None else np.nan,
+            "hrrr_remaining_max_minus_upper": hrrr_remaining_max - upper if upper is not None else np.nan,
+            "hrrr_remaining_min_minus_lower": hrrr_remaining_min - lower if lower is not None else np.nan,
+            "hrrr_remaining_min_minus_upper": hrrr_remaining_min - upper if upper is not None else np.nan,
         }
 
     def _dynamic_bucket_probability_override(
@@ -371,6 +378,7 @@ class FairValueEngine:
             "hrrr_current_temp": hrrr_current,
             "hrrr_remaining_max": hrrr_remaining,
             "hrrr_current_temp_minus_current_temp": hrrr_current - weather.current_temp,
+            **_hrrr_rich_features(weather),
         }
 
     def _empirical_distribution_probabilities(
@@ -419,6 +427,31 @@ class FairValueEngine:
             upper_cdf = 1.0 if market.upper_f is None else _normal_cdf(float(market.upper_f + 1.0), means[offset], scales[offset])
             probabilities.append(max(float(upper_cdf - lower_cdf), 0.0))
         return np.asarray(probabilities, dtype=float)
+
+
+def _hrrr_rich_features(weather: StationWeatherState) -> dict[str, float]:
+    return {
+        "hrrr_temp_next_3h_max": weather.hrrr_temp_next_3h_max,
+        "hrrr_temp_next_3h_mean": weather.hrrr_temp_next_3h_mean,
+        "hrrr_temp_trend_next_3h": weather.hrrr_temp_trend_next_3h,
+        "hrrr_dewpoint_current": weather.hrrr_dewpoint_current,
+        "hrrr_dewpoint_next_3h_mean": weather.hrrr_dewpoint_next_3h_mean,
+        "hrrr_dewpoint_remaining_mean": weather.hrrr_dewpoint_remaining_mean,
+        "hrrr_rh_current": weather.hrrr_rh_current,
+        "hrrr_rh_next_3h_mean": weather.hrrr_rh_next_3h_mean,
+        "hrrr_rh_remaining_mean": weather.hrrr_rh_remaining_mean,
+        "hrrr_wind_speed_current": weather.hrrr_wind_speed_current,
+        "hrrr_wind_speed_next_3h_mean": weather.hrrr_wind_speed_next_3h_mean,
+        "hrrr_wind_speed_remaining_max": weather.hrrr_wind_speed_remaining_max,
+        "hrrr_gust_remaining_max": weather.hrrr_gust_remaining_max,
+        "hrrr_cloud_cover_current": weather.hrrr_cloud_cover_current,
+        "hrrr_cloud_cover_next_3h_mean": weather.hrrr_cloud_cover_next_3h_mean,
+        "hrrr_cloud_cover_remaining_mean": weather.hrrr_cloud_cover_remaining_mean,
+        "hrrr_cloud_cover_remaining_max": weather.hrrr_cloud_cover_remaining_max,
+        "hrrr_shortwave_next_3h_mean": weather.hrrr_shortwave_next_3h_mean,
+        "hrrr_shortwave_remaining_max": weather.hrrr_shortwave_remaining_max,
+        "hrrr_forecast_hours_count": weather.hrrr_forecast_hours_count,
+    }
 
 
 def _hrrr_market_context_codes(market: MarketSnapshot, weather: StationWeatherState) -> list[str]:

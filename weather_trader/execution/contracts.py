@@ -356,6 +356,10 @@ class PredictionSnapshot:
     hrrr_remaining_min_minus_selected_upper: float | None = None
     hrrr_temp_next_3h_max: float | None = None
     hrrr_temp_next_3h_mean: float | None = None
+    hrrr_temp_trend_next_3h: float | None = None
+    hrrr_dewpoint_current: float | None = None
+    hrrr_dewpoint_next_3h_mean: float | None = None
+    hrrr_dewpoint_remaining_mean: float | None = None
     hrrr_remaining_min: float | None = None
     hrrr_wind_speed_current: float | None = None
     hrrr_wind_speed_next_3h_mean: float | None = None
@@ -370,6 +374,7 @@ class PredictionSnapshot:
     hrrr_rh_remaining_mean: float | None = None
     hrrr_shortwave_next_3h_mean: float | None = None
     hrrr_shortwave_remaining_max: float | None = None
+    hrrr_forecast_hours_count: float | None = None
     selected_best_bid: float | None = None
     selected_best_ask: float | None = None
     selected_spread: float | None = None
@@ -462,6 +467,10 @@ class ResearchPolicyPosition:
     hrrr_remaining_min_minus_selected_upper: float | None = None
     hrrr_temp_next_3h_max: float | None = None
     hrrr_temp_next_3h_mean: float | None = None
+    hrrr_temp_trend_next_3h: float | None = None
+    hrrr_dewpoint_current: float | None = None
+    hrrr_dewpoint_next_3h_mean: float | None = None
+    hrrr_dewpoint_remaining_mean: float | None = None
     hrrr_remaining_min: float | None = None
     hrrr_wind_speed_current: float | None = None
     hrrr_wind_speed_next_3h_mean: float | None = None
@@ -476,6 +485,7 @@ class ResearchPolicyPosition:
     hrrr_rh_remaining_mean: float | None = None
     hrrr_shortwave_next_3h_mean: float | None = None
     hrrr_shortwave_remaining_max: float | None = None
+    hrrr_forecast_hours_count: float | None = None
     selected_best_bid: float | None = None
     selected_best_ask: float | None = None
     selected_spread: float | None = None

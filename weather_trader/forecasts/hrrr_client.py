@@ -45,19 +45,61 @@ class HRRRClient:
                 rows.append(self.fetch_point_forecast(station=station, cycle_utc=cycle, forecast_hour=forecast_hour))
             except requests.HTTPError:
                 continue
+        names = (
+            "hrrr_current_temp",
+            "hrrr_remaining_max",
+            "hrrr_remaining_min",
+            "hrrr_temp_next_3h_max",
+            "hrrr_temp_next_3h_mean",
+            "hrrr_temp_trend_next_3h",
+            "hrrr_dewpoint_current",
+            "hrrr_dewpoint_next_3h_mean",
+            "hrrr_dewpoint_remaining_mean",
+            "hrrr_rh_current",
+            "hrrr_rh_next_3h_mean",
+            "hrrr_rh_remaining_mean",
+            "hrrr_wind_speed_current",
+            "hrrr_wind_speed_next_3h_mean",
+            "hrrr_wind_speed_remaining_max",
+            "hrrr_gust_remaining_max",
+            "hrrr_cloud_cover_current",
+            "hrrr_cloud_cover_next_3h_mean",
+            "hrrr_cloud_cover_remaining_mean",
+            "hrrr_cloud_cover_remaining_max",
+            "hrrr_shortwave_next_3h_mean",
+            "hrrr_shortwave_remaining_max",
+            "hrrr_forecast_hours_count",
+        )
         if not rows:
-            return {
-                "hrrr_current_temp": np.nan,
-                "hrrr_remaining_max": np.nan,
-                "hrrr_cloud_cover_next_3h": np.nan,
-                "hrrr_wind_speed_next_3h": np.nan,
-            }
+            return {name: np.nan for name in names}
         frame = pd.DataFrame(rows).sort_values("forecast_hour")
+        next_3h = frame.head(4)
+        temp = _numeric_series(frame, "tmpf")
+        next_temp = _numeric_series(next_3h, "tmpf")
         return {
-            "hrrr_current_temp": float(frame["tmpf"].iloc[0]),
-            "hrrr_remaining_max": float(frame["tmpf"].max()),
-            "hrrr_cloud_cover_next_3h": float(frame.head(4)["tcdc"].mean()),
-            "hrrr_wind_speed_next_3h": float(frame.head(4)["wind_speed_mph"].mean()),
+            "hrrr_current_temp": _safe_float(temp.iloc[0]) if len(temp) else np.nan,
+            "hrrr_remaining_max": _safe_float(temp.max()),
+            "hrrr_remaining_min": _safe_float(temp.min()),
+            "hrrr_temp_next_3h_max": _safe_float(next_temp.max()),
+            "hrrr_temp_next_3h_mean": _safe_float(next_temp.mean()),
+            "hrrr_temp_trend_next_3h": _safe_float(next_temp.dropna().iloc[-1] - next_temp.dropna().iloc[0]) if len(next_temp.dropna()) >= 2 else np.nan,
+            "hrrr_dewpoint_current": _series_current(frame, "dwpf"),
+            "hrrr_dewpoint_next_3h_mean": _series_next_3h_mean(next_3h, "dwpf"),
+            "hrrr_dewpoint_remaining_mean": _series_mean(frame, "dwpf"),
+            "hrrr_rh_current": _series_current(frame, "rh"),
+            "hrrr_rh_next_3h_mean": _series_next_3h_mean(next_3h, "rh"),
+            "hrrr_rh_remaining_mean": _series_mean(frame, "rh"),
+            "hrrr_wind_speed_current": _series_current(frame, "wind_speed_mph"),
+            "hrrr_wind_speed_next_3h_mean": _series_next_3h_mean(next_3h, "wind_speed_mph"),
+            "hrrr_wind_speed_remaining_max": _series_max(frame, "wind_speed_mph"),
+            "hrrr_gust_remaining_max": _series_max(frame, "gust_mph"),
+            "hrrr_cloud_cover_current": _series_current(frame, "tcdc"),
+            "hrrr_cloud_cover_next_3h_mean": _series_next_3h_mean(next_3h, "tcdc"),
+            "hrrr_cloud_cover_remaining_mean": _series_mean(frame, "tcdc"),
+            "hrrr_cloud_cover_remaining_max": _series_max(frame, "tcdc"),
+            "hrrr_shortwave_next_3h_mean": _series_next_3h_mean(next_3h, "dswrf"),
+            "hrrr_shortwave_remaining_max": _series_max(frame, "dswrf"),
+            "hrrr_forecast_hours_count": float(len(frame)),
         }
 
     def fetch_point_forecast(self, station: Station, cycle_utc: datetime, forecast_hour: int) -> dict[str, float]:
@@ -77,14 +119,20 @@ class HRRRClient:
             level = int(message.level)
             if name == "2t" or (name == "tmp" and level == 2):
                 parsed["tmpf"] = _kelvin_to_f(value)
+            elif name in {"2d", "dpt", "dewpoint"} or (name == "dpt" and level == 2):
+                parsed["dwpf"] = _kelvin_to_f(value)
+            elif name in {"2r", "r", "rh"}:
+                parsed["rh"] = value
             elif name == "10u":
                 parsed["u10"] = value
             elif name == "10v":
                 parsed["v10"] = value
-            elif name == "tcc":
+            elif name in {"gust", "gusts"}:
+                parsed["gust_mph"] = value * 2.23694
+            elif name in {"tcc", "tcdc"}:
                 parsed["tcdc"] = value
-            elif name == "tcdc":
-                parsed["tcdc"] = value
+            elif name in {"dswrf", "sdswrf"}:
+                parsed["dswrf"] = value
         parsed["wind_speed_mph"] = float(np.hypot(parsed.get("u10", np.nan), parsed.get("v10", np.nan)) * 2.23694)
         return parsed
 
@@ -93,11 +141,16 @@ class HRRRClient:
             "dir": f"/hrrr.{cycle_utc:%Y%m%d}/conus",
             "file": f"hrrr.t{cycle_utc:%H}z.wrfsfcf{forecast_hour:02d}.grib2",
             "var_TMP": "on",
+            "var_DPT": "on",
+            "var_RH": "on",
             "var_UGRD": "on",
             "var_VGRD": "on",
+            "var_GUST": "on",
             "var_TCDC": "on",
+            "var_DSWRF": "on",
             "lev_2_m_above_ground": "on",
             "lev_10_m_above_ground": "on",
+            "lev_surface": "on",
             "lev_entire_atmosphere": "on",
             "subregion": "",
             "leftlon": station.longitude - self.neighborhood_degrees,
@@ -108,6 +161,44 @@ class HRRRClient:
         response = requests.get(NOMADS_URL, params=params, timeout=self.timeout_seconds)
         response.raise_for_status()
         return response.content
+
+
+def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    if column not in frame:
+        return pd.Series(dtype=float)
+    return pd.to_numeric(frame[column], errors="coerce")
+
+
+def _series_current(frame: pd.DataFrame, column: str) -> float:
+    values = _numeric_series(frame, column)
+    if values.empty:
+        return np.nan
+    return _safe_float(values.iloc[0])
+
+
+def _series_mean(frame: pd.DataFrame, column: str) -> float:
+    values = _numeric_series(frame, column)
+    if values.empty:
+        return np.nan
+    return _safe_float(values.mean())
+
+
+def _series_next_3h_mean(frame: pd.DataFrame, column: str) -> float:
+    return _series_mean(frame, column)
+
+
+def _series_max(frame: pd.DataFrame, column: str) -> float:
+    values = _numeric_series(frame, column)
+    if values.empty:
+        return np.nan
+    return _safe_float(values.max())
+
+
+def _safe_float(value: object) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
 
 
 def _nearest_index(lats, lons, target_lat: float, target_lon: float) -> tuple[int, int]:
