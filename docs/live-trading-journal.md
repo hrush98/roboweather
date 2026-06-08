@@ -63,6 +63,20 @@ The system moved from small exploratory sizing to policy-specific fixed sizing a
 
 The max order cap is set to $50 so the largest intended order cannot exceed the current primary-policy size.
 
+
+### Potential low-temp expansion shortlist
+
+Deep raw-snapshot replay on 2026-06-08 showed low-temperature markets as the strongest non-live expansion candidate so far. Treat these as research candidates only until they pass de-duplicated replay, liquidity checks, and live-market availability review.
+
+Candidate shortlist:
+
+- `global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first`: broadest clean candidate; 36 resolved, 91.7% win rate, about +11.44 PnL, R/R about 0.53, Sharpe about 0.99. All BUY_NO across 6 stations from 2026-05-30 through 2026-06-05.
+- `global_low_dynamic_mvp_hc_buy_no_10m_entry_50_75_by_bucket_side_delay_first`: more constrained high-conviction BUY_NO candidate; 11 resolved, 100% win rate, about +4.25 PnL, R/R about 0.63, Sharpe about 5.22. Needs more sample and execution validation.
+- `global_low_dynamic_mvp_tail_buy_no_entry_00_05_by_bucket_side_delay_first`: strongest tail niche; 24 resolved, 100% win rate, about +23.33 PnL, very high R/R due to sub-5-cent entries. This is a tiny-entry tail allocation candidate, not a core sizing candidate.
+- `low_pm_us12_consensus_hc_buy_no_entry_50_75_by_bucket_side_delay_first`: US low-temp consensus BUY_NO candidate; 23 resolved, 100% win rate, about +8.78 PnL, R/R about 0.62. Current replay flags execution/liquidity weakness, so do not promote without book-depth confirmation.
+
+Working interpretation: low-temp BUY_NO overlays appear to be finding overpriced YES buckets. Global high-temp consensus did not transfer cleanly; keep global high research-only while prioritizing low-temp replay.
+
 ### Resting fallback
 
 FAK retries address temporary book/depth/order-version issues. When those still fail for an eligible live strategy, a short-lived passive order can capture fills inside or near the intended risk price without leaving stale exposure in the market.
@@ -73,6 +87,8 @@ The 120-second TTL is a deliberate compromise: weather does not normally reprice
 
 ### 2026-06-08
 
+- Deep raw-snapshot niche replay across US high, global high, global low, and US low identified low-temperature BUY_NO overlays as the strongest expansion candidates so far. The leading broad candidate is `global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first` at 36 resolved, 91.7% win rate, about +11.44 PnL, R/R about 0.53, Sharpe about 0.99. Keep research-only until de-duplicated replay, liquidity, and live-market checks pass.
+- Global high-temperature consensus did not transfer cleanly from US high temp; global high remains research-only.
 - Replaced live Core capped dynamic-tuned BUY_NO policy with `pm_us12_bucket_consensus_hc_15m_late_entry_00_50_by_bucket_side_delay_first` in the core notional slot. Raw snapshot replay through 2026-06-06 showed the old dynamic core at roughly R/R 0.03 versus the replacement at roughly R/R 1.32 over 20 resolved rows, while staying inside the consensus high-conviction, late-window, <= $0.50 entry family.
 - Current core sizing remains $50 target notional, with consensus BUY_YES halved by sizing policy. Keep HRRR-rich consensus research-only until it reaches a larger resolved sample.
 
