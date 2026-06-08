@@ -2,6 +2,10 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-06-08
+
+- Replaced the live core dynamic-tuned BUY_NO policy with the bucket-consensus high-conviction 15m late `<= 0.50` replay winner (`pm_us12_bucket_consensus_hc_15m_late_entry_00_50_by_bucket_side_delay_first`) while preserving the existing core notional slot.
+
 ## 2026-06-07
 
 - Extended `scripts/snapshot_opportunity_sweep.py` for raw `prediction_snapshots` policy replay: direct weather-outcome scoring fallback, HRRR-rich and METAR+HRRR-rich PM-active US12 model/consensus aliases, US high-temperature filtering, and a compact rolling 7-day/30-day/all-time summary mode for live-style high-conviction overlays.

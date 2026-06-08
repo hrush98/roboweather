@@ -28,7 +28,7 @@ from weather_trader.live.execution import (
     CATBOOST_MODEL,
     DYNAMIC_TUNED_MODEL,
     CONSENSUS_NOTIONAL_USD,
-    EDGE_CORE_MIN_EDGE,
+    EDGE_CORE_OBS_DELAY_BUCKET,
     EDGE_CORE_NOTIONAL_USD,
     EDGE_CORE_POLICY_NAME,
     LIVE_MODEL_GROUP,
@@ -87,12 +87,14 @@ def test_live_strategy_plans_include_moonshot_and_ngboost_medium() -> None:
     assert edge_core.target_notional_usd == pytest.approx(EDGE_CORE_NOTIONAL_USD)
     assert edge_core.strategy.max_notional_usd == pytest.approx(EDGE_CORE_NOTIONAL_USD)
     assert len(edge_core.policies) == 1
-    assert edge_core.policies[0].model_name == DYNAMIC_TUNED_MODEL
-    assert edge_core.policies[0].edge_min == pytest.approx(EDGE_CORE_MIN_EDGE)
-    assert edge_core.policies[0].entry_price_min == pytest.approx(0.05)
+    assert edge_core.policies[0].model_group == LIVE_MODEL_GROUP
+    assert edge_core.policies[0].model_name is None
+    assert edge_core.policies[0].obs_delay_bucket == EDGE_CORE_OBS_DELAY_BUCKET
+    assert edge_core.policies[0].edge_min is None
+    assert edge_core.policies[0].entry_price_min == pytest.approx(0.0)
     assert edge_core.policies[0].entry_price_max == pytest.approx(0.40)
-    assert edge_core.selected_side == TradeAction.BUY_NO
-    assert edge_core.min_entry_price == pytest.approx(0.05)
+    assert edge_core.selected_side is None
+    assert edge_core.min_entry_price == pytest.approx(0.0)
 
     moonshot = plans[2]
     assert moonshot.target_notional_usd == pytest.approx(2.0)
@@ -159,29 +161,22 @@ def test_live_policy_spec_filters_late_no_tiny_and_bucket_side_delay(tmp_path: P
     assert selected[0]["selected_bucket"] == "72-73F"
 
 
-def test_edge_core_policy_spec_filters_late_buy_no_edge_gated_entries(tmp_path: Path) -> None:
+def test_edge_core_policy_spec_filters_late_15m_consensus_entries(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
     spec = edge_core_policy_spec(LiveExecutionConfig())
     evaluator = ResearchPolicyEvaluator(store, (spec,))
-    rows = [
-        _snapshot(DYNAMIC_TUNED_MODEL, id=1, selected_no_ask=0.40, selected_edge=0.25, decision_time_local="2026-05-20T12:30:00-04:00"),
-        _snapshot(DYNAMIC_TUNED_MODEL, id=2, selected_bucket="74-75F", selected_no_ask=0.60, selected_edge=0.24, decision_time_local="2026-05-20T12:31:00-04:00"),
-        _snapshot(DYNAMIC_TUNED_MODEL, id=3, selected_bucket="76-77F", selected_no_ask=0.04, selected_edge=0.90, decision_time_local="2026-05-20T12:32:00-04:00"),
-        _snapshot(
-            DYNAMIC_TUNED_MODEL,
-            id=4,
-            selected_bucket="78-79F",
-            selected_side="BUY_YES",
-            selected_yes_ask=0.40,
-            selected_edge=0.50,
-            decision_time_local="2026-05-20T12:33:00-04:00",
-        ),
-        _snapshot(DYNAMIC_TUNED_MODEL, id=5, selected_bucket="80-81F", selected_no_ask=0.40, selected_edge=0.50, decision_time_local="2026-05-20T11:59:00-04:00"),
-        _snapshot(DYNAMIC_TUNED_MODEL, id=6, selected_bucket="82-83F", selected_no_ask=0.51, selected_edge=0.50, decision_time_local="2026-05-20T12:34:00-04:00"),
+    consensus = [
+        _snapshot(DYNAMIC_TUNED_MODEL, id=1, selected_no_ask=0.40, selected_edge=0.25, obs_delay_bucket="15m", decision_time_local="2026-05-20T12:30:00-04:00"),
+        _snapshot(CATBOOST_MODEL, id=2, selected_no_ask=0.40, selected_edge=0.50, obs_delay_bucket="15m", decision_time_local="2026-05-20T12:30:00-04:00"),
+        _snapshot(DYNAMIC_TUNED_MODEL, id=3, selected_bucket="74-75F", selected_no_ask=0.60, obs_delay_bucket="15m", decision_time_local="2026-05-20T12:31:00-04:00"),
+        _snapshot(CATBOOST_MODEL, id=4, selected_bucket="74-75F", selected_no_ask=0.60, obs_delay_bucket="15m", decision_time_local="2026-05-20T12:31:00-04:00"),
+        _snapshot(DYNAMIC_TUNED_MODEL, id=5, selected_bucket="76-77F", selected_no_ask=0.40, obs_delay_bucket="10m", decision_time_local="2026-05-20T12:32:00-04:00"),
+        _snapshot(CATBOOST_MODEL, id=6, selected_bucket="76-77F", selected_no_ask=0.40, obs_delay_bucket="10m", decision_time_local="2026-05-20T12:32:00-04:00"),
+        _snapshot(DYNAMIC_TUNED_MODEL, id=7, selected_bucket="78-79F", selected_no_ask=0.40, obs_delay_bucket="15m", decision_time_local="2026-05-20T11:59:00-04:00"),
+        _snapshot(CATBOOST_MODEL, id=8, selected_bucket="78-79F", selected_no_ask=0.40, obs_delay_bucket="15m", decision_time_local="2026-05-20T11:59:00-04:00"),
     ]
 
-    filtered = evaluator._candidates_for_policy(spec, rows, [])
-    filtered = [item for item in filtered if item["selected_side"] == str(TradeAction.BUY_NO)]
+    filtered = evaluator._candidates_for_policy(spec, [], evaluator._build_consensus(consensus))
     selected = evaluator._first_by_scope(spec, filtered)
 
     assert [item["selected_bucket"] for item in selected] == ["72-73F"]

@@ -35,7 +35,7 @@ def _decision(**overrides):
 
 
 def test_core_consensus_and_moonshot_sizes() -> None:
-    assert _decision(strategy_name=EDGE_CORE_POLICY_NAME).target_notional_usd == pytest.approx(10.0)
+    assert _decision(strategy_name=EDGE_CORE_POLICY_NAME).target_notional_usd == pytest.approx(6.0)
     assert _decision(strategy_name=LIVE_POLICY_NAME).target_notional_usd == pytest.approx(6.0)
     assert _decision(strategy_name=MOONSHOT_POLICY_NAME, entry_price=0.05).target_notional_usd == pytest.approx(2.0)
 
@@ -62,10 +62,10 @@ def test_consensus_buy_yes_explicit_target_is_halved() -> None:
 
 
 def test_price_bands_and_rounding_floor_to_half_dollar() -> None:
-    assert _decision(entry_price=0.09).target_notional_usd == pytest.approx(2.5)
-    assert _decision(entry_price=0.10).target_notional_usd == pytest.approx(6.0)
-    assert _decision(entry_price=0.25).target_notional_usd == pytest.approx(10.0)
-    assert _decision(entry_price=0.76).target_notional_usd == pytest.approx(6.0)
+    assert _decision(entry_price=0.09).target_notional_usd == pytest.approx(1.5)
+    assert _decision(entry_price=0.10).target_notional_usd == pytest.approx(3.5)
+    assert _decision(entry_price=0.25).target_notional_usd == pytest.approx(6.0)
+    assert _decision(entry_price=0.76).target_notional_usd == pytest.approx(3.5)
     settings = LiveSettings(live_bankroll_usd=1999.0, live_fixed_fraction=0.005, live_max_usd_per_order=20.0)
     decision = LiveSizingModel(settings).size_candidate(
         strategy_name=EDGE_CORE_POLICY_NAME,
@@ -78,8 +78,8 @@ def test_price_bands_and_rounding_floor_to_half_dollar() -> None:
         exposure={},
         as_of_utc=datetime(2026, 5, 25, 18, 0, tzinfo=timezone.utc),
     )
-    assert decision.pre_cap_target_usd == pytest.approx(9.995)
-    assert decision.target_notional_usd == pytest.approx(9.5)
+    assert decision.pre_cap_target_usd == pytest.approx(5.997)
+    assert decision.target_notional_usd == pytest.approx(5.5)
 
 
 def test_risk_caps_clip_or_block() -> None:
@@ -96,7 +96,7 @@ def test_risk_caps_clip_or_block() -> None:
 
 
 def test_liquidity_depth_caps_or_blocks() -> None:
-    assert _decision(sweep_depth_to_cap=8.25).target_notional_usd == pytest.approx(8.0)
+    assert _decision(sweep_depth_to_cap=8.25).target_notional_usd == pytest.approx(6.0)
     decision = _decision(sweep_depth_to_cap=0.75)
     assert decision.blocked_reason == INSUFFICIENT_DEPTH
     assert decision.raw_json["caps"][INSUFFICIENT_DEPTH]["remaining_usd"] == pytest.approx(0.75)

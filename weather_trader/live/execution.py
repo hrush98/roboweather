@@ -43,13 +43,13 @@ from weather_trader.research.policies import CATBOOST_MODEL, DYNAMIC_TUNED_MODEL
 
 
 LIVE_POLICY_NAME = "pm_us12_bucket_consensus_hc_late_no_tiny_by_bucket_side_delay_first"
-EDGE_CORE_POLICY_NAME = "pm_us12_dynamic_tuned_hc_late_buy_no_edge_025_by_bucket_side_delay_first"
+EDGE_CORE_POLICY_NAME = "pm_us12_bucket_consensus_hc_15m_late_entry_00_50_by_bucket_side_delay_first"
 MOONSHOT_POLICY_NAME = "pm_us12_dynamic_tuned_hc_late_entry_05_10_buy_no_by_bucket_side_delay_first"
 NGBOOST_BEST_BUY_YES_POLICY_NAME = "pm_us12_ngboost_best_bucket_late_buy_yes_medium_by_bucket_side_delay_first"
 LIVE_MODEL_GROUP = "obs_bucket_consensus"
 DEFAULT_LIVE_ENTRY_PRICE_MAX = 0.50
 LIVE_ENTRY_PRICE_MAX = DEFAULT_LIVE_ENTRY_PRICE_MAX
-EDGE_CORE_MIN_EDGE = 0.25
+EDGE_CORE_OBS_DELAY_BUCKET = "15m"
 CONSENSUS_NOTIONAL_USD = 50.0
 EDGE_CORE_NOTIONAL_USD = 50.0
 MOONSHOT_MIN_EDGE = 0.90
@@ -218,27 +218,28 @@ def edge_core_live_strategy(max_notional_usd: float = 3.0) -> LiveStrategy:
     return LiveStrategy(
         name=EDGE_CORE_POLICY_NAME,
         active=True,
-        source="model",
-        model_group=DYNAMIC_TUNED_MODEL,
-        model_names=[DYNAMIC_TUNED_MODEL],
+        source="consensus",
+        model_group=LIVE_MODEL_GROUP,
+        model_names=[DYNAMIC_TUNED_MODEL, CATBOOST_MODEL],
         strategy_bucket=StrategyBucket.HIGH_CONVICTION,
         market_family=MarketFamily.HIGH_TEMP,
         local_decision_start="12:00",
         local_decision_end="15:00",
-        entry_price_min=0.05,
+        entry_price_min=0.0,
         uniqueness_key_mode="station_date_bucket_side_obs_delay",
         max_notional_usd=max_notional_usd,
         raw_payload={
             "report": {
-                "resolved": 63,
-                "win_rate": 0.635,
-                "pnl": 12.127,
-                "rr": 0.435,
-                "sharpe": 0.448,
-                "avg_entry": 0.433,
-                "avg_edge": 0.463,
-                "edge_min": EDGE_CORE_MIN_EDGE,
-                "selected_side": str(TradeAction.BUY_NO),
+                "resolved": 20,
+                "win_rate": 0.400,
+                "pnl": 4.553,
+                "rr": 1.321,
+                "sharpe": 0.505,
+                "avg_entry": 0.172,
+                "avg_edge": 0.819,
+                "avg_fair": 0.992,
+                "obs_delay_bucket": EDGE_CORE_OBS_DELAY_BUCKET,
+                "replaced": "pm_us12_dynamic_tuned_hc_late_buy_no_edge_025_by_bucket_side_delay_first",
             }
         },
     )
@@ -291,13 +292,13 @@ def live_policy_spec(config: LiveExecutionConfig) -> ResearchPolicySpec:
 def edge_core_policy_spec(config: LiveExecutionConfig) -> ResearchPolicySpec:
     return ResearchPolicySpec(
         EDGE_CORE_POLICY_NAME,
-        "model",
+        "consensus",
         StrategyBucket.HIGH_CONVICTION,
-        model_name=DYNAMIC_TUNED_MODEL,
+        model_group=LIVE_MODEL_GROUP,
         station_allow_set=PM_ACTIVE_US12_STATIONS,
-        entry_price_min=config.min_entry_price,
+        obs_delay_bucket=EDGE_CORE_OBS_DELAY_BUCKET,
+        entry_price_min=0.0,
         entry_price_max=config.max_entry_price,
-        edge_min=EDGE_CORE_MIN_EDGE,
         local_decision_start="12:00",
         local_decision_end="15:00",
         uniqueness_key_mode="station_date_bucket_side_obs_delay",
@@ -362,8 +363,8 @@ def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, 
             edge_core_live_strategy(config.edge_core_notional_usd),
             (edge_core_policy_spec(config),),
             config.edge_core_notional_usd,
-            TradeAction.BUY_NO,
-            config.min_entry_price,
+            None,
+            0.0,
         ),
         LiveStrategyPlan(
             moonshot_live_strategy(),

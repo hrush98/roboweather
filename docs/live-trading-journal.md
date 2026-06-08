@@ -6,14 +6,14 @@ Git history remains the source of truth for code changes. This journal is the so
 
 ## Current Live State
 
-Updated: 2026-06-02
+Updated: 2026-06-08
 
 ### Active policies
 
 | Policy | Side | Target notional | Entry cap | Notes |
 | --- | --- | ---: | ---: | --- |
 | Consensus HC late | mixed | $50 BUY_NO; $25 BUY_YES | <= $0.50 | Primary live strategy. Uses the consensus high-conviction late-window policy. |
-| Core capped | BUY_NO | $50 | <= $0.50 | Core dynamic policy after removing higher-priced entries. |
+| Consensus 15m late core | mixed | $50 BUY_NO; $25 BUY_YES | <= $0.50 | Replaces weak single-model dynamic core with bucket-consensus high-conviction 15m late overlay. |
 | NGBoost BUY_YES | BUY_YES | $10 | <= $0.50 | Dedicated BUY_YES allocation. Keep smaller than core NO until live evidence improves. |
 | Moonshot | BUY_NO | $2 | <= $0.50 | Small tail allocation. Original tiny moonshot remains constrained by its tighter policy price rules. |
 
@@ -57,7 +57,7 @@ The working assumption is that higher-priced bucket NO entries often have less a
 The system moved from small exploratory sizing to policy-specific fixed sizing after the capped replay looked stronger:
 
 - Consensus HC: $50 for BUY_NO and $25 for BUY_YES because consensus BUY_YES remains weaker historically.
-- Core capped: $50 because the lower-frequency capped box has stronger return per dollar of risk than looser higher-frequency slices.
+- Consensus 15m late core: $50 BUY_NO / $25 BUY_YES, replacing Core capped dynamic BUY_NO after raw-snapshot replay showed dynamic core was barely positive and dominated by consensus overlays.
 - NGBoost BUY_YES: $10 because it is the dedicated BUY_YES strategy but remains smaller than core NO sizing.
 - Moonshot: $2 because tail entries are high variance and should not drive daily risk.
 
@@ -70,6 +70,11 @@ FAK retries address temporary book/depth/order-version issues. When those still 
 The 120-second TTL is a deliberate compromise: weather does not normally reprice enough in two minutes to invalidate the original edge, but the order should not remain open after the cycle context has aged.
 
 ## Journal
+
+### 2026-06-08
+
+- Replaced live Core capped dynamic-tuned BUY_NO policy with `pm_us12_bucket_consensus_hc_15m_late_entry_00_50_by_bucket_side_delay_first` in the core notional slot. Raw snapshot replay through 2026-06-06 showed the old dynamic core at roughly R/R 0.03 versus the replacement at roughly R/R 1.32 over 20 resolved rows, while staying inside the consensus high-conviction, late-window, <= $0.50 entry family.
+- Current core sizing remains $50 target notional, with consensus BUY_YES halved by sizing policy. Keep HRRR-rich consensus research-only until it reaches a larger resolved sample.
 
 ### 2026-06-03
 
