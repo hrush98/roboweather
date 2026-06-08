@@ -5,6 +5,7 @@ Keep this file up to date for notable data, model, and trading changes.
 ## 2026-06-08
 
 - Replaced the live core dynamic-tuned BUY_NO policy with the bucket-consensus high-conviction 15m late `<= 0.50` replay winner (`pm_us12_bucket_consensus_hc_15m_late_entry_00_50_by_bucket_side_delay_first`) while preserving the existing core notional slot.
+- Added a $25 live canary for global low-temperature `global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first`: BUY_NO-only, EGLC/LFPB/RJTT/RKSI/VHHH/ZSPD only, `<= 0.75` entry cap, existing FAK/retry/GTC resting fallback execution, and no added depth gate. Live market discovery now runs with `market_scope=all` by default and admits markets by active strategy plan rather than a hard-coded US high-temp filter.
 
 ## 2026-06-07
 

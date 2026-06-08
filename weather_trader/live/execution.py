@@ -39,14 +39,24 @@ from weather_trader.execution.weather import StationWeatherState, WeatherFeature
 from weather_trader.live.settings import LiveSettings, load_live_settings, private_key_from_env_or_keyfile
 from weather_trader.live.sizing import LiveSizingDecision, LiveSizingModel
 from weather_trader.research.collector import ResearchConfig, build_prediction_snapshot, due_delay_buckets
-from weather_trader.research.policies import CATBOOST_MODEL, DYNAMIC_TUNED_MODEL, NGBOOST_MODEL, ResearchPolicyEvaluator, ResearchPolicySpec
+from weather_trader.research.policies import (
+    CATBOOST_MODEL,
+    DYNAMIC_TUNED_MODEL,
+    GLOBAL_LOW_DYNAMIC_MODEL,
+    GLOBAL_LOW_MVP_MODEL,
+    NGBOOST_MODEL,
+    ResearchPolicyEvaluator,
+    ResearchPolicySpec,
+)
 
 
 LIVE_POLICY_NAME = "pm_us12_bucket_consensus_hc_late_no_tiny_by_bucket_side_delay_first"
 EDGE_CORE_POLICY_NAME = "pm_us12_bucket_consensus_hc_15m_late_entry_00_50_by_bucket_side_delay_first"
 MOONSHOT_POLICY_NAME = "pm_us12_dynamic_tuned_hc_late_entry_05_10_buy_no_by_bucket_side_delay_first"
 NGBOOST_BEST_BUY_YES_POLICY_NAME = "pm_us12_ngboost_best_bucket_late_buy_yes_medium_by_bucket_side_delay_first"
+GLOBAL_LOW_CANARY_POLICY_NAME = "global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first"
 LIVE_MODEL_GROUP = "obs_bucket_consensus"
+GLOBAL_LOW_MODEL_GROUP = "global_low_dynamic_mvp"
 DEFAULT_LIVE_ENTRY_PRICE_MAX = 0.50
 LIVE_ENTRY_PRICE_MAX = DEFAULT_LIVE_ENTRY_PRICE_MAX
 EDGE_CORE_OBS_DELAY_BUCKET = "15m"
@@ -55,10 +65,14 @@ EDGE_CORE_NOTIONAL_USD = 50.0
 MOONSHOT_MIN_EDGE = 0.90
 MOONSHOT_NOTIONAL_USD = 2.0
 NGBOOST_BEST_BUY_YES_NOTIONAL_USD = 10.0
+GLOBAL_LOW_NOTIONAL_USD = 25.0
+GLOBAL_LOW_ENTRY_PRICE_MAX = 0.75
 LIVE_MODEL_PATHS = (
     MODELS_DIR / f"{DYNAMIC_TUNED_MODEL}.joblib",
     MODELS_DIR / f"{CATBOOST_MODEL}.joblib",
     MODELS_DIR / f"{NGBOOST_MODEL}.joblib",
+    MODELS_DIR / f"{GLOBAL_LOW_DYNAMIC_MODEL}.joblib",
+    MODELS_DIR / f"{GLOBAL_LOW_MVP_MODEL}.joblib",
 )
 PM_ACTIVE_US12_STATIONS = frozenset(
     {
@@ -76,6 +90,7 @@ PM_ACTIVE_US12_STATIONS = frozenset(
         "KHOU",
     }
 )
+GLOBAL_LOW_STATIONS = frozenset({"EGLC", "LFPB", "RJTT", "RKSI", "VHHH", "ZSPD"})
 
 
 @dataclass(frozen=True)
@@ -84,13 +99,16 @@ class LiveExecutionConfig:
     model_paths: tuple[Path, ...] = LIVE_MODEL_PATHS
     mode: str = "dry-run"
     market_limit: int = 50000
+    market_scope: str = "all"
     max_obs_age_minutes: int = 30
     max_book_age_seconds: float = 10.0
     max_notional_usd: float = CONSENSUS_NOTIONAL_USD
     consensus_notional_usd: float = CONSENSUS_NOTIONAL_USD
     edge_core_notional_usd: float = EDGE_CORE_NOTIONAL_USD
+    global_low_notional_usd: float = GLOBAL_LOW_NOTIONAL_USD
     min_entry_price: float = 0.05
     max_entry_price: float | None = DEFAULT_LIVE_ENTRY_PRICE_MAX
+    global_low_entry_price_max: float = GLOBAL_LOW_ENTRY_PRICE_MAX
     require_allowance_check: bool = True
     retry_wait_seconds: float = 5.0
     enable_resting_fallback: bool = True
@@ -274,6 +292,31 @@ def ngboost_best_buy_yes_live_strategy() -> LiveStrategy:
     )
 
 
+def global_low_canary_live_strategy(max_notional_usd: float = GLOBAL_LOW_NOTIONAL_USD) -> LiveStrategy:
+    return LiveStrategy(
+        name=GLOBAL_LOW_CANARY_POLICY_NAME,
+        active=True,
+        source="consensus",
+        model_group=GLOBAL_LOW_MODEL_GROUP,
+        model_names=[GLOBAL_LOW_DYNAMIC_MODEL, GLOBAL_LOW_MVP_MODEL],
+        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        market_family=MarketFamily.LOW_TEMP,
+        local_decision_start="",
+        local_decision_end="",
+        entry_price_min=0.0,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+        max_notional_usd=max_notional_usd,
+        raw_payload={
+            "report": {
+                "role": "live_canary",
+                "target_notional_usd": max_notional_usd,
+                "entry_price_max": GLOBAL_LOW_ENTRY_PRICE_MAX,
+                "selected_side": str(TradeAction.BUY_NO),
+            }
+        },
+    )
+
+
 def live_policy_spec(config: LiveExecutionConfig) -> ResearchPolicySpec:
     return ResearchPolicySpec(
         LIVE_POLICY_NAME,
@@ -351,6 +394,20 @@ def ngboost_best_buy_yes_policy_spec(config: LiveExecutionConfig) -> ResearchPol
     )
 
 
+def global_low_canary_policy_spec(config: LiveExecutionConfig) -> ResearchPolicySpec:
+    return ResearchPolicySpec(
+        GLOBAL_LOW_CANARY_POLICY_NAME,
+        "consensus",
+        StrategyBucket.HIGH_CONVICTION,
+        model_group=GLOBAL_LOW_MODEL_GROUP,
+        selected_side=TradeAction.BUY_NO,
+        station_allow_set=GLOBAL_LOW_STATIONS,
+        entry_price_min=0.0,
+        entry_price_max=config.global_low_entry_price_max,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+    )
+
+
 def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, ...]:
     return (
         LiveStrategyPlan(
@@ -379,6 +436,13 @@ def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, 
             NGBOOST_BEST_BUY_YES_NOTIONAL_USD,
             TradeAction.BUY_YES,
             config.min_entry_price,
+        ),
+        LiveStrategyPlan(
+            global_low_canary_live_strategy(config.global_low_notional_usd),
+            (global_low_canary_policy_spec(config),),
+            config.global_low_notional_usd,
+            TradeAction.BUY_NO,
+            0.0,
         ),
     )
 
@@ -415,23 +479,21 @@ class LiveExecutionEngine:
             "timestamp": now.isoformat(),
             "mode": self.config.mode,
             "market_limit": self.config.market_limit,
+            "market_scope": self.config.market_scope,
             "max_obs_age_minutes": self.config.max_obs_age_minutes,
             "max_book_age_seconds": self.config.max_book_age_seconds,
             "min_entry_price": self.config.min_entry_price,
             "max_entry_price": self.config.max_entry_price,
+            "global_low_notional_usd": self.config.global_low_notional_usd,
+            "global_low_entry_price_max": self.config.global_low_entry_price_max,
             "models": [str(path) for path in self.config.model_paths],
         }
         for plan in self.strategy_plans:
             self.store.upsert_live_strategy(plan.strategy)
         try:
-            discovered_markets = self.discovery.discover(limit=self.config.market_limit)
+            discovered_markets = self.discovery.discover(limit=self.config.market_limit, market_scope=self.config.market_scope)
             same_day = same_day_markets(discovered_markets, now)
-            markets = same_day
-            markets = [
-                market
-                for market in markets
-                if market.market_family == MarketFamily.HIGH_TEMP and market.station in PM_ACTIVE_US12_STATIONS
-            ]
+            markets = [market for market in same_day if _market_admitted_by_strategy_plans(market, self.strategy_plans)]
         except requests.RequestException as exc:
             debug["discovery_error"] = str(exc)
             return LiveCycleResult(0, 0, 0, 0, 0, [f"discovery: {exc}"], debug)
@@ -439,7 +501,8 @@ class LiveExecutionEngine:
             {
                 "discovered_markets": len(discovered_markets),
                 "same_day_markets": len(same_day),
-                "live_high_temp_markets": len(markets),
+                "live_admitted_markets": len(markets),
+                "live_markets_by_family": _market_counts_by_family(markets),
                 "discovery_warnings": list(getattr(self.discovery, "last_warnings", []))[:25],
             }
         )
@@ -707,6 +770,9 @@ class LiveExecutionEngine:
             reason_codes=fair.reason_codes,
             model_name=fair.model_name,
             model_features_hash=fair.model_features_hash,
+            market_family=market.market_family,
+            low_so_far=weather.low_so_far,
+            hrrr_remaining_min=weather.hrrr_remaining_min,
         )
 
     def _candidate_reject_reason(self, candidate: LiveCandidate, book: BookSnapshot | None) -> str | None:
@@ -1521,3 +1587,26 @@ def _state_from_response(response: OrderSubmission) -> LivePositionState:
     if status in {"", "live", "submitted", "open"}:
         return LivePositionState.SUBMITTED
     return LivePositionState.UNKNOWN
+
+
+def _market_admitted_by_strategy_plans(market: MarketSnapshot, plans: tuple[LiveStrategyPlan, ...]) -> bool:
+    for plan in plans:
+        if not plan.strategy.active:
+            continue
+        if market.market_family != plan.strategy.market_family:
+            continue
+        for policy in plan.policies:
+            if policy.station_allow_set is not None and market.station not in policy.station_allow_set:
+                continue
+            if policy.station_exclude_set is not None and market.station in policy.station_exclude_set:
+                continue
+            return True
+    return False
+
+
+def _market_counts_by_family(markets: list[MarketSnapshot]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for market in markets:
+        key = str(market.market_family)
+        counts[key] = counts.get(key, 0) + 1
+    return counts

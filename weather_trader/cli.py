@@ -31,7 +31,15 @@ from weather_trader.features.build_same_day_features import build_synthetic_thre
 from weather_trader.forecasts.hrrr_client import HRRRClient
 from weather_trader.live.scanner import LiveScanner
 from weather_trader.live.next_day_scanner import NextDayScanner
-from weather_trader.live.execution import CONSENSUS_NOTIONAL_USD, DEFAULT_LIVE_ENTRY_PRICE_MAX, EDGE_CORE_NOTIONAL_USD, LiveExecutionConfig, LiveExecutionEngine
+from weather_trader.live.execution import (
+    CONSENSUS_NOTIONAL_USD,
+    DEFAULT_LIVE_ENTRY_PRICE_MAX,
+    EDGE_CORE_NOTIONAL_USD,
+    GLOBAL_LOW_ENTRY_PRICE_MAX,
+    GLOBAL_LOW_NOTIONAL_USD,
+    LiveExecutionConfig,
+    LiveExecutionEngine,
+)
 from weather_trader.live.resolution import LiveResolutionService
 from weather_trader.models.train_classifier import (
     build_bucket_reports,
@@ -268,12 +276,15 @@ def main() -> None:
     live_cycle.add_argument("--live-db", default=str(DEFAULT_LIVE_DB))
     live_cycle.add_argument("--mode", choices=["dry-run", "live"], default="dry-run")
     live_cycle.add_argument("--market-limit", type=int, default=50000)
+    live_cycle.add_argument("--market-scope", choices=["us", "global", "all"], default="all")
     live_cycle.add_argument("--max-obs-age-minutes", type=int, default=30)
     live_cycle.add_argument("--max-book-age-seconds", type=float, default=10.0)
     live_cycle.add_argument("--max-notional-usd", type=float, default=None)
     live_cycle.add_argument("--consensus-notional-usd", type=float, default=CONSENSUS_NOTIONAL_USD)
     live_cycle.add_argument("--core-notional-usd", type=float, default=EDGE_CORE_NOTIONAL_USD)
+    live_cycle.add_argument("--global-low-notional-usd", type=float, default=GLOBAL_LOW_NOTIONAL_USD)
     live_cycle.add_argument("--max-entry-price", type=float, default=DEFAULT_LIVE_ENTRY_PRICE_MAX)
+    live_cycle.add_argument("--global-low-max-entry-price", type=float, default=GLOBAL_LOW_ENTRY_PRICE_MAX)
     live_cycle.add_argument("--model", dest="model_paths", action="append", default=[])
     live_cycle.add_argument("--skip-allowance-check", action="store_true")
     live_cycle.add_argument("--retry-wait-seconds", type=float, default=5.0)
@@ -283,6 +294,7 @@ def main() -> None:
     live_loop.add_argument("--live-db", default=str(DEFAULT_LIVE_DB))
     live_loop.add_argument("--mode", choices=["dry-run", "live"], default="dry-run")
     live_loop.add_argument("--market-limit", type=int, default=50000)
+    live_loop.add_argument("--market-scope", choices=["us", "global", "all"], default="all")
     live_loop.add_argument("--interval-seconds", type=int, default=60)
     live_loop.add_argument("--max-cycles", type=int, default=None)
     live_loop.add_argument("--max-obs-age-minutes", type=int, default=30)
@@ -290,7 +302,9 @@ def main() -> None:
     live_loop.add_argument("--max-notional-usd", type=float, default=None)
     live_loop.add_argument("--consensus-notional-usd", type=float, default=CONSENSUS_NOTIONAL_USD)
     live_loop.add_argument("--core-notional-usd", type=float, default=EDGE_CORE_NOTIONAL_USD)
+    live_loop.add_argument("--global-low-notional-usd", type=float, default=GLOBAL_LOW_NOTIONAL_USD)
     live_loop.add_argument("--max-entry-price", type=float, default=DEFAULT_LIVE_ENTRY_PRICE_MAX)
+    live_loop.add_argument("--global-low-max-entry-price", type=float, default=GLOBAL_LOW_ENTRY_PRICE_MAX)
     live_loop.add_argument("--model", dest="model_paths", action="append", default=[])
     live_loop.add_argument("--skip-allowance-check", action="store_true")
     live_loop.add_argument("--retry-wait-seconds", type=float, default=5.0)
@@ -493,12 +507,15 @@ def main() -> None:
             live_db_path=args.live_db,
             mode=args.mode,
             market_limit=args.market_limit,
+            market_scope=args.market_scope,
             max_obs_age_minutes=args.max_obs_age_minutes,
             max_book_age_seconds=args.max_book_age_seconds,
             max_notional_usd=args.max_notional_usd,
             consensus_notional_usd=args.consensus_notional_usd,
             edge_core_notional_usd=args.core_notional_usd,
+            global_low_notional_usd=args.global_low_notional_usd,
             max_entry_price=args.max_entry_price,
+            global_low_entry_price_max=args.global_low_max_entry_price,
             model_paths=args.model_paths,
             require_allowance_check=not args.skip_allowance_check,
             retry_wait_seconds=args.retry_wait_seconds,
@@ -513,11 +530,14 @@ def main() -> None:
             interval_seconds=args.interval_seconds,
             max_cycles=args.max_cycles,
             max_obs_age_minutes=args.max_obs_age_minutes,
+            market_scope=args.market_scope,
             max_book_age_seconds=args.max_book_age_seconds,
             max_notional_usd=args.max_notional_usd,
             consensus_notional_usd=args.consensus_notional_usd,
             edge_core_notional_usd=args.core_notional_usd,
+            global_low_notional_usd=args.global_low_notional_usd,
             max_entry_price=args.max_entry_price,
+            global_low_entry_price_max=args.global_low_max_entry_price,
             model_paths=args.model_paths,
             require_allowance_check=not args.skip_allowance_check,
             retry_wait_seconds=args.retry_wait_seconds,
@@ -1556,11 +1576,14 @@ def live_cycle_command(
     mode: str,
     market_limit: int,
     max_obs_age_minutes: int,
+    market_scope: str,
     max_book_age_seconds: float,
     max_notional_usd: float | None,
     consensus_notional_usd: float,
     edge_core_notional_usd: float,
+    global_low_notional_usd: float,
     max_entry_price: float | None,
+    global_low_entry_price_max: float,
     model_paths: list[str] | None,
     require_allowance_check: bool,
     retry_wait_seconds: float,
@@ -1576,12 +1599,15 @@ def live_cycle_command(
             model_paths=tuple(Path(path) for path in model_paths) if model_paths else LiveExecutionConfig().model_paths,
             mode=mode,
             market_limit=market_limit,
+            market_scope=market_scope,
             max_obs_age_minutes=max_obs_age_minutes,
             max_book_age_seconds=max_book_age_seconds,
             max_notional_usd=consensus_notional_usd,
             consensus_notional_usd=consensus_notional_usd,
             edge_core_notional_usd=edge_core_notional_usd,
+            global_low_notional_usd=global_low_notional_usd,
             max_entry_price=max_entry_price,
+            global_low_entry_price_max=global_low_entry_price_max,
             require_allowance_check=require_allowance_check,
             retry_wait_seconds=retry_wait_seconds,
         )
@@ -1592,9 +1618,12 @@ def live_cycle_command(
                 {
                     "live_db": live_db_path,
                     "mode": mode,
+                    "market_scope": market_scope,
                     "max_entry_price": max_entry_price,
                     "consensus_notional_usd": consensus_notional_usd,
                     "core_notional_usd": edge_core_notional_usd,
+                    "global_low_notional_usd": global_low_notional_usd,
+                    "global_low_max_entry_price": global_low_entry_price_max,
                     "candidates": result.candidates,
                     "reserved": result.reserved,
                     "submitted": result.submitted,
@@ -1621,11 +1650,14 @@ def live_loop_command(
     interval_seconds: int,
     max_cycles: int | None,
     max_obs_age_minutes: int,
+    market_scope: str,
     max_book_age_seconds: float,
     max_notional_usd: float | None,
     consensus_notional_usd: float,
     edge_core_notional_usd: float,
+    global_low_notional_usd: float,
     max_entry_price: float | None,
+    global_low_entry_price_max: float,
     model_paths: list[str] | None,
     require_allowance_check: bool,
     retry_wait_seconds: float,
@@ -1641,12 +1673,15 @@ def live_loop_command(
             model_paths=tuple(Path(path) for path in model_paths) if model_paths else LiveExecutionConfig().model_paths,
             mode=mode,
             market_limit=market_limit,
+            market_scope=market_scope,
             max_obs_age_minutes=max_obs_age_minutes,
             max_book_age_seconds=max_book_age_seconds,
             max_notional_usd=consensus_notional_usd,
             consensus_notional_usd=consensus_notional_usd,
             edge_core_notional_usd=edge_core_notional_usd,
+            global_low_notional_usd=global_low_notional_usd,
             max_entry_price=max_entry_price,
+            global_low_entry_price_max=global_low_entry_price_max,
             require_allowance_check=require_allowance_check,
             retry_wait_seconds=retry_wait_seconds,
         )
@@ -1677,9 +1712,12 @@ def live_loop_command(
                             "cycle": cycle,
                             "live_db": live_db_path,
                             "mode": mode,
+                            "market_scope": market_scope,
                             "max_entry_price": max_entry_price,
                             "consensus_notional_usd": consensus_notional_usd,
                             "core_notional_usd": edge_core_notional_usd,
+                            "global_low_notional_usd": global_low_notional_usd,
+                            "global_low_max_entry_price": global_low_entry_price_max,
                             "candidates": 0,
                             "reserved": 0,
                             "submitted": 0,
@@ -1702,9 +1740,12 @@ def live_loop_command(
                             "cycle": cycle,
                             "live_db": live_db_path,
                             "mode": mode,
+                            "market_scope": market_scope,
                             "max_entry_price": max_entry_price,
                             "consensus_notional_usd": consensus_notional_usd,
                             "core_notional_usd": edge_core_notional_usd,
+                            "global_low_notional_usd": global_low_notional_usd,
+                            "global_low_max_entry_price": global_low_entry_price_max,
                             "candidates": result.candidates,
                             "reserved": result.reserved,
                             "submitted": result.submitted,
