@@ -67,6 +67,8 @@ MOONSHOT_NOTIONAL_USD = 2.0
 NGBOOST_BEST_BUY_YES_NOTIONAL_USD = 10.0
 GLOBAL_LOW_NOTIONAL_USD = 25.0
 GLOBAL_LOW_ENTRY_PRICE_MAX = 0.75
+GLOBAL_LOW_LOCAL_DECISION_START = "00:30"
+GLOBAL_LOW_LOCAL_DECISION_END = "05:00"
 LIVE_MODEL_PATHS = (
     MODELS_DIR / f"{DYNAMIC_TUNED_MODEL}.joblib",
     MODELS_DIR / f"{CATBOOST_MODEL}.joblib",
@@ -301,8 +303,8 @@ def global_low_canary_live_strategy(max_notional_usd: float = GLOBAL_LOW_NOTIONA
         model_names=[GLOBAL_LOW_DYNAMIC_MODEL, GLOBAL_LOW_MVP_MODEL],
         strategy_bucket=StrategyBucket.HIGH_CONVICTION,
         market_family=MarketFamily.LOW_TEMP,
-        local_decision_start="",
-        local_decision_end="",
+        local_decision_start=GLOBAL_LOW_LOCAL_DECISION_START,
+        local_decision_end=GLOBAL_LOW_LOCAL_DECISION_END,
         entry_price_min=0.0,
         uniqueness_key_mode="station_date_bucket_side_obs_delay",
         max_notional_usd=max_notional_usd,
@@ -311,6 +313,8 @@ def global_low_canary_live_strategy(max_notional_usd: float = GLOBAL_LOW_NOTIONA
                 "role": "live_canary",
                 "target_notional_usd": max_notional_usd,
                 "entry_price_max": GLOBAL_LOW_ENTRY_PRICE_MAX,
+                "local_decision_start": GLOBAL_LOW_LOCAL_DECISION_START,
+                "local_decision_end": GLOBAL_LOW_LOCAL_DECISION_END,
                 "selected_side": str(TradeAction.BUY_NO),
             }
         },
@@ -404,6 +408,8 @@ def global_low_canary_policy_spec(config: LiveExecutionConfig) -> ResearchPolicy
         station_allow_set=GLOBAL_LOW_STATIONS,
         entry_price_min=0.0,
         entry_price_max=config.global_low_entry_price_max,
+        local_decision_start=GLOBAL_LOW_LOCAL_DECISION_START,
+        local_decision_end=GLOBAL_LOW_LOCAL_DECISION_END,
         uniqueness_key_mode="station_date_bucket_side_obs_delay",
     )
 

@@ -16,7 +16,7 @@ Updated: 2026-06-08
 | Consensus 15m late core | mixed | $50 BUY_NO; $25 BUY_YES | <= $0.50 | Replaces weak single-model dynamic core with bucket-consensus high-conviction 15m late overlay. |
 | NGBoost BUY_YES | BUY_YES | $10 | <= $0.50 | Dedicated BUY_YES allocation. Keep smaller than core NO until live evidence improves. |
 | Moonshot | BUY_NO | $2 | <= $0.50 | Small tail allocation. Original tiny moonshot remains constrained by its tighter policy price rules. |
-| Global low-temp canary | BUY_NO | $25 | <= $0.75 | Live canary only for EGLC, LFPB, RJTT, RKSI, VHHH, and ZSPD low-temperature markets. Not core sizing. |
+| Global low-temp canary | BUY_NO | $25 | <= $0.75 | Live canary only for EGLC, LFPB, RJTT, RKSI, VHHH, and ZSPD low-temperature markets, station-local 00:30-05:00. Not core sizing. |
 
 ### Risk caps
 
@@ -31,7 +31,7 @@ Updated: 2026-06-08
 
 ### Execution rules
 
-- US high-temperature live entries are capped at `<= 0.50` because historical replay showed materially better return on risk below this price. The global low-temp canary is BUY_NO-only with a separate `<= 0.75` cap.
+- US high-temperature live entries are capped at `<= 0.50` because historical replay showed materially better return on risk below this price. The global low-temp canary is BUY_NO-only with a separate `<= 0.75` cap and station-local `00:30-05:00` decision window.
 - Orders use FAK first, with retry handling for transient depth/order-version failures. Explicit partial fills continue into a 120-second resting remainder for the leftover notional. Matched/filled responses with returned fill amounts are treated as partial only when the unfilled remainder exceeds $3.
 - Any live strategy may place a single resting fallback limit order after eligible FAK failure paths.
 - Resting fallback TTL is 120 seconds and targets the remaining notional after the FAK retry path; keep whatever fills before the cancel.
@@ -61,7 +61,7 @@ The system moved from small exploratory sizing to policy-specific fixed sizing a
 - Consensus 15m late core: $50 BUY_NO / $25 BUY_YES, replacing Core capped dynamic BUY_NO after raw-snapshot replay showed dynamic core was barely positive and dominated by consensus overlays.
 - NGBoost BUY_YES: $10 because it is the dedicated BUY_YES strategy but remains smaller than core NO sizing.
 - Moonshot: $2 because tail entries are high variance and should not drive daily risk.
-- Global low-temp canary: $25 BUY_NO-only with entry cap `<= 0.75`, using the existing live FAK, retry, and 120-second resting fallback engine with no added depth gate. Promotion toward $50 depends on live fills and resolved PnL.
+- Global low-temp canary: $25 BUY_NO-only with entry cap `<= 0.75` and station-local `00:30-05:00`, using the existing live FAK, retry, and 120-second resting fallback engine with no added depth gate. Promotion toward $50 depends on live fills and resolved PnL.
 
 The max order cap is set to $50 so the largest intended order cannot exceed the current primary-policy size.
 
@@ -72,7 +72,7 @@ Deep raw-snapshot replay on 2026-06-08 showed low-temperature markets as the str
 
 Candidate shortlist:
 
-- `global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first`: promoted to live canary at $25, BUY_NO-only, `<= $0.75`, using existing execution and risk controls. Earlier replay showed 36 resolved, 91.7% win rate, about +11.44 PnL, R/R about 0.53, Sharpe about 0.99 across 6 stations from 2026-05-30 through 2026-06-05.
+- `global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first`: promoted to live canary at $25, BUY_NO-only, `<= $0.75`, station-local `00:30-05:00`, using existing execution and risk controls. Earlier all-day replay showed 36 resolved, 91.7% win rate, about +11.44 PnL, R/R about 0.53, Sharpe about 0.99 across 6 stations from 2026-05-30 through 2026-06-05. A later raw-snapshot window replay favored `00:30-05:00` with 36 resolved, 36-0, about +15.19 PnL, R/R about 0.73.
 - `global_low_dynamic_mvp_hc_buy_no_10m_entry_50_75_by_bucket_side_delay_first`: more constrained high-conviction BUY_NO candidate; 11 resolved, 100% win rate, about +4.25 PnL, R/R about 0.63, Sharpe about 5.22. Needs more sample and execution validation.
 - `global_low_dynamic_mvp_tail_buy_no_entry_00_05_by_bucket_side_delay_first`: strongest tail niche; 24 resolved, 100% win rate, about +23.33 PnL, very high R/R due to sub-5-cent entries. This is a tiny-entry tail allocation candidate, not a core sizing candidate.
 - `low_pm_us12_consensus_hc_buy_no_entry_50_75_by_bucket_side_delay_first`: US low-temp consensus BUY_NO candidate; 23 resolved, 100% win rate, about +8.78 PnL, R/R about 0.62. Current replay flags execution/liquidity weakness, so do not promote without book-depth confirmation.
@@ -92,7 +92,7 @@ The 120-second TTL is a deliberate compromise: weather does not normally reprice
 - Deep raw-snapshot niche replay across US high, global high, global low, and US low identified low-temperature BUY_NO overlays as the strongest expansion candidates so far. The leading broad candidate, `global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first`, is now live as a $25 BUY_NO-only canary with `<= $0.75` entry cap on EGLC, LFPB, RJTT, RKSI, VHHH, and ZSPD low-temp markets. It uses the existing FAK, retry, and resting fallback path with no added depth gate; promotion toward $50 depends on live fills and resolved PnL.
 - Global high-temperature consensus did not transfer cleanly from US high temp; global high remains research-only.
 - Replaced live Core capped dynamic-tuned BUY_NO policy with `pm_us12_bucket_consensus_hc_15m_late_entry_00_50_by_bucket_side_delay_first` in the core notional slot. Raw snapshot replay through 2026-06-06 showed the old dynamic core at roughly R/R 0.03 versus the replacement at roughly R/R 1.32 over 20 resolved rows, while staying inside the consensus high-conviction, late-window, <= $0.50 entry family.
-- Current core sizing remains $50 target notional, with consensus BUY_YES halved by sizing policy. Keep HRRR-rich consensus research-only until it reaches a larger resolved sample.
+- Current core sizing remains $50 target notional, with consensus BUY_YES halved by sizing policy. Keep HRRR-rich consensus research-only until it reaches a larger resolved sample. A targeted replay of the global low canary local decision time favored station-local `00:30-05:00`: 46 selected rows, 36 resolved, 36-0, about +15.19 PnL, R/R about 0.73, while `00:00-05:00` included two ZSPD local-midnight losses.
 
 ### 2026-06-03
 

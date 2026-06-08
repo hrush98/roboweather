@@ -33,6 +33,8 @@ from weather_trader.live.execution import (
     EDGE_CORE_POLICY_NAME,
     GLOBAL_LOW_CANARY_POLICY_NAME,
     GLOBAL_LOW_ENTRY_PRICE_MAX,
+    GLOBAL_LOW_LOCAL_DECISION_END,
+    GLOBAL_LOW_LOCAL_DECISION_START,
     GLOBAL_LOW_MODEL_GROUP,
     GLOBAL_LOW_NOTIONAL_USD,
     GLOBAL_LOW_STATIONS,
@@ -144,8 +146,10 @@ def test_live_strategy_plans_include_moonshot_ngboost_and_global_low_canary() ->
     assert global_low.policies[0].station_allow_set == GLOBAL_LOW_STATIONS
     assert global_low.policies[0].entry_price_min == pytest.approx(0.0)
     assert global_low.policies[0].entry_price_max == pytest.approx(GLOBAL_LOW_ENTRY_PRICE_MAX)
-    assert global_low.policies[0].local_decision_start is None
-    assert global_low.policies[0].local_decision_end is None
+    assert global_low.strategy.local_decision_start == GLOBAL_LOW_LOCAL_DECISION_START
+    assert global_low.strategy.local_decision_end == GLOBAL_LOW_LOCAL_DECISION_END
+    assert global_low.policies[0].local_decision_start == GLOBAL_LOW_LOCAL_DECISION_START
+    assert global_low.policies[0].local_decision_end == GLOBAL_LOW_LOCAL_DECISION_END
     assert global_low.selected_side == TradeAction.BUY_NO
     assert global_low.min_entry_price == pytest.approx(0.0)
 
@@ -242,7 +246,7 @@ def test_moonshot_edge_policy_spec_filters_late_high_edge_entries(tmp_path: Path
     assert [item["selected_bucket"] for item in selected] == ["76-77F", "78-79F"]
 
 
-def test_global_low_canary_policy_spec_filters_buy_no_cap_and_bucket_side_delay(tmp_path: Path) -> None:
+def test_global_low_canary_policy_spec_filters_buy_no_cap_window_and_bucket_side_delay(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
     spec = global_low_canary_policy_spec(LiveExecutionConfig(global_low_entry_price_max=0.75))
     evaluator = ResearchPolicyEvaluator(store, (spec,))
@@ -255,6 +259,7 @@ def test_global_low_canary_policy_spec_filters_buy_no_cap_and_bucket_side_delay(
                 market_family="LOW_TEMP",
                 selected_no_ask=0.75,
                 selected_bucket="10-11C",
+                decision_time_local="2026-06-05T00:30:00+01:00",
             ),
             _snapshot(
                 GLOBAL_LOW_MVP_MODEL,
@@ -263,6 +268,7 @@ def test_global_low_canary_policy_spec_filters_buy_no_cap_and_bucket_side_delay(
                 market_family="LOW_TEMP",
                 selected_no_ask=0.75,
                 selected_bucket="10-11C",
+                decision_time_local="2026-06-05T00:30:00+01:00",
             ),
             _snapshot(
                 GLOBAL_LOW_DYNAMIC_MODEL,
@@ -272,6 +278,7 @@ def test_global_low_canary_policy_spec_filters_buy_no_cap_and_bucket_side_delay(
                 selected_side="BUY_YES",
                 selected_yes_ask=0.25,
                 selected_bucket="12-13C",
+                decision_time_local="2026-06-05T01:30:00+01:00",
             ),
             _snapshot(
                 GLOBAL_LOW_MVP_MODEL,
@@ -281,6 +288,7 @@ def test_global_low_canary_policy_spec_filters_buy_no_cap_and_bucket_side_delay(
                 selected_side="BUY_YES",
                 selected_yes_ask=0.25,
                 selected_bucket="12-13C",
+                decision_time_local="2026-06-05T01:30:00+01:00",
             ),
             _snapshot(
                 GLOBAL_LOW_DYNAMIC_MODEL,
@@ -289,6 +297,7 @@ def test_global_low_canary_policy_spec_filters_buy_no_cap_and_bucket_side_delay(
                 market_family="LOW_TEMP",
                 selected_no_ask=0.76,
                 selected_bucket="14-15C",
+                decision_time_local="2026-06-05T01:30:00+01:00",
             ),
             _snapshot(
                 GLOBAL_LOW_MVP_MODEL,
@@ -297,6 +306,43 @@ def test_global_low_canary_policy_spec_filters_buy_no_cap_and_bucket_side_delay(
                 market_family="LOW_TEMP",
                 selected_no_ask=0.76,
                 selected_bucket="14-15C",
+                decision_time_local="2026-06-05T01:30:00+01:00",
+            ),
+            _snapshot(
+                GLOBAL_LOW_DYNAMIC_MODEL,
+                id=9,
+                station="EGLC",
+                market_family="LOW_TEMP",
+                selected_no_ask=0.40,
+                selected_bucket="18-19C",
+                decision_time_local="2026-06-05T00:29:00+01:00",
+            ),
+            _snapshot(
+                GLOBAL_LOW_MVP_MODEL,
+                id=10,
+                station="EGLC",
+                market_family="LOW_TEMP",
+                selected_no_ask=0.40,
+                selected_bucket="18-19C",
+                decision_time_local="2026-06-05T00:29:00+01:00",
+            ),
+            _snapshot(
+                GLOBAL_LOW_DYNAMIC_MODEL,
+                id=11,
+                station="EGLC",
+                market_family="LOW_TEMP",
+                selected_no_ask=0.40,
+                selected_bucket="20-21C",
+                decision_time_local="2026-06-05T05:00:00+01:00",
+            ),
+            _snapshot(
+                GLOBAL_LOW_MVP_MODEL,
+                id=12,
+                station="EGLC",
+                market_family="LOW_TEMP",
+                selected_no_ask=0.40,
+                selected_bucket="20-21C",
+                decision_time_local="2026-06-05T05:00:00+01:00",
             ),
             _snapshot(
                 GLOBAL_LOW_DYNAMIC_MODEL,
@@ -305,6 +351,7 @@ def test_global_low_canary_policy_spec_filters_buy_no_cap_and_bucket_side_delay(
                 market_family="LOW_TEMP",
                 selected_no_ask=0.50,
                 selected_bucket="16-17C",
+                decision_time_local="2026-06-05T01:30:00+08:00",
             ),
             _snapshot(
                 GLOBAL_LOW_MVP_MODEL,
@@ -313,6 +360,7 @@ def test_global_low_canary_policy_spec_filters_buy_no_cap_and_bucket_side_delay(
                 market_family="LOW_TEMP",
                 selected_no_ask=0.50,
                 selected_bucket="16-17C",
+                decision_time_local="2026-06-05T01:30:00+08:00",
             ),
         ]
     )
