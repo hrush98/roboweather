@@ -10,7 +10,7 @@ import sqlite3
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.policy_leaderboard import bucket_type, edge_band, entry_band, probability_band, return_risk, sharpe
+from scripts.policy_leaderboard import bucket_type, bucket_won, edge_band, entry_band, probability_band, return_risk, sharpe
 from weather_trader.research.policies import CONSENSUS_GROUPS
 
 ACTIVE_LOCAL_DB = Path.home() / ".local/state/roboweather/research_2026-05-08_multimodel.sqlite"
@@ -66,12 +66,44 @@ PM_ACTIVE_CATBOOST_MODEL = "catboost_bucket_pm_active_us12_obs_2022_2025"
 PM_ACTIVE_HIGH_REGRESSION_MODEL = "high_regression_pm_active_us12_obs_2022_2025"
 PM_ACTIVE_NGBOOST_MODEL = "ngboost_normal_pm_active_us12_obs_2022_2025"
 
+HRRR_V2_DYNAMIC_MODEL = "dynamic_bucket_hrrr_v2_obs_2022_2025"
+HRRR_V2_MVP_MODEL = "mvp_hrrr_v2_obs_2022_2025"
+HRRR_V2_DYNAMIC_TUNED_MODEL = "dynamic_bucket_tuned_hrrr_v2_obs_2022_2025"
+HRRR_V2_CATBOOST_MODEL = "catboost_bucket_hrrr_v2_obs_2022_2025"
+HRRR_V2_HIGH_REGRESSION_MODEL = "high_regression_hrrr_v2_obs_2022_2025"
+HRRR_V2_NGBOOST_MODEL = "ngboost_normal_hrrr_v2_obs_2022_2025"
+
+HRRR_RICH_DYNAMIC_MODEL = "dynamic_bucket_hrrr_rich_pm_active_us12_obs_2022_2025"
+HRRR_RICH_MVP_MODEL = "mvp_hrrr_rich_pm_active_us12_obs_2022_2025"
+HRRR_RICH_DYNAMIC_TUNED_MODEL = "dynamic_bucket_tuned_hrrr_rich_pm_active_us12_obs_2022_2025"
+HRRR_RICH_CATBOOST_MODEL = "catboost_bucket_hrrr_rich_pm_active_us12_obs_2022_2025"
+HRRR_RICH_HIGH_REGRESSION_MODEL = "high_regression_hrrr_rich_pm_active_us12_obs_2022_2025"
+HRRR_RICH_NGBOOST_MODEL = "ngboost_normal_hrrr_rich_pm_active_us12_obs_2022_2025"
+
+METAR_HRRR_RICH_DYNAMIC_MODEL = "dynamic_bucket_metar_hrrr_rich_pm_active_us12_obs_2022_2025"
+METAR_HRRR_RICH_MVP_MODEL = "mvp_metar_hrrr_rich_pm_active_us12_obs_2022_2025"
+METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL = "dynamic_bucket_tuned_metar_hrrr_rich_pm_active_us12_obs_2022_2025"
+METAR_HRRR_RICH_CATBOOST_MODEL = "catboost_bucket_metar_hrrr_rich_pm_active_us12_obs_2022_2025"
+METAR_HRRR_RICH_HIGH_REGRESSION_MODEL = "high_regression_metar_hrrr_rich_pm_active_us12_obs_2022_2025"
+METAR_HRRR_RICH_NGBOOST_MODEL = "ngboost_normal_metar_hrrr_rich_pm_active_us12_obs_2022_2025"
+
 POLICY_SEARCH_CONSENSUS_GROUPS: dict[str, tuple[str, ...]] = {
     **CONSENSUS_GROUPS,
     # Historical pm_us12 research policies used dynamic_default + mvp. The current
     # live evaluator only registers dynamic_tuned + mvp, so the snapshot search
     # must add this group explicitly to reconstruct the older policy families.
     "pm_active_us12_dynamic_mvp": (PM_ACTIVE_DYNAMIC_MODEL, PM_ACTIVE_MVP_MODEL),
+    "hrrr_v2_dynamic_mvp": (HRRR_V2_DYNAMIC_MODEL, HRRR_V2_MVP_MODEL),
+    "hrrr_rich_dynamic_mvp": (HRRR_RICH_DYNAMIC_MODEL, HRRR_RICH_MVP_MODEL),
+    "hrrr_rich_dynamic_tuned_mvp": (HRRR_RICH_DYNAMIC_TUNED_MODEL, HRRR_RICH_MVP_MODEL),
+    "hrrr_rich_catboost_mvp": (HRRR_RICH_CATBOOST_MODEL, HRRR_RICH_MVP_MODEL),
+    "hrrr_rich_bucket_consensus": (HRRR_RICH_DYNAMIC_TUNED_MODEL, HRRR_RICH_CATBOOST_MODEL),
+    "hrrr_rich_three_model_consensus": (HRRR_RICH_DYNAMIC_TUNED_MODEL, HRRR_RICH_CATBOOST_MODEL, HRRR_RICH_MVP_MODEL),
+    "metar_hrrr_rich_dynamic_mvp": (METAR_HRRR_RICH_DYNAMIC_MODEL, METAR_HRRR_RICH_MVP_MODEL),
+    "metar_hrrr_rich_dynamic_tuned_mvp": (METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL, METAR_HRRR_RICH_MVP_MODEL),
+    "metar_hrrr_rich_catboost_mvp": (METAR_HRRR_RICH_CATBOOST_MODEL, METAR_HRRR_RICH_MVP_MODEL),
+    "metar_hrrr_rich_bucket_consensus": (METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL, METAR_HRRR_RICH_CATBOOST_MODEL),
+    "metar_hrrr_rich_three_model_consensus": (METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL, METAR_HRRR_RICH_CATBOOST_MODEL, METAR_HRRR_RICH_MVP_MODEL),
 }
 
 KNOWN_MODEL_ALIASES = {
@@ -81,6 +113,24 @@ KNOWN_MODEL_ALIASES = {
     PM_ACTIVE_CATBOOST_MODEL: "pm_us12_catboost",
     PM_ACTIVE_HIGH_REGRESSION_MODEL: "pm_us12_high_regression",
     PM_ACTIVE_NGBOOST_MODEL: "pm_us12_ngboost",
+    HRRR_V2_DYNAMIC_MODEL: "hrrr_v2_dynamic",
+    HRRR_V2_MVP_MODEL: "hrrr_v2_mvp",
+    HRRR_V2_DYNAMIC_TUNED_MODEL: "hrrr_v2_dynamic_tuned",
+    HRRR_V2_CATBOOST_MODEL: "hrrr_v2_catboost",
+    HRRR_V2_HIGH_REGRESSION_MODEL: "hrrr_v2_high_regression",
+    HRRR_V2_NGBOOST_MODEL: "hrrr_v2_ngboost",
+    HRRR_RICH_DYNAMIC_MODEL: "hrrr_rich_dynamic",
+    HRRR_RICH_MVP_MODEL: "hrrr_rich_mvp",
+    HRRR_RICH_DYNAMIC_TUNED_MODEL: "hrrr_rich_dynamic_tuned",
+    HRRR_RICH_CATBOOST_MODEL: "hrrr_rich_catboost",
+    HRRR_RICH_HIGH_REGRESSION_MODEL: "hrrr_rich_high_regression",
+    HRRR_RICH_NGBOOST_MODEL: "hrrr_rich_ngboost",
+    METAR_HRRR_RICH_DYNAMIC_MODEL: "metar_hrrr_rich_dynamic",
+    METAR_HRRR_RICH_MVP_MODEL: "metar_hrrr_rich_mvp",
+    METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL: "metar_hrrr_rich_dynamic_tuned",
+    METAR_HRRR_RICH_CATBOOST_MODEL: "metar_hrrr_rich_catboost",
+    METAR_HRRR_RICH_HIGH_REGRESSION_MODEL: "metar_hrrr_rich_high_regression",
+    METAR_HRRR_RICH_NGBOOST_MODEL: "metar_hrrr_rich_ngboost",
     "low_dynamic_bucket_obs_2022_2025": "low_pm_us12_dynamic",
     "low_mvp_obs_2022_2025": "low_pm_us12_mvp",
 }
@@ -91,6 +141,21 @@ KNOWN_CONSENSUS_ALIASES = {
     "obs_catboost_mvp": "pm_us12_catboost_mvp",
     "obs_bucket_consensus": "pm_us12_bucket_consensus",
     "obs_three_model_consensus": "pm_us12_three_model_consensus",
+    "hrrr_v2_dynamic_mvp": "hrrr_v2_consensus",
+    "hrrr_v2_dynamic_tuned_mvp": "hrrr_v2_dynamic_tuned_mvp",
+    "hrrr_v2_catboost_mvp": "hrrr_v2_catboost_mvp",
+    "hrrr_v2_bucket_consensus": "hrrr_v2_bucket_consensus",
+    "hrrr_v2_three_model_consensus": "hrrr_v2_three_model_consensus",
+    "hrrr_rich_dynamic_mvp": "hrrr_rich_consensus",
+    "hrrr_rich_dynamic_tuned_mvp": "hrrr_rich_dynamic_tuned_mvp",
+    "hrrr_rich_catboost_mvp": "hrrr_rich_catboost_mvp",
+    "hrrr_rich_bucket_consensus": "hrrr_rich_bucket_consensus",
+    "hrrr_rich_three_model_consensus": "hrrr_rich_three_model_consensus",
+    "metar_hrrr_rich_dynamic_mvp": "metar_hrrr_rich_consensus",
+    "metar_hrrr_rich_dynamic_tuned_mvp": "metar_hrrr_rich_dynamic_tuned_mvp",
+    "metar_hrrr_rich_catboost_mvp": "metar_hrrr_rich_catboost_mvp",
+    "metar_hrrr_rich_bucket_consensus": "metar_hrrr_rich_bucket_consensus",
+    "metar_hrrr_rich_three_model_consensus": "metar_hrrr_rich_three_model_consensus",
     "low_pm_active_us12_dynamic_mvp": "low_pm_us12_consensus",
 }
 
@@ -153,6 +218,7 @@ def load_snapshot_rows(
     start_date: str | None = None,
     end_date: str | None = None,
     market_family: str | None = None,
+    us_high_temp_only: bool = False,
 ) -> list[dict[str, Any]]:
     snapshot_columns = table_columns(db, "prediction_snapshots")
 
@@ -173,6 +239,13 @@ def load_snapshot_rows(
             params.append(market_family)
         elif market_family != "HIGH_TEMP":
             return []
+    if us_high_temp_only:
+        where.append("ps.station like ?")
+        params.append("K%")
+        where.append("ps.model_name not like ?")
+        params.append("%international%")
+        where.append("ps.model_name not like ?")
+        params.append("low_%")
 
     sql = f"""
         select
@@ -217,9 +290,15 @@ def load_snapshot_rows(
             pr.correct,
             pr.entry_price,
             pr.paper_pnl,
-            pr.resolved_at
+            pr.resolved_at,
+            sdo.final_high_tmpf,
+            sdo.final_low_tmpf,
+            sdo.resolved_at as weather_resolved_at
         from prediction_snapshots ps
         left join prediction_results pr on pr.prediction_snapshot_id = ps.id
+        left join station_date_outcomes sdo
+            on sdo.station = ps.station
+           and sdo.market_date = ps.market_date
         where {" and ".join(where)}
         order by ps.timestamp, ps.id
     """
@@ -229,12 +308,32 @@ def load_snapshot_rows(
         item["source"] = str(item.get("model_name") or "missing_model")
         item["selected_fair"] = selected_fair(item)
         item["entry_price"] = entry_price(item)
+        score_snapshot_row(item)
         rows.append(item)
     return rows
 
 
 def table_columns(db: sqlite3.Connection, table: str) -> set[str]:
     return {str(row["name"] if isinstance(row, sqlite3.Row) else row[1]) for row in db.execute(f"pragma table_info({table})")}
+
+
+def score_snapshot_row(item: dict[str, Any]) -> None:
+    if item.get("paper_pnl") is not None and item.get("correct") is not None:
+        return
+    entry = entry_price(item)
+    if entry is None:
+        return
+    market_family = str(item.get("market_family") or "HIGH_TEMP")
+    final_temp = float_or_none(item.get("final_low_tmpf" if market_family == "LOW_TEMP" else "final_high_tmpf"))
+    if final_temp is None:
+        return
+    selected_bucket = item.get("selected_bucket")
+    yes_won = bucket_won(final_temp, selected_bucket)
+    correct = yes_won if item.get("selected_side") == "BUY_YES" else not yes_won
+    item["correct"] = 1 if correct else 0
+    item["paper_pnl"] = (1.0 - entry) if correct else -entry
+    item["entry_price"] = entry
+    item["resolved_at"] = item.get("weather_resolved_at")
 
 
 def build_consensus_rows(
@@ -454,6 +553,110 @@ def add_policy_spec(specs: list[PolicySearchSpec], seen_names: set[str], spec: P
         return
     seen_names.add(spec.name)
     specs.append(spec)
+
+
+def build_compact_policy_search_rows(base_rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    search_rows = [
+        *base_rows,
+        *build_consensus_rows(base_rows, consensus_groups=POLICY_SEARCH_CONSENSUS_GROUPS),
+    ]
+    specs = build_compact_policy_search_specs(base_rows)
+    position_rows: list[dict[str, Any]] = []
+    summaries: list[dict[str, Any]] = []
+    indexed: dict[tuple[str, str | None, str | None], list[dict[str, Any]]] = defaultdict(list)
+    for row in search_rows:
+        source = "consensus" if str(row.get("source") or "").startswith("consensus:") else "model"
+        group_name = str(row.get("source") or "").removeprefix("consensus:") if source == "consensus" else None
+        indexed[(source, str(row.get("model_name") or group_name or ""), str(row.get("strategy_bucket") or ""))].append(row)
+    for spec in specs:
+        model_key = spec.model_name if spec.source == "model" else spec.model_group
+        candidates = [
+            row
+            for row in indexed.get((spec.source, str(model_key or ""), str(spec.strategy_bucket or "")), [])
+            if row_matches_policy_spec(spec, row)
+        ]
+        selected = first_policy_rows(spec, candidates)
+        if not selected:
+            continue
+        policy_rows = [policy_row(spec, row) for row in selected]
+        position_rows.extend(policy_rows)
+        summaries.append(summarize_policy_candidate(spec, policy_rows))
+    return position_rows, sorted(summaries, key=policy_default_rank)
+
+
+def build_compact_policy_search_specs(rows: list[dict[str, Any]]) -> list[PolicySearchSpec]:
+    specs: list[PolicySearchSpec] = []
+    seen_names: set[str] = set()
+    present_models = {str(row.get("model_name") or "") for row in rows if row.get("model_name")}
+    for model_name in sorted(present_models):
+        if not model_name or model_name in POLICY_SEARCH_CONSENSUS_GROUPS:
+            continue
+        for spec in compact_policy_spec_grid(
+            base_alias=model_alias(model_name),
+            source="model",
+            model_name=model_name,
+        ):
+            add_policy_spec(specs, seen_names, spec)
+    for group_name, required_models in sorted(POLICY_SEARCH_CONSENSUS_GROUPS.items()):
+        if not set(required_models).issubset(present_models):
+            continue
+        for spec in compact_policy_spec_grid(
+            base_alias=consensus_alias(group_name),
+            source="consensus",
+            model_group=group_name,
+        ):
+            add_policy_spec(specs, seen_names, spec)
+    return specs
+
+
+def compact_policy_spec_grid(
+    *,
+    base_alias: str,
+    source: str,
+    model_name: str | None = None,
+    model_group: str | None = None,
+) -> list[PolicySearchSpec]:
+    entry_bands = (
+        EntryBandSpec("entry_00_50", 0.00, 0.50),
+        EntryBandSpec("entry_05_50", 0.05, 0.50),
+    )
+    windows = (
+        LocalWindowSpec(None, None, None),
+        LocalWindowSpec("late", "12:00", "15:00"),
+    )
+    obs_delays: tuple[str | None, ...] = (None, "10m", "15m")
+    uniqueness_modes = ("station_date", "station_date_bucket_side_obs_delay")
+    specs = []
+    for obs_delay in obs_delays:
+        for window in windows:
+            for entry_band in entry_bands:
+                for uniqueness_mode in uniqueness_modes:
+                    parts = [base_alias, "hc"]
+                    if obs_delay is not None:
+                        parts.append(obs_delay)
+                    if window.slug is not None:
+                        parts.append(window.slug)
+                    if entry_band.slug is not None:
+                        parts.append(entry_band.slug)
+                    if uniqueness_mode == "station_date_bucket_side_obs_delay":
+                        parts.append("by_bucket_side_delay")
+                    parts.append("first")
+                    specs.append(
+                        PolicySearchSpec(
+                            name="_".join(parts),
+                            source=source,
+                            strategy_bucket="HIGH_CONVICTION",
+                            model_name=model_name,
+                            model_group=model_group,
+                            obs_delay_bucket=obs_delay,
+                            entry_price_min=entry_band.minimum,
+                            entry_price_max=entry_band.maximum,
+                            local_decision_start=window.start,
+                            local_decision_end=window.end,
+                            uniqueness_key_mode=uniqueness_mode,
+                        )
+                    )
+    return specs
 
 
 def build_policy_search_rows(base_rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -946,6 +1149,173 @@ def render_report(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def render_rolling_policy_report(
+    base_rows: list[dict[str, Any]],
+    *,
+    min_policy_n: int,
+    top_n: int,
+) -> str:
+    max_resolved_date = latest_resolved_market_date(base_rows)
+    if max_resolved_date is None:
+        return "# Snapshot Policy Rolling Replay\n\nNo resolved snapshot rows were available.\n"
+
+    windows: list[tuple[str, date | None]] = [
+        ("last_7", max_resolved_date - timedelta(days=6)),
+        ("last_30", max_resolved_date - timedelta(days=29)),
+        ("all_time", None),
+    ]
+    window_summaries: dict[str, list[dict[str, Any]]] = {}
+    lines = [
+        "# Snapshot Policy Rolling Replay",
+        "",
+        f"Resolved through market_date {max_resolved_date.isoformat()}.",
+        "Replays generated policies from raw prediction_snapshots; no research_policy_positions rows are required.",
+        "",
+    ]
+    for label, start_date in windows:
+        rows = [row for row in base_rows if row_in_window(row, start_date, max_resolved_date)]
+        _, summaries = build_compact_policy_search_rows(rows)
+        eligible = eligible_policy_rows(summaries, min_policy_n=min_policy_n)
+        window_summaries[label] = eligible
+        lines.extend([f"## {label}", ""])
+        lines.extend(render_window_overview(label, rows, summaries, eligible))
+        lines.extend(["", "### Top R/R", ""])
+        lines.extend(render_policy_search_table(sorted(eligible, key=policy_rr_rank)[:top_n]) if eligible else ["No generated policies met the screen."])
+        lines.extend(["", "### Top Sharpe", ""])
+        lines.extend(render_policy_search_table(sorted(eligible, key=policy_sharpe_rank)[:top_n]) if eligible else ["No generated policies met the screen."])
+        lines.extend(["", "### By Model Family", ""])
+        family_rows = family_rollup(eligible)
+        lines.extend(render_family_table(family_rows[:top_n]) if family_rows else ["No family rows met the screen."])
+        lines.append("")
+
+    lines.extend(["## Emerging Patterns", ""])
+    emerging = emerging_patterns(window_summaries)
+    if emerging:
+        lines.extend(render_emerging_table(emerging[:top_n]))
+    else:
+        lines.append("No last-7-day policy candidates clearly improved versus the broader windows under the current screen.")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def latest_resolved_market_date(rows: list[dict[str, Any]]) -> date | None:
+    dates = []
+    for row in rows:
+        if row.get("paper_pnl") is None:
+            continue
+        try:
+            dates.append(date.fromisoformat(str(row.get("market_date"))))
+        except ValueError:
+            continue
+    return max(dates) if dates else None
+
+
+def row_in_window(row: dict[str, Any], start_date: date | None, end_date: date) -> bool:
+    if row.get("paper_pnl") is None:
+        return False
+    try:
+        market_date = date.fromisoformat(str(row.get("market_date")))
+    except ValueError:
+        return False
+    if market_date > end_date:
+        return False
+    return start_date is None or market_date >= start_date
+
+
+def eligible_policy_rows(summaries: list[dict[str, Any]], *, min_policy_n: int) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in summaries
+        if int(row.get("resolved") or 0) >= min_policy_n
+        and float_value(row.get("pnl")) > 0.0
+        and float_value(row.get("rr")) > 0.0
+    ]
+
+
+def render_window_overview(label: str, rows: list[dict[str, Any]], summaries: list[dict[str, Any]], eligible: list[dict[str, Any]]) -> list[str]:
+    resolved_rows = [row for row in rows if row.get("paper_pnl") is not None]
+    values = {
+        "window": label,
+        "snapshot_rows": len(rows),
+        "resolved_snapshot_rows": len(resolved_rows),
+        "generated_policies": len(summaries),
+        "eligible_positive_policies": len(eligible),
+        "sources": len({row.get("source") for row in rows}),
+        "market_dates": len({row.get("market_date") for row in resolved_rows}),
+    }
+    return render_kv_table(values)
+
+
+def family_rollup(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[model_family_label(str(row.get("model") or row.get("policy_name") or "missing"))].append(row)
+    output = []
+    for family, group in grouped.items():
+        output.append({
+            "family": family,
+            "policies": len(group),
+            "best_rr": max(float_value(row.get("rr")) for row in group),
+            "best_sharpe": max(float_value(row.get("sharpe")) for row in group),
+            "total_pnl": sum(float_value(row.get("pnl"), default=0.0) for row in group),
+            "avg_resolved": mean(float_or_none(row.get("resolved")) for row in group),
+        })
+    return sorted(output, key=lambda row: (-float_value(row.get("best_rr")), -float_value(row.get("total_pnl")), str(row.get("family"))))
+
+
+def model_family_label(value: str) -> str:
+    if "metar_hrrr_rich" in value or "metar+hrrr" in value:
+        return "metar_hrrr_rich"
+    if "hrrr_rich" in value:
+        return "hrrr_rich"
+    if "hrrr_v2" in value:
+        return "hrrr_v2_basic"
+    if "pm_us12" in value or "pm_active_us12" in value or value.startswith("obs_"):
+        return "obs_pm_us12"
+    if value.startswith("low_"):
+        return "low"
+    if value.startswith("global_"):
+        return "global"
+    return "other"
+
+
+def emerging_patterns(window_summaries: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    last_7 = {str(row.get("policy_name")): row for row in window_summaries.get("last_7", [])}
+    last_30 = {str(row.get("policy_name")): row for row in window_summaries.get("last_30", [])}
+    all_time = {str(row.get("policy_name")): row for row in window_summaries.get("all_time", [])}
+    rows = []
+    for name, recent in last_7.items():
+        rr_7 = float_value(recent.get("rr"))
+        rr_30 = float_value(last_30.get(name, {}).get("rr"), default=0.0)
+        rr_all = float_value(all_time.get(name, {}).get("rr"), default=0.0)
+        if rr_7 <= 0:
+            continue
+        improvement = rr_7 - max(rr_30, rr_all)
+        if improvement <= 0 and rr_7 < 0.25:
+            continue
+        rows.append({
+            "policy_name": name,
+            "family": model_family_label(str(recent.get("model") or name)),
+            "resolved_7": recent.get("resolved"),
+            "rr_7": recent.get("rr"),
+            "rr_30": last_30.get(name, {}).get("rr"),
+            "rr_all": all_time.get(name, {}).get("rr"),
+            "sharpe_7": recent.get("sharpe"),
+            "pnl_7": recent.get("pnl"),
+            "filters": recent.get("filters"),
+            "scope": recent.get("scope"),
+            "improvement": improvement,
+        })
+    return sorted(rows, key=lambda row: (-float_value(row.get("improvement")), -float_value(row.get("rr_7")), str(row.get("policy_name"))))
+
+
+def render_family_table(rows: list[dict[str, Any]]) -> list[str]:
+    return render_rows(("family", "policies", "best_rr", "best_sharpe", "total_pnl", "avg_resolved"), rows)
+
+
+def render_emerging_table(rows: list[dict[str, Any]]) -> list[str]:
+    return render_rows(("policy_name", "family", "resolved_7", "rr_7", "rr_30", "rr_all", "sharpe_7", "pnl_7", "filters", "scope", "improvement"), rows)
+
+
 def render_kv_table(values: dict[str, Any]) -> list[str]:
     lines = ["| metric | value |", "|---|---:|"]
     for key, value in values.items():
@@ -1214,12 +1584,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--market-family")
+    parser.add_argument("--us-high-temp-only", action="store_true", help="Restrict to US high-temperature station/model snapshots, excluding global and low-temp families.")
     parser.add_argument("--min-n", type=int, default=10)
     parser.add_argument("--min-policy-n", type=int)
     parser.add_argument("--top-n", type=int, default=12)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--include-consensus", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--policy-search", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--rolling-summary", action="store_true", help="Show compact 7-day/30-day/all-time policy replay summary.")
     return parser.parse_args()
 
 
@@ -1228,22 +1600,35 @@ def main() -> None:
     db = sqlite3.connect(str(args.db))
     db.row_factory = sqlite3.Row
     try:
-        base_rows = load_snapshot_rows(db, start_date=args.start_date, end_date=args.end_date, market_family=args.market_family)
+        base_rows = load_snapshot_rows(
+            db,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            market_family=args.market_family,
+            us_high_temp_only=args.us_high_temp_only,
+        )
     finally:
         db.close()
-    rows = list(base_rows)
-    if args.include_consensus:
-        rows = [*rows, *build_consensus_rows(rows)]
-    policy_summaries = None
-    if args.policy_search:
-        _, policy_summaries = build_policy_search_rows(base_rows)
-    report = render_report(
-        apply_modes(rows),
-        min_n=args.min_n,
-        top_n=args.top_n,
-        policy_summaries=policy_summaries,
-        min_policy_n=args.min_policy_n,
-    )
+    if args.rolling_summary:
+        report = render_rolling_policy_report(
+            base_rows,
+            min_policy_n=args.min_policy_n if args.min_policy_n is not None else args.min_n,
+            top_n=args.top_n,
+        )
+    else:
+        rows = list(base_rows)
+        if args.include_consensus:
+            rows = [*rows, *build_consensus_rows(rows)]
+        policy_summaries = None
+        if args.policy_search:
+            _, policy_summaries = build_policy_search_rows(base_rows)
+        report = render_report(
+            apply_modes(rows),
+            min_n=args.min_n,
+            top_n=args.top_n,
+            policy_summaries=policy_summaries,
+            min_policy_n=args.min_policy_n,
+        )
     if args.output:
         args.output.write_text(report)
     else:
