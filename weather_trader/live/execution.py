@@ -471,13 +471,6 @@ def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, 
             min_entry_price=config.min_entry_price,
         ),
         LiveStrategyPlan(
-            edge_core_live_strategy(config.edge_core_notional_usd),
-            (edge_core_policy_spec(config),),
-            config.edge_core_notional_usd,
-            None,
-            0.0,
-        ),
-        LiveStrategyPlan(
             moonshot_live_strategy(),
             (moonshot_policy_spec(), moonshot_edge_policy_spec(config)),
             MOONSHOT_NOTIONAL_USD,

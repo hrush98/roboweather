@@ -4,6 +4,7 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-06-09
 
+- Deactivated the live US high-temperature 15m consensus overlay after cap-aware live-style replay showed the policy was negative incrementally behind the no-tiny consensus core; the active US high-temperature stack now keeps the canonical no-tiny consensus core plus the small moonshot sleeve.
 - Deactivated live NGBoost BUY_YES after raw-snapshot replay showed weak overall and poor recent performance; raised the global low-temperature BUY_NO canary from $25 to $50 for the $0.05-$0.75 band and added a $5 `global_low_dynamic_mvp_tail_buy_no_entry_00_05_by_bucket_side_delay_first` tiny-tail BUY_NO sleeve.
 - Fixed live global low-temperature weather collection by routing non-US station IDs through the Celsius/global weather feature service. Recent live cycles were admitting EGLC/LFPB/RJTT/RKSI/VHHH/ZSPD markets but logging Unknown station errors from the US-only weather service before this change.
 

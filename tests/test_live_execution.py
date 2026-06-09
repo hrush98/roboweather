@@ -155,7 +155,6 @@ def test_live_strategy_plans_include_moonshot_and_global_low_canary_tail() -> No
 
     assert [plan.strategy.name for plan in plans] == [
         LIVE_POLICY_NAME,
-        EDGE_CORE_POLICY_NAME,
         MOONSHOT_POLICY_NAME,
         GLOBAL_LOW_TINY_TAIL_POLICY_NAME,
         GLOBAL_LOW_CANARY_POLICY_NAME,
@@ -165,20 +164,7 @@ def test_live_strategy_plans_include_moonshot_and_global_low_canary_tail() -> No
     assert consensus.strategy.max_notional_usd == pytest.approx(CONSENSUS_NOTIONAL_USD)
     assert consensus.policies[0].entry_price_max == pytest.approx(0.40)
 
-    edge_core = plans[1]
-    assert edge_core.target_notional_usd == pytest.approx(EDGE_CORE_NOTIONAL_USD)
-    assert edge_core.strategy.max_notional_usd == pytest.approx(EDGE_CORE_NOTIONAL_USD)
-    assert len(edge_core.policies) == 1
-    assert edge_core.policies[0].model_group == LIVE_MODEL_GROUP
-    assert edge_core.policies[0].model_name is None
-    assert edge_core.policies[0].obs_delay_bucket == EDGE_CORE_OBS_DELAY_BUCKET
-    assert edge_core.policies[0].edge_min is None
-    assert edge_core.policies[0].entry_price_min == pytest.approx(0.0)
-    assert edge_core.policies[0].entry_price_max == pytest.approx(0.40)
-    assert edge_core.selected_side is None
-    assert edge_core.min_entry_price == pytest.approx(0.0)
-
-    moonshot = plans[2]
+    moonshot = plans[1]
     assert moonshot.target_notional_usd == pytest.approx(2.0)
     assert moonshot.strategy.max_notional_usd == pytest.approx(2.0)
     assert moonshot.strategy.entry_price_min == pytest.approx(0.05)
@@ -193,7 +179,7 @@ def test_live_strategy_plans_include_moonshot_and_global_low_canary_tail() -> No
     assert moonshot.selected_side == TradeAction.BUY_NO
     assert moonshot.min_entry_price == pytest.approx(0.05)
 
-    tiny_tail = plans[3]
+    tiny_tail = plans[2]
     assert tiny_tail.target_notional_usd == pytest.approx(GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD)
     assert tiny_tail.strategy.max_notional_usd == pytest.approx(GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD)
     assert tiny_tail.strategy.market_family == MarketFamily.LOW_TEMP
@@ -211,7 +197,7 @@ def test_live_strategy_plans_include_moonshot_and_global_low_canary_tail() -> No
     assert tiny_tail.selected_side == TradeAction.BUY_NO
     assert tiny_tail.min_entry_price == pytest.approx(0.0)
 
-    global_low = plans[4]
+    global_low = plans[3]
     assert global_low.target_notional_usd == pytest.approx(GLOBAL_LOW_NOTIONAL_USD)
     assert global_low.strategy.max_notional_usd == pytest.approx(GLOBAL_LOW_NOTIONAL_USD)
     assert global_low.strategy.market_family == MarketFamily.LOW_TEMP
@@ -1110,7 +1096,13 @@ def test_live_position_uses_sizing_decision_and_persists_json(tmp_path: Path) ->
         LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live"),
         submitter=SizingSubmitter(EDGE_CORE_NOTIONAL_USD),
     )
-    plan = live_strategy_plans(LiveExecutionConfig())[1]
+    plan = live_execution.LiveStrategyPlan(
+        live_execution.edge_core_live_strategy(EDGE_CORE_NOTIONAL_USD),
+        (edge_core_policy_spec(LiveExecutionConfig()),),
+        EDGE_CORE_NOTIONAL_USD,
+        None,
+        0.0,
+    )
     source = ResearchPolicyPosition(
         timestamp="2026-05-25T18:00:00+00:00",
         policy_name=EDGE_CORE_POLICY_NAME,
