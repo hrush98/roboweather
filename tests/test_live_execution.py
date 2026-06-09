@@ -32,25 +32,28 @@ from weather_trader.live.execution import (
     EDGE_CORE_NOTIONAL_USD,
     EDGE_CORE_POLICY_NAME,
     GLOBAL_LOW_CANARY_POLICY_NAME,
+    GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
     GLOBAL_LOW_ENTRY_PRICE_MAX,
     GLOBAL_LOW_LOCAL_DECISION_END,
     GLOBAL_LOW_LOCAL_DECISION_START,
     GLOBAL_LOW_MODEL_GROUP,
     GLOBAL_LOW_NOTIONAL_USD,
+    GLOBAL_LOW_TINY_TAIL_ENTRY_PRICE_MAX,
+    GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD,
+    GLOBAL_LOW_TINY_TAIL_POLICY_NAME,
     GLOBAL_LOW_STATIONS,
     LIVE_MODEL_GROUP,
     DEFAULT_LIVE_ENTRY_PRICE_MAX,
     LIVE_POLICY_NAME,
     MOONSHOT_MIN_EDGE,
     MOONSHOT_POLICY_NAME,
-    NGBOOST_BEST_BUY_YES_NOTIONAL_USD,
-    NGBOOST_BEST_BUY_YES_POLICY_NAME,
     LiveExecutionConfig,
     LiveExecutionEngine,
     LiveWeatherFeatureService,
     edge_core_policy_spec,
     default_live_strategy,
     global_low_canary_policy_spec,
+    global_low_tiny_tail_policy_spec,
     live_policy_spec,
     live_strategy_plans,
     moonshot_edge_policy_spec,
@@ -147,14 +150,14 @@ def test_live_execution_config_defaults_to_fifty_cent_entry_cap() -> None:
     assert LiveExecutionConfig().resting_fallback_ttl_seconds == pytest.approx(120.0)
 
 
-def test_live_strategy_plans_include_moonshot_ngboost_and_global_low_canary() -> None:
+def test_live_strategy_plans_include_moonshot_and_global_low_canary_tail() -> None:
     plans = live_strategy_plans(LiveExecutionConfig(max_entry_price=0.40))
 
     assert [plan.strategy.name for plan in plans] == [
         LIVE_POLICY_NAME,
         EDGE_CORE_POLICY_NAME,
         MOONSHOT_POLICY_NAME,
-        NGBOOST_BEST_BUY_YES_POLICY_NAME,
+        GLOBAL_LOW_TINY_TAIL_POLICY_NAME,
         GLOBAL_LOW_CANARY_POLICY_NAME,
     ]
     consensus = plans[0]
@@ -190,20 +193,23 @@ def test_live_strategy_plans_include_moonshot_ngboost_and_global_low_canary() ->
     assert moonshot.selected_side == TradeAction.BUY_NO
     assert moonshot.min_entry_price == pytest.approx(0.05)
 
-    ngboost = plans[3]
-    assert ngboost.target_notional_usd == pytest.approx(NGBOOST_BEST_BUY_YES_NOTIONAL_USD)
-    assert ngboost.strategy.max_notional_usd == pytest.approx(NGBOOST_BEST_BUY_YES_NOTIONAL_USD)
-    assert ngboost.strategy.strategy_bucket == StrategyBucket.BEST_BUCKET
-    assert len(ngboost.policies) == 1
-    assert ngboost.policies[0].model_name == NGBOOST_MODEL
-    assert ngboost.policies[0].strategy_bucket == StrategyBucket.BEST_BUCKET
-    assert ngboost.policies[0].entry_price_min == pytest.approx(0.05)
-    assert ngboost.policies[0].entry_price_max == pytest.approx(0.40)
-    assert ngboost.policies[0].local_decision_start == "12:00"
-    assert ngboost.policies[0].local_decision_end == "15:00"
-    assert ngboost.selected_side == TradeAction.BUY_YES
-    assert ngboost.min_entry_price == pytest.approx(0.05)
-
+    tiny_tail = plans[3]
+    assert tiny_tail.target_notional_usd == pytest.approx(GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD)
+    assert tiny_tail.strategy.max_notional_usd == pytest.approx(GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD)
+    assert tiny_tail.strategy.market_family == MarketFamily.LOW_TEMP
+    assert tiny_tail.strategy.strategy_bucket == StrategyBucket.TAIL
+    assert tiny_tail.strategy.model_group == GLOBAL_LOW_MODEL_GROUP
+    assert len(tiny_tail.policies) == 1
+    assert tiny_tail.policies[0].model_group == GLOBAL_LOW_MODEL_GROUP
+    assert tiny_tail.policies[0].strategy_bucket == StrategyBucket.TAIL
+    assert tiny_tail.policies[0].selected_side == TradeAction.BUY_NO
+    assert tiny_tail.policies[0].station_allow_set == GLOBAL_LOW_STATIONS
+    assert tiny_tail.policies[0].entry_price_min == pytest.approx(0.0)
+    assert tiny_tail.policies[0].entry_price_max == pytest.approx(GLOBAL_LOW_TINY_TAIL_ENTRY_PRICE_MAX)
+    assert tiny_tail.policies[0].local_decision_start == GLOBAL_LOW_LOCAL_DECISION_START
+    assert tiny_tail.policies[0].local_decision_end == GLOBAL_LOW_LOCAL_DECISION_END
+    assert tiny_tail.selected_side == TradeAction.BUY_NO
+    assert tiny_tail.min_entry_price == pytest.approx(0.0)
 
     global_low = plans[4]
     assert global_low.target_notional_usd == pytest.approx(GLOBAL_LOW_NOTIONAL_USD)
@@ -214,14 +220,14 @@ def test_live_strategy_plans_include_moonshot_ngboost_and_global_low_canary() ->
     assert global_low.policies[0].model_group == GLOBAL_LOW_MODEL_GROUP
     assert global_low.policies[0].selected_side == TradeAction.BUY_NO
     assert global_low.policies[0].station_allow_set == GLOBAL_LOW_STATIONS
-    assert global_low.policies[0].entry_price_min == pytest.approx(0.0)
+    assert global_low.policies[0].entry_price_min == pytest.approx(GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN)
     assert global_low.policies[0].entry_price_max == pytest.approx(GLOBAL_LOW_ENTRY_PRICE_MAX)
     assert global_low.strategy.local_decision_start == GLOBAL_LOW_LOCAL_DECISION_START
     assert global_low.strategy.local_decision_end == GLOBAL_LOW_LOCAL_DECISION_END
     assert global_low.policies[0].local_decision_start == GLOBAL_LOW_LOCAL_DECISION_START
     assert global_low.policies[0].local_decision_end == GLOBAL_LOW_LOCAL_DECISION_END
     assert global_low.selected_side == TradeAction.BUY_NO
-    assert global_low.min_entry_price == pytest.approx(0.0)
+    assert global_low.min_entry_price == pytest.approx(GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN)
 
 
 def test_consensus_requires_same_side_market_bucket_and_delay(tmp_path: Path) -> None:
@@ -446,6 +452,108 @@ def test_global_low_canary_policy_spec_filters_buy_no_cap_window_and_bucket_side
     assert selected[0]["selected_no_ask"] == pytest.approx(0.75)
 
 
+def test_global_low_tiny_tail_policy_spec_filters_buy_no_tiny_tail_window(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    spec = global_low_tiny_tail_policy_spec()
+    evaluator = ResearchPolicyEvaluator(store, (spec,))
+    consensus = evaluator._build_consensus(
+        [
+            _snapshot(
+                GLOBAL_LOW_DYNAMIC_MODEL,
+                id=1,
+                station="EGLC",
+                market_family="LOW_TEMP",
+                strategy_bucket=str(StrategyBucket.TAIL),
+                selected_no_ask=0.05,
+                selected_bucket="10-11C",
+                decision_time_local="2026-06-05T00:30:00+01:00",
+            ),
+            _snapshot(
+                GLOBAL_LOW_MVP_MODEL,
+                id=2,
+                station="EGLC",
+                market_family="LOW_TEMP",
+                strategy_bucket=str(StrategyBucket.TAIL),
+                selected_no_ask=0.05,
+                selected_bucket="10-11C",
+                decision_time_local="2026-06-05T00:30:00+01:00",
+            ),
+            _snapshot(
+                GLOBAL_LOW_DYNAMIC_MODEL,
+                id=3,
+                station="EGLC",
+                market_family="LOW_TEMP",
+                strategy_bucket=str(StrategyBucket.TAIL),
+                selected_no_ask=0.06,
+                selected_bucket="12-13C",
+                decision_time_local="2026-06-05T01:30:00+01:00",
+            ),
+            _snapshot(
+                GLOBAL_LOW_MVP_MODEL,
+                id=4,
+                station="EGLC",
+                market_family="LOW_TEMP",
+                strategy_bucket=str(StrategyBucket.TAIL),
+                selected_no_ask=0.06,
+                selected_bucket="12-13C",
+                decision_time_local="2026-06-05T01:30:00+01:00",
+            ),
+            _snapshot(
+                GLOBAL_LOW_DYNAMIC_MODEL,
+                id=5,
+                station="EGLC",
+                market_family="LOW_TEMP",
+                strategy_bucket=str(StrategyBucket.TAIL),
+                selected_side="BUY_YES",
+                selected_yes_ask=0.04,
+                selected_bucket="14-15C",
+                decision_time_local="2026-06-05T01:30:00+01:00",
+            ),
+            _snapshot(
+                GLOBAL_LOW_MVP_MODEL,
+                id=6,
+                station="EGLC",
+                market_family="LOW_TEMP",
+                strategy_bucket=str(StrategyBucket.TAIL),
+                selected_side="BUY_YES",
+                selected_yes_ask=0.04,
+                selected_bucket="14-15C",
+                decision_time_local="2026-06-05T01:30:00+01:00",
+            ),
+            _snapshot(
+                GLOBAL_LOW_DYNAMIC_MODEL,
+                id=7,
+                station="WSSS",
+                market_family="LOW_TEMP",
+                strategy_bucket=str(StrategyBucket.TAIL),
+                selected_no_ask=0.04,
+                selected_bucket="16-17C",
+                decision_time_local="2026-06-05T01:30:00+08:00",
+            ),
+            _snapshot(
+                GLOBAL_LOW_MVP_MODEL,
+                id=8,
+                station="WSSS",
+                market_family="LOW_TEMP",
+                strategy_bucket=str(StrategyBucket.TAIL),
+                selected_no_ask=0.04,
+                selected_bucket="16-17C",
+                decision_time_local="2026-06-05T01:30:00+08:00",
+            ),
+        ]
+    )
+
+    filtered = evaluator._candidates_for_policy(spec, [], consensus)
+    selected = evaluator._first_by_scope(spec, filtered)
+
+    assert len(selected) == 1
+    assert selected[0]["station"] == "EGLC"
+    assert selected[0]["market_family"] == "LOW_TEMP"
+    assert selected[0]["strategy_bucket"] == str(StrategyBucket.TAIL)
+    assert selected[0]["selected_side"] == "BUY_NO"
+    assert selected[0]["selected_bucket"] == "10-11C"
+    assert selected[0]["selected_no_ask"] == pytest.approx(0.05)
+
 def test_live_market_admission_follows_active_strategy_plans() -> None:
     plans = live_strategy_plans(LiveExecutionConfig())
     us_high = _candidate_market("us-high", 72, 73, "yes-us", "no-us")
@@ -600,27 +708,30 @@ def test_live_build_signal_preserves_low_temp_fields(tmp_path: Path) -> None:
     assert signal.hrrr_remaining_max == pytest.approx(59.0)
 
 
-def test_live_build_candidates_includes_ngboost_best_bucket(tmp_path: Path) -> None:
+def test_live_build_candidates_includes_global_low_tiny_tail_consensus(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
     engine = LiveExecutionEngine(
         store,
         LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live"),
     )
-    engine.fair_value_engines = [StaticFairValueEngine()]
-    as_of_utc = datetime(2026, 5, 20, 16, 30, tzinfo=timezone.utc)
+    engine.fair_value_engines = [
+        StaticFairValueEngine(GLOBAL_LOW_DYNAMIC_MODEL),
+        StaticFairValueEngine(GLOBAL_LOW_MVP_MODEL),
+    ]
+    as_of_utc = datetime(2026, 5, 20, 0, 30, tzinfo=timezone.utc)
     weather = StationWeatherState(
-        station="KATL",
+        station="EGLC",
         local_date=date(2026, 5, 20),
-        latest_obs_time="2026-05-20T16:15:00+00:00",
+        latest_obs_time="2026-05-20T00:15:00+00:00",
         latest_obs_age_minutes=15.0,
-        current_temp=74.0,
-        high_so_far=75.0,
-        low_so_far=61.0,
-        hour_local=12,
+        current_temp=11.0,
+        high_so_far=14.0,
+        low_so_far=10.5,
+        hour_local=1,
         day_of_year=140,
-        temp_change_1h=1.0,
-        temp_change_3h=3.0,
-        dewpoint=60.0,
+        temp_change_1h=-1.0,
+        temp_change_3h=-2.0,
+        dewpoint=8.0,
         wind_speed=4.0,
         wind_dir_sin=0.0,
         wind_dir_cos=1.0,
@@ -631,32 +742,46 @@ def test_live_build_candidates_includes_ngboost_best_bucket(tmp_path: Path) -> N
         stale=False,
     )
     markets = [
-        _candidate_market("market-1", 72, 73, "yes-1", "no-1"),
-        _candidate_market("market-2", 74, 75, "yes-2", "no-2"),
-        _candidate_market("market-3", 76, 77, "yes-3", "no-3"),
+        _candidate_market(
+            "low-market-1",
+            10,
+            11,
+            "yes-low-1",
+            "no-low-1",
+            station="EGLC",
+            city="London",
+            market_family=MarketFamily.LOW_TEMP,
+        ),
+        _candidate_market(
+            "low-market-2",
+            12,
+            13,
+            "yes-low-2",
+            "no-low-2",
+            station="EGLC",
+            city="London",
+            market_family=MarketFamily.LOW_TEMP,
+        ),
     ]
     books = {
-        "yes-1": _book("yes-1", ask=0.11),
-        "no-1": _book("no-1", ask=0.82),
-        "yes-2": _book("yes-2", ask=0.13),
-        "no-2": _book("no-2", ask=0.80),
-        "yes-3": _book("yes-3", ask=0.12),
-        "no-3": _book("no-3", ask=0.85),
+        "yes-low-1": _book("yes-low-1", ask=0.96),
+        "no-low-1": _book("no-low-1", ask=0.04),
+        "yes-low-2": _book("yes-low-2", ask=0.90),
+        "no-low-2": _book("no-low-2", ask=0.10),
     }
 
-    candidates = engine._build_candidates(markets, books, {"KATL": weather}, as_of_utc, errors=[])
+    candidates = engine._build_candidates(markets, books, {"EGLC": weather}, as_of_utc, errors=[])
 
-    ngboost = [candidate for candidate in candidates if candidate.plan.strategy.name == NGBOOST_BEST_BUY_YES_POLICY_NAME]
-    assert len(ngboost) == 1
-    position = ngboost[0].position
-    assert position.model_group == NGBOOST_MODEL
-    assert position.strategy_bucket == StrategyBucket.BEST_BUCKET
-    assert position.selected_side == TradeAction.BUY_YES
-    assert position.selected_market_id == "market-2"
-    assert position.selected_bucket == "74-75F"
-    assert position.entry_price == pytest.approx(0.13)
-    assert position.entry_edge == pytest.approx(0.31)
-
+    tail = [candidate for candidate in candidates if candidate.plan.strategy.name == GLOBAL_LOW_TINY_TAIL_POLICY_NAME]
+    assert len(tail) == 1
+    position = tail[0].position
+    assert position.model_group == GLOBAL_LOW_MODEL_GROUP
+    assert position.strategy_bucket == StrategyBucket.TAIL
+    assert position.selected_side == TradeAction.BUY_NO
+    assert position.selected_market_id == "low-market-1"
+    assert position.selected_bucket == "10-11F"
+    assert position.entry_price == pytest.approx(0.04)
+    assert position.entry_edge == pytest.approx(0.08)
 
 def test_live_position_insert_is_idempotent_by_scope(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
@@ -845,13 +970,20 @@ class FakeSubmitter:
 
 
 class StaticFairValueEngine:
-    model_name = NGBOOST_MODEL
+    def __init__(self, model_name: str = NGBOOST_MODEL) -> None:
+        self.model_name = model_name
 
     def supports_market_family(self, market_family: str | MarketFamily) -> bool:
-        return str(market_family) == str(MarketFamily.HIGH_TEMP)
+        return str(market_family) in {str(MarketFamily.HIGH_TEMP), str(MarketFamily.LOW_TEMP)}
 
     def price_markets(self, markets: list[MarketSnapshot], weather: StationWeatherState) -> dict[str, FairValueResult]:
-        fair_yes_by_market = {"market-1": 0.20, "market-2": 0.44, "market-3": 0.28}
+        fair_yes_by_market = {
+            "market-1": 0.20,
+            "market-2": 0.44,
+            "market-3": 0.28,
+            "low-market-1": 0.88,
+            "low-market-2": 0.83,
+        }
         return {
             market.market_id: FairValueResult(
                 fair_yes=fair_yes_by_market[market.market_id],

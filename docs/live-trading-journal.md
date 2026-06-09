@@ -14,9 +14,9 @@ Updated: 2026-06-09
 | --- | --- | ---: | ---: | --- |
 | Consensus no-tiny | mixed | $50 BUY_NO; $25 BUY_YES | <= $0.50 | Canonical promoted US high-temp core. Selected by the raw-snapshot promotion report and mapped to `pm_us12_bucket_consensus_hc_late_no_tiny_by_bucket_side_delay_first`. |
 | Consensus 15m late core | mixed | $50 BUY_NO; $25 BUY_YES | <= $0.50 | Secondary bucket-consensus overlay at `pm_us12_bucket_consensus_hc_15m_late_entry_00_50_by_bucket_side_delay_first`. Kept live alongside the canonical consensus core. |
-| NGBoost BUY_YES | BUY_YES | $10 | <= $0.50 | Dedicated BUY_YES allocation. Keep smaller than core NO until live evidence improves. |
-| Moonshot | BUY_NO | $2 | <= $0.50 | Small tail allocation. Original tiny moonshot remains constrained by its tighter policy price rules. |
-| Global low-temp canary | BUY_NO | $25 | <= $0.75 | Live canary only for EGLC, LFPB, RJTT, RKSI, VHHH, and ZSPD low-temperature markets, station-local 00:30-05:00. Not core sizing. |
+| Moonshot | BUY_NO | $2 | <= $0.50 | Small US high-temperature tail allocation. Original tiny moonshot remains constrained by its tighter policy price rules. |
+| Global low-temp canary | BUY_NO | $50 | $0.05-$0.75 | Primary global low-temperature BUY_NO canary for EGLC, LFPB, RJTT, RKSI, VHHH, and ZSPD, station-local 00:30-05:00. |
+| Global low-temp tiny tail | BUY_NO | $5 | <= $0.05 | Asymmetric global low-temperature tail sleeve on the same station/window set, mapped to `global_low_dynamic_mvp_tail_buy_no_entry_00_05_by_bucket_side_delay_first`. |
 
 ### Risk caps
 
@@ -31,7 +31,7 @@ Updated: 2026-06-09
 
 ### Execution rules
 
-- US high-temperature live entries are capped at `<= 0.50` because historical replay showed materially better return on risk below this price. The global low-temp canary is BUY_NO-only with a separate `<= 0.75` cap and station-local `00:30-05:00` decision window.
+- US high-temperature live entries are capped at `<= 0.50` because historical replay showed materially better return on risk below this price. The global low-temp canary is BUY_NO-only with a `0.05-0.75` entry band and station-local `00:30-05:00` decision window; the global low tiny-tail sleeve covers `<= 0.05`.
 - Orders use FAK first, with retry handling for transient depth/order-version failures. Explicit partial fills continue into a 120-second resting remainder for the leftover notional. Matched/filled responses with returned fill amounts are treated as partial only when the unfilled remainder exceeds $3.
 - Any live strategy may place a single resting fallback limit order after eligible FAK failure paths.
 - Resting fallback TTL is 120 seconds and targets the remaining notional after the FAK retry path; keep whatever fills before the cancel.
@@ -65,22 +65,22 @@ The system uses fixed per-policy targets selected by the raw-snapshot promotion 
 
 - Consensus no-tiny: $50 BUY_NO and $25 BUY_YES for the canonical US high-temp live core.
 - Consensus 15m late core: $50 BUY_NO / $25 BUY_YES as the bucket-consensus overlay that stays live with the core family.
-- NGBoost BUY_YES: $10 because it is the dedicated BUY_YES strategy but remains smaller than core NO sizing.
-- Moonshot: $2 because tail entries are high variance and should not drive daily risk.
-- Global low-temp canary: $25 BUY_NO-only with entry cap `<= 0.75` and station-local `00:30-05:00`, using the existing live FAK, retry, and 120-second resting fallback engine with no added depth gate.
+- Moonshot: $2 because US high-temperature tail entries are high variance and should not drive daily risk.
+- Global low-temp canary: $50 BUY_NO-only with entry band `0.05-0.75` and station-local `00:30-05:00`, using the existing live FAK, retry, and 120-second resting fallback engine with no added depth gate.
+- Global low-temp tiny tail: $5 BUY_NO-only with entry cap `<= 0.05` and the same station-local `00:30-05:00` window.
 
 The max order cap is set to $50 so the largest intended order cannot exceed the current primary-policy size.
 
 
 ### Potential low-temp expansion shortlist
 
-Deep raw-snapshot replay on 2026-06-08 showed low-temperature markets as the strongest non-live expansion candidate so far. The broad global low BUY_NO overlay is now a $25 live canary; the remaining low-temp variants stay research-only until they pass de-duplicated replay, liquidity checks, and live-market availability review.
+Deep raw-snapshot replay showed low-temperature markets as the strongest expansion candidate so far. The broad global low BUY_NO overlay is now a $50 live canary for the `0.05-0.75` band, and the tiny-tail BUY_NO slice is live at $5 for `<= 0.05`. Other low-temp variants stay research-only until they pass de-duplicated replay, liquidity checks, and live-market availability review.
 
 Candidate shortlist:
 
-- `global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first`: promoted to live canary at $25, BUY_NO-only, `<= $0.75`, station-local `00:30-05:00`, using existing execution and risk controls. Earlier all-day replay showed 36 resolved, 91.7% win rate, about +11.44 PnL, R/R about 0.53, Sharpe about 0.99 across 6 stations from 2026-05-30 through 2026-06-05. A later raw-snapshot window replay favored `00:30-05:00` with 36 resolved, 36-0, about +15.19 PnL, R/R about 0.73.
+- `global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first`: promoted to live canary and now sized at $50, BUY_NO-only, `$0.05-$0.75`, station-local `00:30-05:00`, using existing execution and risk controls. Earlier all-day replay showed 36 resolved, 91.7% win rate, about +11.44 PnL, R/R about 0.53, Sharpe about 0.99 across 6 stations from 2026-05-30 through 2026-06-05. A later raw-snapshot window replay favored `00:30-05:00` with 36 resolved, 36-0, about +15.19 PnL, R/R about 0.73.
 - `global_low_dynamic_mvp_hc_buy_no_10m_entry_50_75_by_bucket_side_delay_first`: more constrained high-conviction BUY_NO candidate; 11 resolved, 100% win rate, about +4.25 PnL, R/R about 0.63, Sharpe about 5.22. Needs more sample and execution validation.
-- `global_low_dynamic_mvp_tail_buy_no_entry_00_05_by_bucket_side_delay_first`: strongest tail niche; 24 resolved, 100% win rate, about +23.33 PnL, very high R/R due to sub-5-cent entries. This is a tiny-entry tail allocation candidate, not a core sizing candidate.
+- `global_low_dynamic_mvp_tail_buy_no_entry_00_05_by_bucket_side_delay_first`: strongest tail niche; 24 resolved, 100% win rate, about +23.33 PnL, very high R/R due to sub-5-cent entries. Now live as a $5 tiny-entry tail allocation, not a core sizing candidate.
 - `low_pm_us12_consensus_hc_buy_no_entry_50_75_by_bucket_side_delay_first`: US low-temp consensus BUY_NO candidate; 23 resolved, 100% win rate, about +8.78 PnL, R/R about 0.62. Current replay flags execution/liquidity weakness, so do not promote without book-depth confirmation.
 
 Working interpretation: low-temp BUY_NO overlays appear to be finding overpriced YES buckets. Global high-temp consensus did not transfer cleanly; keep global high research-only while prioritizing low-temp replay.
@@ -95,14 +95,15 @@ The 120-second TTL is a deliberate compromise: weather does not normally reprice
 
 ### 2026-06-09
 
-- Recent live cycles showed repeated global canary weather errors: Unknown station for EGLC, LFPB, RJTT, RKSI, VHHH, and ZSPD. Live execution now routes non-US station IDs to the Celsius/global weather feature service, matching the research collector behavior, so the $25 global low-temp canary can build station-local low-temperature signals instead of skipping those stations.
+- Recent live cycles showed repeated global canary weather errors: Unknown station for EGLC, LFPB, RJTT, RKSI, VHHH, and ZSPD. Live execution now routes non-US station IDs to the Celsius/global weather feature service, matching the research collector behavior, so global low-temperature strategies can build station-local low-temperature signals instead of skipping those stations.
+- Deactivated NGBoost BUY_YES after the standardized raw-snapshot replay showed weak overall and poor recent performance. Reallocated the live risk slot to global low-temperature BUY_NO: the broad canary is now $50 for `$0.05-$0.75` entries and the tiny-tail `<= $0.05` sleeve is live at $5.
 
 ### 2026-06-08
 
 - Raw-snapshot promotion is now the standard gate: `scripts/live_policy_promotion_report.py` replays raw snapshots, reconstructs the live scope, and classifies candidates as PROMOTE, CANARY, DEACTIVATE, or RESEARCH_ONLY. Live policy changes should be decided from that report, not from stale materialized policy rows.
 - The canonical US high-temp live core is now `pm_us12_bucket_consensus_hc_late_no_tiny_by_bucket_side_delay_first`. The 15m bucket-consensus policy `pm_us12_bucket_consensus_hc_15m_late_entry_00_50_by_bucket_side_delay_first` stays live as the secondary consensus overlay. The old dynamic core has been deactivated in the live registry.
-- NGBoost BUY_YES remains live at $10. Moonshot remains at $2. Global low-temp BUY_NO stays live as a $25 canary on EGLC, LFPB, RJTT, RKSI, VHHH, and ZSPD with station-local `00:30-05:00` timing and `<= $0.75` entry cap.
-- Deep raw-snapshot niche replay across US high, global high, global low, and US low identified low-temperature BUY_NO overlays as the strongest expansion candidates so far. The leading broad candidate, `global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first`, is now live as a $25 BUY_NO-only canary with `<= $0.75` entry cap. It uses the existing FAK, retry, and resting fallback path with no added depth gate; promotion toward $50 depends on later live PnL and resolved behavior.
+- NGBoost BUY_YES was later deactivated on 2026-06-09 after raw-snapshot replay weakened. Moonshot remains at $2. Global low-temp BUY_NO was later raised to a $50 canary on EGLC, LFPB, RJTT, RKSI, VHHH, and ZSPD with station-local `00:30-05:00` timing and `$0.05-$0.75` entry band, plus a $5 tiny-tail sleeve for `<= $0.05`.
+- Deep raw-snapshot niche replay across US high, global high, global low, and US low identified low-temperature BUY_NO overlays as the strongest expansion candidates so far. The leading broad candidate, `global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first`, was promoted as a BUY_NO-only canary with `<= $0.75` entry cap and later raised to $50 with the `<= $0.05` tail slice split out. It uses the existing FAK, retry, and resting fallback path with no added depth gate.
 - Global high-temperature consensus did not transfer cleanly from US high temp; global high remains research-only.
 
 ### 2026-06-03

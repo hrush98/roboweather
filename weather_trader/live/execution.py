@@ -56,6 +56,7 @@ EDGE_CORE_POLICY_NAME = "pm_us12_bucket_consensus_hc_15m_late_entry_00_50_by_buc
 MOONSHOT_POLICY_NAME = "pm_us12_dynamic_tuned_hc_late_entry_05_10_buy_no_by_bucket_side_delay_first"
 NGBOOST_BEST_BUY_YES_POLICY_NAME = "pm_us12_ngboost_best_bucket_late_buy_yes_medium_by_bucket_side_delay_first"
 GLOBAL_LOW_CANARY_POLICY_NAME = "global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first"
+GLOBAL_LOW_TINY_TAIL_POLICY_NAME = "global_low_dynamic_mvp_tail_buy_no_entry_00_05_by_bucket_side_delay_first"
 LIVE_MODEL_GROUP = "obs_bucket_consensus"
 GLOBAL_LOW_MODEL_GROUP = "global_low_dynamic_mvp"
 DEFAULT_LIVE_ENTRY_PRICE_MAX = 0.50
@@ -66,14 +67,16 @@ EDGE_CORE_NOTIONAL_USD = 50.0
 MOONSHOT_MIN_EDGE = 0.90
 MOONSHOT_NOTIONAL_USD = 2.0
 NGBOOST_BEST_BUY_YES_NOTIONAL_USD = 10.0
-GLOBAL_LOW_NOTIONAL_USD = 25.0
+GLOBAL_LOW_NOTIONAL_USD = 50.0
+GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD = 5.0
+GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN = 0.05
 GLOBAL_LOW_ENTRY_PRICE_MAX = 0.75
+GLOBAL_LOW_TINY_TAIL_ENTRY_PRICE_MAX = 0.05
 GLOBAL_LOW_LOCAL_DECISION_START = "00:30"
 GLOBAL_LOW_LOCAL_DECISION_END = "05:00"
 LIVE_MODEL_PATHS = (
     MODELS_DIR / f"{DYNAMIC_TUNED_MODEL}.joblib",
     MODELS_DIR / f"{CATBOOST_MODEL}.joblib",
-    MODELS_DIR / f"{NGBOOST_MODEL}.joblib",
     MODELS_DIR / f"{GLOBAL_LOW_DYNAMIC_MODEL}.joblib",
     MODELS_DIR / f"{GLOBAL_LOW_MVP_MODEL}.joblib",
 )
@@ -306,14 +309,42 @@ def global_low_canary_live_strategy(max_notional_usd: float = GLOBAL_LOW_NOTIONA
         market_family=MarketFamily.LOW_TEMP,
         local_decision_start=GLOBAL_LOW_LOCAL_DECISION_START,
         local_decision_end=GLOBAL_LOW_LOCAL_DECISION_END,
-        entry_price_min=0.0,
+        entry_price_min=GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
         uniqueness_key_mode="station_date_bucket_side_obs_delay",
         max_notional_usd=max_notional_usd,
         raw_payload={
             "report": {
                 "role": "live_canary",
                 "target_notional_usd": max_notional_usd,
+                "entry_price_min": GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
                 "entry_price_max": GLOBAL_LOW_ENTRY_PRICE_MAX,
+                "local_decision_start": GLOBAL_LOW_LOCAL_DECISION_START,
+                "local_decision_end": GLOBAL_LOW_LOCAL_DECISION_END,
+                "selected_side": str(TradeAction.BUY_NO),
+            }
+        },
+    )
+
+
+def global_low_tiny_tail_live_strategy(max_notional_usd: float = GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD) -> LiveStrategy:
+    return LiveStrategy(
+        name=GLOBAL_LOW_TINY_TAIL_POLICY_NAME,
+        active=True,
+        source="consensus",
+        model_group=GLOBAL_LOW_MODEL_GROUP,
+        model_names=[GLOBAL_LOW_DYNAMIC_MODEL, GLOBAL_LOW_MVP_MODEL],
+        strategy_bucket=StrategyBucket.TAIL,
+        market_family=MarketFamily.LOW_TEMP,
+        local_decision_start=GLOBAL_LOW_LOCAL_DECISION_START,
+        local_decision_end=GLOBAL_LOW_LOCAL_DECISION_END,
+        entry_price_min=0.0,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+        max_notional_usd=max_notional_usd,
+        raw_payload={
+            "report": {
+                "role": "live_tiny_tail",
+                "target_notional_usd": max_notional_usd,
+                "entry_price_max": GLOBAL_LOW_TINY_TAIL_ENTRY_PRICE_MAX,
                 "local_decision_start": GLOBAL_LOW_LOCAL_DECISION_START,
                 "local_decision_end": GLOBAL_LOW_LOCAL_DECISION_END,
                 "selected_side": str(TradeAction.BUY_NO),
@@ -407,8 +438,24 @@ def global_low_canary_policy_spec(config: LiveExecutionConfig) -> ResearchPolicy
         model_group=GLOBAL_LOW_MODEL_GROUP,
         selected_side=TradeAction.BUY_NO,
         station_allow_set=GLOBAL_LOW_STATIONS,
-        entry_price_min=0.0,
+        entry_price_min=GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
         entry_price_max=config.global_low_entry_price_max,
+        local_decision_start=GLOBAL_LOW_LOCAL_DECISION_START,
+        local_decision_end=GLOBAL_LOW_LOCAL_DECISION_END,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+    )
+
+
+def global_low_tiny_tail_policy_spec() -> ResearchPolicySpec:
+    return ResearchPolicySpec(
+        GLOBAL_LOW_TINY_TAIL_POLICY_NAME,
+        "consensus",
+        StrategyBucket.TAIL,
+        model_group=GLOBAL_LOW_MODEL_GROUP,
+        selected_side=TradeAction.BUY_NO,
+        station_allow_set=GLOBAL_LOW_STATIONS,
+        entry_price_min=0.0,
+        entry_price_max=GLOBAL_LOW_TINY_TAIL_ENTRY_PRICE_MAX,
         local_decision_start=GLOBAL_LOW_LOCAL_DECISION_START,
         local_decision_end=GLOBAL_LOW_LOCAL_DECISION_END,
         uniqueness_key_mode="station_date_bucket_side_obs_delay",
@@ -438,18 +485,18 @@ def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, 
             config.min_entry_price,
         ),
         LiveStrategyPlan(
-            ngboost_best_buy_yes_live_strategy(),
-            (ngboost_best_buy_yes_policy_spec(config),),
-            NGBOOST_BEST_BUY_YES_NOTIONAL_USD,
-            TradeAction.BUY_YES,
-            config.min_entry_price,
+            global_low_tiny_tail_live_strategy(),
+            (global_low_tiny_tail_policy_spec(),),
+            GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD,
+            TradeAction.BUY_NO,
+            0.0,
         ),
         LiveStrategyPlan(
             global_low_canary_live_strategy(config.global_low_notional_usd),
             (global_low_canary_policy_spec(config),),
             config.global_low_notional_usd,
             TradeAction.BUY_NO,
-            0.0,
+            GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
         ),
     )
 
