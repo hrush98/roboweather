@@ -1720,6 +1720,18 @@ class ExecutionStore:
         rows = self.connection.execute(f"select * from live_strategies {where} order by name").fetchall()
         return [dict(row) for row in rows]
 
+    def deactivate_live_strategies_except(self, active_names: set[str]) -> int:
+        if not active_names:
+            cursor = self.connection.execute("update live_strategies set active = 0 where active = 1")
+        else:
+            placeholders = ",".join("?" for _ in active_names)
+            cursor = self.connection.execute(
+                f"update live_strategies set active = 0 where active = 1 and name not in ({placeholders})",
+                tuple(sorted(active_names)),
+            )
+        self.connection.commit()
+        return int(cursor.rowcount)
+
     def insert_live_policy_position(self, position: LivePolicyPosition) -> int | None:
         data = dataclass_to_jsonable(position)
         raw_payload = {**data, **(position.raw_json or {})}

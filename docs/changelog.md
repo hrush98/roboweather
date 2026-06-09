@@ -2,8 +2,13 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-06-09
+
+- Fixed live global low-temperature weather collection by routing non-US station IDs through the Celsius/global weather feature service. Recent live cycles were admitting EGLC/LFPB/RJTT/RKSI/VHHH/ZSPD markets but logging Unknown station errors from the US-only weather service before this change.
+
 ## 2026-06-08
 
+- Added `scripts/live_policy_promotion_report.py` as the standardized raw-snapshot gatekeeper for US high-temperature live policy promotion. It replays from `prediction_snapshots`, ignores stale `research_policy_positions`, scores exact live-like opportunity scopes, and classifies policies as PROMOTE/CANARY/DEACTIVATE/RESEARCH_ONLY using predictive profitability/stability gates; fillability remains diagnostic-only because live execution uses FAK retries plus resting fallback.
 - Replaced the live core dynamic-tuned BUY_NO policy with the bucket-consensus high-conviction 15m late `<= 0.50` replay winner (`pm_us12_bucket_consensus_hc_15m_late_entry_00_50_by_bucket_side_delay_first`) while preserving the existing core notional slot.
 - Added a $25 live canary for global low-temperature `global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first`: BUY_NO-only, EGLC/LFPB/RJTT/RKSI/VHHH/ZSPD only, station-local `00:30-05:00`, `<= 0.75` entry cap, existing FAK/retry/GTC resting fallback execution, and no added depth gate. Live market discovery now runs with `market_scope=all` by default and admits markets by active strategy plan rather than a hard-coded US high-temp filter.
 

@@ -47,6 +47,7 @@ from weather_trader.live.execution import (
     NGBOOST_BEST_BUY_YES_POLICY_NAME,
     LiveExecutionConfig,
     LiveExecutionEngine,
+    LiveWeatherFeatureService,
     edge_core_policy_spec,
     default_live_strategy,
     global_low_canary_policy_spec,
@@ -70,6 +71,75 @@ def test_live_strategy_is_registered_in_separate_store(tmp_path: Path) -> None:
     assert rows[0]["name"] == LIVE_POLICY_NAME
     assert rows[0]["model_group"] == LIVE_MODEL_GROUP
     assert rows[0]["max_notional_usd"] == 3.0
+
+
+def test_live_strategy_registry_deactivates_removed_strategies(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    store.upsert_live_strategy(default_live_strategy(max_notional_usd=3.0))
+    store.upsert_live_strategy(
+        LiveStrategy(
+            name="old_dynamic_core",
+            active=True,
+            source="model",
+            model_group="old_group",
+            model_names=["old_model"],
+            strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+            market_family=MarketFamily.HIGH_TEMP,
+            local_decision_start="12:00",
+            local_decision_end="15:00",
+            entry_price_min=0.05,
+            uniqueness_key_mode="station_date_bucket_side_obs_delay",
+            max_notional_usd=50.0,
+        )
+    )
+
+    deactivated = store.deactivate_live_strategies_except({LIVE_POLICY_NAME})
+
+    assert deactivated == 1
+    active = store.live_strategies()
+    all_rows = store.live_strategies(active_only=False)
+    assert [row["name"] for row in active] == [LIVE_POLICY_NAME]
+    assert {row["name"] for row in all_rows} == {LIVE_POLICY_NAME, "old_dynamic_core"}
+    assert next(row for row in all_rows if row["name"] == "old_dynamic_core")["active"] == 0
+
+
+def test_live_weather_feature_service_routes_global_stations_to_celsius_service() -> None:
+    class RecordingService:
+        def __init__(self, label: str) -> None:
+            self.label = label
+            self.calls: list[str] = []
+
+        def get_state(self, station_id: str, as_of_utc: datetime) -> StationWeatherState:
+            self.calls.append(station_id)
+            return StationWeatherState(
+                station=station_id,
+                local_date=date(2026, 6, 9),
+                latest_obs_time=as_of_utc.isoformat(),
+                latest_obs_age_minutes=1.0,
+                current_temp=20.0,
+                high_so_far=21.0,
+                low_so_far=19.0,
+                hour_local=1,
+                day_of_year=160,
+                temp_change_1h=0.0,
+                temp_change_3h=0.0,
+                dewpoint=10.0,
+                wind_speed=3.0,
+                wind_dir_sin=0.0,
+                wind_dir_cos=1.0,
+                cloud_cover_code=0.0,
+            )
+
+    us_service = RecordingService("us")
+    global_service = RecordingService("global")
+    service = LiveWeatherFeatureService(us_service=us_service, global_service=global_service)
+    as_of = datetime(2026, 6, 9, 1, 0, tzinfo=timezone.utc)
+
+    service.get_state("KATL", as_of)
+    service.get_state("RJTT", as_of)
+
+    assert us_service.calls == ["KATL"]
+    assert global_service.calls == ["RJTT"]
 
 
 def test_live_execution_config_defaults_to_fifty_cent_entry_cap() -> None:

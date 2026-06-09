@@ -35,10 +35,11 @@ from weather_trader.execution.fair_value import FairValueEngine, FairValueResult
 from weather_trader.execution.grouping import GroupMarketContext, StationDateDecisionEngine, group_key
 from weather_trader.execution.liquidity import quantize_price, quantize_shares, quantize_usdc, walk_ask_ladder
 from weather_trader.execution.store import ExecutionStore
-from weather_trader.execution.weather import StationWeatherState, WeatherFeatureService
+from weather_trader.execution.weather import CelsiusWeatherFeatureService, StationWeatherState, WeatherFeatureService
 from weather_trader.live.settings import LiveSettings, load_live_settings, private_key_from_env_or_keyfile
 from weather_trader.live.sizing import LiveSizingDecision, LiveSizingModel
 from weather_trader.research.collector import ResearchConfig, build_prediction_snapshot, due_delay_buckets
+from weather_trader.stations.metadata import get_station
 from weather_trader.research.policies import (
     CATBOOST_MODEL,
     DYNAMIC_TUNED_MODEL,
@@ -453,6 +454,24 @@ def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, 
     )
 
 
+class LiveWeatherFeatureService:
+    def __init__(
+        self,
+        max_obs_age_minutes: int = 30,
+        us_service: WeatherFeatureService | None = None,
+        global_service: CelsiusWeatherFeatureService | None = None,
+    ) -> None:
+        self.us_service = us_service or WeatherFeatureService(max_obs_age_minutes=max_obs_age_minutes)
+        self.global_service = global_service or CelsiusWeatherFeatureService(max_obs_age_minutes=max_obs_age_minutes)
+
+    def get_state(self, station_id: str, as_of_utc: datetime) -> StationWeatherState:
+        try:
+            get_station(station_id)
+        except KeyError:
+            return self.global_service.get_state(station_id, as_of_utc)
+        return self.us_service.get_state(station_id, as_of_utc)
+
+
 class LiveExecutionEngine:
     def __init__(
         self,
@@ -468,7 +487,7 @@ class LiveExecutionEngine:
         self.config = config or LiveExecutionConfig(live_db_path=store.path)
         self.discovery = discovery or MarketDiscoveryService()
         self.book_client = book_client or RestBookClient()
-        self.weather_service = weather_service or WeatherFeatureService(max_obs_age_minutes=self.config.max_obs_age_minutes)
+        self.weather_service = weather_service or LiveWeatherFeatureService(max_obs_age_minutes=self.config.max_obs_age_minutes)
         self.decision_engine = StationDateDecisionEngine()
         self.fair_value_engines = [FairValueEngine(path) for path in self.config.model_paths]
         self.strategy_plans = live_strategy_plans(self.config)
@@ -496,6 +515,7 @@ class LiveExecutionEngine:
         }
         for plan in self.strategy_plans:
             self.store.upsert_live_strategy(plan.strategy)
+        self.store.deactivate_live_strategies_except({plan.strategy.name for plan in self.strategy_plans})
         try:
             discovered_markets = self.discovery.discover(limit=self.config.market_limit, market_scope=self.config.market_scope)
             same_day = same_day_markets(discovered_markets, now)
