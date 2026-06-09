@@ -14,7 +14,8 @@ Updated: 2026-06-09
 | --- | --- | ---: | ---: | --- |
 | Consensus no-tiny | mixed | $50 BUY_NO; $25 BUY_YES | <= $0.50 | Canonical promoted US high-temp core. Selected by the raw-snapshot promotion report and mapped to `pm_us12_bucket_consensus_hc_late_no_tiny_by_bucket_side_delay_first`. |
 | Moonshot | BUY_NO | $2 | <= $0.50 | Small US high-temperature tail allocation. Original tiny moonshot remains constrained by its tighter policy price rules. |
-| Global low-temp canary | BUY_NO | $50 | $0.05-$0.75 | Primary global low-temperature BUY_NO canary for EGLC, LFPB, RJTT, RKSI, VHHH, and ZSPD, station-local 00:30-05:00. |
+| Global low-temp canary | BUY_NO | $50 | $0.05-$0.75 | Primary global low-temperature BUY_NO consensus canary for EGLC, LFPB, RJTT, RKSI, VHHH, and ZSPD, station-local 00:30-05:00. |
+| Global low-temp MVP add-on | BUY_NO | $25 | $0.05-$0.50 | Additive single-model MVP sleeve, mapped to `global_low_mvp_high_conviction_buy_no_entry_05_50_by_bucket_side_delay_first`; runs after the consensus canary and uses live caps/depth sizing. |
 | Global low-temp tiny tail | BUY_NO | $5 | <= $0.05 | Asymmetric global low-temperature tail sleeve on the same station/window set, mapped to `global_low_dynamic_mvp_tail_buy_no_entry_00_05_by_bucket_side_delay_first`. |
 
 ### Risk caps
@@ -65,9 +66,10 @@ The system uses fixed per-policy targets selected by the raw-snapshot promotion 
 - Consensus no-tiny: $50 BUY_NO and $25 BUY_YES for the canonical US high-temp live core.
 - Moonshot: $2 because US high-temperature tail entries are high variance and should not drive daily risk.
 - Global low-temp canary: $50 BUY_NO-only with entry band `0.05-0.75` and station-local `00:30-05:00`, using the existing live FAK, retry, and 120-second resting fallback engine with no added depth gate.
+- Global low-temp MVP add-on: $25 BUY_NO-only with entry band `0.05-0.50`; live-style replay showed this was additive behind the current stack, but it still competes for the same station/date/bucket/side caps.
 - Global low-temp tiny tail: $5 BUY_NO-only with entry cap `<= 0.05` and the same station-local `00:30-05:00` window.
 
-The max order cap is set to $50 so the largest intended order cannot exceed the current primary-policy size.
+The max order cap is set to $50 so the largest intended order cannot exceed the current primary-policy size. Moving primary strategies to $100 requires raising max-order and exact bucket/side caps, plus a fresh depth-aware replay for larger fills.
 
 
 ### Potential low-temp expansion shortlist
@@ -96,6 +98,7 @@ The 120-second TTL is a deliberate compromise: weather does not normally reprice
 - Recent live cycles showed repeated global canary weather errors: Unknown station for EGLC, LFPB, RJTT, RKSI, VHHH, and ZSPD. Live execution now routes non-US station IDs to the Celsius/global weather feature service, matching the research collector behavior, so global low-temperature strategies can build station-local low-temperature signals instead of skipping those stations.
 - Deactivated NGBoost BUY_YES after the standardized raw-snapshot replay showed weak overall and poor recent performance. Reallocated the live risk slot to global low-temperature BUY_NO: the broad canary is now $50 for `$0.05-$0.75` entries and the tiny-tail `<= $0.05` sleeve is live at $5.
 - Deactivated the US high-temperature 15m consensus overlay after cap-aware live-style replay showed it was negative incrementally behind the no-tiny consensus core. The earlier standalone promotion read did not account for plan order, same station/date bucket/side caps, and live depth sizing, which let the core consume the overlapping good rows first.
+- Added `global_low_mvp_high_conviction_buy_no_entry_05_50_by_bucket_side_delay_first` as a $25 BUY_NO MVP add-on after live-style portfolio replay showed it was additive behind the current stack: 41 incremental entries, about $523.50 risk, about +$1,187.55 PnL, and about 2.27x ROI before future live fill slippage.
 
 ### 2026-06-08
 

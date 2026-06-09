@@ -36,6 +36,7 @@ from weather_trader.live.execution import (
     DEFAULT_LIVE_ENTRY_PRICE_MAX,
     EDGE_CORE_NOTIONAL_USD,
     GLOBAL_LOW_ENTRY_PRICE_MAX,
+    GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD,
     GLOBAL_LOW_NOTIONAL_USD,
     LiveExecutionConfig,
     LiveExecutionEngine,
@@ -283,6 +284,7 @@ def main() -> None:
     live_cycle.add_argument("--consensus-notional-usd", type=float, default=CONSENSUS_NOTIONAL_USD)
     live_cycle.add_argument("--core-notional-usd", type=float, default=EDGE_CORE_NOTIONAL_USD)
     live_cycle.add_argument("--global-low-notional-usd", type=float, default=GLOBAL_LOW_NOTIONAL_USD)
+    live_cycle.add_argument("--global-low-mvp-notional-usd", type=float, default=GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD)
     live_cycle.add_argument("--max-entry-price", type=float, default=DEFAULT_LIVE_ENTRY_PRICE_MAX)
     live_cycle.add_argument("--global-low-max-entry-price", type=float, default=GLOBAL_LOW_ENTRY_PRICE_MAX)
     live_cycle.add_argument("--model", dest="model_paths", action="append", default=[])
@@ -303,6 +305,7 @@ def main() -> None:
     live_loop.add_argument("--consensus-notional-usd", type=float, default=CONSENSUS_NOTIONAL_USD)
     live_loop.add_argument("--core-notional-usd", type=float, default=EDGE_CORE_NOTIONAL_USD)
     live_loop.add_argument("--global-low-notional-usd", type=float, default=GLOBAL_LOW_NOTIONAL_USD)
+    live_loop.add_argument("--global-low-mvp-notional-usd", type=float, default=GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD)
     live_loop.add_argument("--max-entry-price", type=float, default=DEFAULT_LIVE_ENTRY_PRICE_MAX)
     live_loop.add_argument("--global-low-max-entry-price", type=float, default=GLOBAL_LOW_ENTRY_PRICE_MAX)
     live_loop.add_argument("--model", dest="model_paths", action="append", default=[])
@@ -514,6 +517,7 @@ def main() -> None:
             consensus_notional_usd=args.consensus_notional_usd,
             edge_core_notional_usd=args.core_notional_usd,
             global_low_notional_usd=args.global_low_notional_usd,
+            global_low_mvp_buy_no_notional_usd=args.global_low_mvp_notional_usd,
             max_entry_price=args.max_entry_price,
             global_low_entry_price_max=args.global_low_max_entry_price,
             model_paths=args.model_paths,
@@ -536,6 +540,7 @@ def main() -> None:
             consensus_notional_usd=args.consensus_notional_usd,
             edge_core_notional_usd=args.core_notional_usd,
             global_low_notional_usd=args.global_low_notional_usd,
+            global_low_mvp_buy_no_notional_usd=args.global_low_mvp_notional_usd,
             max_entry_price=args.max_entry_price,
             global_low_entry_price_max=args.global_low_max_entry_price,
             model_paths=args.model_paths,
@@ -1582,6 +1587,7 @@ def live_cycle_command(
     consensus_notional_usd: float,
     edge_core_notional_usd: float,
     global_low_notional_usd: float,
+    global_low_mvp_buy_no_notional_usd: float,
     max_entry_price: float | None,
     global_low_entry_price_max: float,
     model_paths: list[str] | None,
@@ -1606,6 +1612,7 @@ def live_cycle_command(
             consensus_notional_usd=consensus_notional_usd,
             edge_core_notional_usd=edge_core_notional_usd,
             global_low_notional_usd=global_low_notional_usd,
+            global_low_mvp_buy_no_notional_usd=global_low_mvp_buy_no_notional_usd,
             max_entry_price=max_entry_price,
             global_low_entry_price_max=global_low_entry_price_max,
             require_allowance_check=require_allowance_check,
@@ -1623,6 +1630,7 @@ def live_cycle_command(
                     "consensus_notional_usd": consensus_notional_usd,
                     "core_notional_usd": edge_core_notional_usd,
                     "global_low_notional_usd": global_low_notional_usd,
+                    "global_low_mvp_buy_no_notional_usd": global_low_mvp_buy_no_notional_usd,
                     "global_low_max_entry_price": global_low_entry_price_max,
                     "candidates": result.candidates,
                     "reserved": result.reserved,
@@ -1656,6 +1664,7 @@ def live_loop_command(
     consensus_notional_usd: float,
     edge_core_notional_usd: float,
     global_low_notional_usd: float,
+    global_low_mvp_buy_no_notional_usd: float,
     max_entry_price: float | None,
     global_low_entry_price_max: float,
     model_paths: list[str] | None,
@@ -1680,6 +1689,7 @@ def live_loop_command(
             consensus_notional_usd=consensus_notional_usd,
             edge_core_notional_usd=edge_core_notional_usd,
             global_low_notional_usd=global_low_notional_usd,
+            global_low_mvp_buy_no_notional_usd=global_low_mvp_buy_no_notional_usd,
             max_entry_price=max_entry_price,
             global_low_entry_price_max=global_low_entry_price_max,
             require_allowance_check=require_allowance_check,
@@ -1717,6 +1727,7 @@ def live_loop_command(
                             "consensus_notional_usd": consensus_notional_usd,
                             "core_notional_usd": edge_core_notional_usd,
                             "global_low_notional_usd": global_low_notional_usd,
+                            "global_low_mvp_buy_no_notional_usd": global_low_mvp_buy_no_notional_usd,
                             "global_low_max_entry_price": global_low_entry_price_max,
                             "candidates": 0,
                             "reserved": 0,
@@ -1745,6 +1756,7 @@ def live_loop_command(
                             "consensus_notional_usd": consensus_notional_usd,
                             "core_notional_usd": edge_core_notional_usd,
                             "global_low_notional_usd": global_low_notional_usd,
+                            "global_low_mvp_buy_no_notional_usd": global_low_mvp_buy_no_notional_usd,
                             "global_low_max_entry_price": global_low_entry_price_max,
                             "candidates": result.candidates,
                             "reserved": result.reserved,

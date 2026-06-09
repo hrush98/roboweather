@@ -57,6 +57,7 @@ MOONSHOT_POLICY_NAME = "pm_us12_dynamic_tuned_hc_late_entry_05_10_buy_no_by_buck
 NGBOOST_BEST_BUY_YES_POLICY_NAME = "pm_us12_ngboost_best_bucket_late_buy_yes_medium_by_bucket_side_delay_first"
 GLOBAL_LOW_CANARY_POLICY_NAME = "global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first"
 GLOBAL_LOW_TINY_TAIL_POLICY_NAME = "global_low_dynamic_mvp_tail_buy_no_entry_00_05_by_bucket_side_delay_first"
+GLOBAL_LOW_MVP_BUY_NO_POLICY_NAME = "global_low_mvp_high_conviction_buy_no_entry_05_50_by_bucket_side_delay_first"
 LIVE_MODEL_GROUP = "obs_bucket_consensus"
 GLOBAL_LOW_MODEL_GROUP = "global_low_dynamic_mvp"
 DEFAULT_LIVE_ENTRY_PRICE_MAX = 0.50
@@ -69,9 +70,11 @@ MOONSHOT_NOTIONAL_USD = 2.0
 NGBOOST_BEST_BUY_YES_NOTIONAL_USD = 10.0
 GLOBAL_LOW_NOTIONAL_USD = 50.0
 GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD = 5.0
+GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD = 25.0
 GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN = 0.05
 GLOBAL_LOW_ENTRY_PRICE_MAX = 0.75
 GLOBAL_LOW_TINY_TAIL_ENTRY_PRICE_MAX = 0.05
+GLOBAL_LOW_MVP_BUY_NO_ENTRY_PRICE_MAX = 0.50
 GLOBAL_LOW_LOCAL_DECISION_START = "00:30"
 GLOBAL_LOW_LOCAL_DECISION_END = "05:00"
 LIVE_MODEL_PATHS = (
@@ -112,6 +115,7 @@ class LiveExecutionConfig:
     consensus_notional_usd: float = CONSENSUS_NOTIONAL_USD
     edge_core_notional_usd: float = EDGE_CORE_NOTIONAL_USD
     global_low_notional_usd: float = GLOBAL_LOW_NOTIONAL_USD
+    global_low_mvp_buy_no_notional_usd: float = GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD
     min_entry_price: float = 0.05
     max_entry_price: float | None = DEFAULT_LIVE_ENTRY_PRICE_MAX
     global_low_entry_price_max: float = GLOBAL_LOW_ENTRY_PRICE_MAX
@@ -353,6 +357,39 @@ def global_low_tiny_tail_live_strategy(max_notional_usd: float = GLOBAL_LOW_TINY
     )
 
 
+def global_low_mvp_buy_no_live_strategy(max_notional_usd: float = GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD) -> LiveStrategy:
+    return LiveStrategy(
+        name=GLOBAL_LOW_MVP_BUY_NO_POLICY_NAME,
+        active=True,
+        source="model",
+        model_group=GLOBAL_LOW_MVP_MODEL,
+        model_names=[GLOBAL_LOW_MVP_MODEL],
+        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        market_family=MarketFamily.LOW_TEMP,
+        local_decision_start="00:00",
+        local_decision_end="23:59",
+        entry_price_min=GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+        max_notional_usd=max_notional_usd,
+        raw_payload={
+            "report": {
+                "role": "live_additive_canary",
+                "target_notional_usd": max_notional_usd,
+                "entry_price_min": GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
+                "entry_price_max": GLOBAL_LOW_MVP_BUY_NO_ENTRY_PRICE_MAX,
+                "selected_side": str(TradeAction.BUY_NO),
+                "live_style_replay": {
+                    "entries": 41,
+                    "risk_usd": 523.5,
+                    "pnl_usd": 1187.55,
+                    "roi": 2.268,
+                    "note": "Incremental after current live stack with same caps/depth/order replay.",
+                },
+            }
+        },
+    )
+
+
 def live_policy_spec(config: LiveExecutionConfig) -> ResearchPolicySpec:
     return ResearchPolicySpec(
         LIVE_POLICY_NAME,
@@ -462,6 +499,19 @@ def global_low_tiny_tail_policy_spec() -> ResearchPolicySpec:
     )
 
 
+def global_low_mvp_buy_no_policy_spec() -> ResearchPolicySpec:
+    return ResearchPolicySpec(
+        GLOBAL_LOW_MVP_BUY_NO_POLICY_NAME,
+        "model",
+        StrategyBucket.HIGH_CONVICTION,
+        model_name=GLOBAL_LOW_MVP_MODEL,
+        selected_side=TradeAction.BUY_NO,
+        entry_price_min=GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
+        entry_price_max=GLOBAL_LOW_MVP_BUY_NO_ENTRY_PRICE_MAX,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+    )
+
+
 def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, ...]:
     return (
         LiveStrategyPlan(
@@ -488,6 +538,13 @@ def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, 
             global_low_canary_live_strategy(config.global_low_notional_usd),
             (global_low_canary_policy_spec(config),),
             config.global_low_notional_usd,
+            TradeAction.BUY_NO,
+            GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
+        ),
+        LiveStrategyPlan(
+            global_low_mvp_buy_no_live_strategy(config.global_low_mvp_buy_no_notional_usd),
+            (global_low_mvp_buy_no_policy_spec(),),
+            config.global_low_mvp_buy_no_notional_usd,
             TradeAction.BUY_NO,
             GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
         ),

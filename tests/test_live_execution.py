@@ -37,6 +37,9 @@ from weather_trader.live.execution import (
     GLOBAL_LOW_LOCAL_DECISION_END,
     GLOBAL_LOW_LOCAL_DECISION_START,
     GLOBAL_LOW_MODEL_GROUP,
+    GLOBAL_LOW_MVP_BUY_NO_ENTRY_PRICE_MAX,
+    GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD,
+    GLOBAL_LOW_MVP_BUY_NO_POLICY_NAME,
     GLOBAL_LOW_NOTIONAL_USD,
     GLOBAL_LOW_TINY_TAIL_ENTRY_PRICE_MAX,
     GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD,
@@ -53,6 +56,7 @@ from weather_trader.live.execution import (
     edge_core_policy_spec,
     default_live_strategy,
     global_low_canary_policy_spec,
+    global_low_mvp_buy_no_policy_spec,
     global_low_tiny_tail_policy_spec,
     live_policy_spec,
     live_strategy_plans,
@@ -158,6 +162,7 @@ def test_live_strategy_plans_include_moonshot_and_global_low_canary_tail() -> No
         MOONSHOT_POLICY_NAME,
         GLOBAL_LOW_TINY_TAIL_POLICY_NAME,
         GLOBAL_LOW_CANARY_POLICY_NAME,
+        GLOBAL_LOW_MVP_BUY_NO_POLICY_NAME,
     ]
     consensus = plans[0]
     assert consensus.target_notional_usd == pytest.approx(CONSENSUS_NOTIONAL_USD)
@@ -214,6 +219,24 @@ def test_live_strategy_plans_include_moonshot_and_global_low_canary_tail() -> No
     assert global_low.policies[0].local_decision_end == GLOBAL_LOW_LOCAL_DECISION_END
     assert global_low.selected_side == TradeAction.BUY_NO
     assert global_low.min_entry_price == pytest.approx(GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN)
+
+
+    global_low_mvp = plans[4]
+    assert global_low_mvp.target_notional_usd == pytest.approx(GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD)
+    assert global_low_mvp.strategy.max_notional_usd == pytest.approx(GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD)
+    assert global_low_mvp.strategy.market_family == MarketFamily.LOW_TEMP
+    assert global_low_mvp.strategy.source == "model"
+    assert global_low_mvp.strategy.model_group == GLOBAL_LOW_MVP_MODEL
+    assert global_low_mvp.strategy.model_names == [GLOBAL_LOW_MVP_MODEL]
+    assert len(global_low_mvp.policies) == 1
+    assert global_low_mvp.policies[0].model_name == GLOBAL_LOW_MVP_MODEL
+    assert global_low_mvp.policies[0].model_group is None
+    assert global_low_mvp.policies[0].selected_side == TradeAction.BUY_NO
+    assert global_low_mvp.policies[0].station_allow_set is None
+    assert global_low_mvp.policies[0].entry_price_min == pytest.approx(GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN)
+    assert global_low_mvp.policies[0].entry_price_max == pytest.approx(GLOBAL_LOW_MVP_BUY_NO_ENTRY_PRICE_MAX)
+    assert global_low_mvp.selected_side == TradeAction.BUY_NO
+    assert global_low_mvp.min_entry_price == pytest.approx(GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN)
 
 
 def test_consensus_requires_same_side_market_bucket_and_delay(tmp_path: Path) -> None:
@@ -438,6 +461,71 @@ def test_global_low_canary_policy_spec_filters_buy_no_cap_window_and_bucket_side
     assert selected[0]["selected_no_ask"] == pytest.approx(0.75)
 
 
+def test_global_low_mvp_buy_no_policy_spec_filters_buy_no_cap_and_bucket_side_delay(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    spec = global_low_mvp_buy_no_policy_spec()
+    evaluator = ResearchPolicyEvaluator(store, (spec,))
+    rows = [
+        _snapshot(
+            GLOBAL_LOW_MVP_MODEL,
+            id=1,
+            station="EGLC",
+            market_family="LOW_TEMP",
+            selected_no_ask=0.50,
+            selected_bucket="10-11C",
+        ),
+        _snapshot(
+            GLOBAL_LOW_MVP_MODEL,
+            id=2,
+            station="WSSS",
+            market_family="LOW_TEMP",
+            selected_no_ask=0.49,
+            selected_bucket="12-13C",
+        ),
+        _snapshot(
+            GLOBAL_LOW_DYNAMIC_MODEL,
+            id=3,
+            station="EGLC",
+            market_family="LOW_TEMP",
+            selected_no_ask=0.40,
+            selected_bucket="14-15C",
+        ),
+        _snapshot(
+            GLOBAL_LOW_MVP_MODEL,
+            id=4,
+            station="EGLC",
+            market_family="LOW_TEMP",
+            selected_side="BUY_YES",
+            selected_yes_ask=0.20,
+            selected_bucket="16-17C",
+        ),
+        _snapshot(
+            GLOBAL_LOW_MVP_MODEL,
+            id=5,
+            station="EGLC",
+            market_family="LOW_TEMP",
+            selected_no_ask=0.51,
+            selected_bucket="18-19C",
+        ),
+        _snapshot(
+            GLOBAL_LOW_MVP_MODEL,
+            id=6,
+            station="EGLC",
+            market_family="LOW_TEMP",
+            selected_no_ask=0.04,
+            selected_bucket="20-21C",
+        ),
+    ]
+
+    filtered = evaluator._candidates_for_policy(spec, rows, [])
+    selected = evaluator._first_by_scope(spec, filtered)
+
+    assert [item["selected_bucket"] for item in selected] == ["10-11C", "12-13C"]
+    assert {item["station"] for item in selected} == {"EGLC", "WSSS"}
+    assert all(item["model_name"] == GLOBAL_LOW_MVP_MODEL for item in selected)
+    assert all(item["selected_side"] == "BUY_NO" for item in selected)
+
+
 def test_global_low_tiny_tail_policy_spec_filters_buy_no_tiny_tail_window(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
     spec = global_low_tiny_tail_policy_spec()
@@ -577,7 +665,7 @@ def test_live_market_admission_follows_active_strategy_plans() -> None:
     assert live_execution._market_admitted_by_strategy_plans(us_high, plans) is True
     assert live_execution._market_admitted_by_strategy_plans(global_low, plans) is True
     assert live_execution._market_admitted_by_strategy_plans(global_high, plans) is False
-    assert live_execution._market_admitted_by_strategy_plans(unrelated_low, plans) is False
+    assert live_execution._market_admitted_by_strategy_plans(unrelated_low, plans) is True
 
 
 def test_ngboost_best_buy_yes_policy_spec_filters_late_medium_entries(tmp_path: Path) -> None:
