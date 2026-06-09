@@ -63,12 +63,12 @@ GLOBAL_LOW_MODEL_GROUP = "global_low_dynamic_mvp"
 DEFAULT_LIVE_ENTRY_PRICE_MAX = 0.50
 LIVE_ENTRY_PRICE_MAX = DEFAULT_LIVE_ENTRY_PRICE_MAX
 EDGE_CORE_OBS_DELAY_BUCKET = "15m"
-CONSENSUS_NOTIONAL_USD = 50.0
+CONSENSUS_NOTIONAL_USD = 100.0
 EDGE_CORE_NOTIONAL_USD = 50.0
 MOONSHOT_MIN_EDGE = 0.90
 MOONSHOT_NOTIONAL_USD = 2.0
 NGBOOST_BEST_BUY_YES_NOTIONAL_USD = 10.0
-GLOBAL_LOW_NOTIONAL_USD = 50.0
+GLOBAL_LOW_NOTIONAL_USD = 100.0
 GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD = 5.0
 GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD = 25.0
 GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN = 0.05
@@ -122,8 +122,10 @@ class LiveExecutionConfig:
     require_allowance_check: bool = True
     retry_wait_seconds: float = 5.0
     enable_resting_fallback: bool = True
-    resting_fallback_ttl_seconds: float = 120.0
+    resting_fallback_ttl_seconds: float = 180.0
     resting_fallback_notional_fraction: float = 1.0
+    resting_fallback_chunk_usd: float = 25.0
+    resting_fallback_price_step: float = 0.01
 
 
 @dataclass(frozen=True)
@@ -1234,8 +1236,8 @@ class LiveExecutionEngine:
         resting_book = book or self._refresh_retry_book(position.selected_token_id, errors)
         if resting_book is None:
             return None
-        limit_price, target_notional_usd, resting_reason = self._resting_order_parameters(position, resting_book, current_cost_usd)
-        if resting_reason is not None or target_notional_usd <= 0.0:
+        ladder_orders, resting_reason = self._resting_ladder_orders(position, resting_book, current_cost_usd)
+        if resting_reason is not None or not ladder_orders:
             self.store.insert_live_trade_event(
                 LiveTradeEvent(
                     utc_now_iso(),
@@ -1248,109 +1250,194 @@ class LiveExecutionEngine:
             )
             return None
 
-        attempt = self._place_gtc_attempt(position=position, limit_price=limit_price, target_notional_usd=target_notional_usd)
-        raw_patch: dict[str, Any] = {
+        raw_base: dict[str, Any] = {
             "resting_fallback": {
                 "source_reason": source_reason,
                 "ttl_seconds": float(self.config.resting_fallback_ttl_seconds),
                 "notional_fraction": float(self.config.resting_fallback_notional_fraction),
+                "chunk_usd": float(self.config.resting_fallback_chunk_usd),
+                "price_step": float(self.config.resting_fallback_price_step),
                 "resting_book_timestamp": resting_book.timestamp,
                 "best_bid": resting_book.best_bid,
                 "best_ask": resting_book.best_ask,
-                "limit_price": limit_price,
-                "target_notional_usd": target_notional_usd,
+                "orders": [dict(order) for order in ladder_orders],
                 "reason": resting_reason,
             }
         }
-        final_attempt = attempt
-        update_position = attempt.filled_shares > 0 or attempt.state in {LivePositionState.FILLED, LivePositionState.PARTIAL}
-        cancel_response: CancelSubmission | None = None
-        if attempt.response.order_id is not None and attempt.state in {LivePositionState.SUBMITTED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN}:
+
+        submitted: list[tuple[dict[str, float], LiveAttemptResult]] = []
+        for order in ladder_orders:
+            attempt = self._place_gtc_attempt(
+                position=position,
+                limit_price=float(order["limit_price"]),
+                target_notional_usd=float(order["target_notional_usd"]),
+            )
+            submitted.append((order, attempt))
+
+        open_children = [
+            attempt
+            for _, attempt in submitted
+            if attempt.response.order_id is not None
+            and attempt.state in {LivePositionState.SUBMITTED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN}
+        ]
+        if open_children:
             time.sleep(float(self.config.resting_fallback_ttl_seconds))
-            refreshed = self._refresh_order_state(attempt.response.order_id, position, limit_price, target_notional_usd)
+
+        cumulative_filled_shares = current_filled_shares
+        cumulative_cost_usd = current_cost_usd
+        any_new_fill = False
+        any_live_state = False
+        final_states: list[LivePositionState] = []
+        for index, (order, attempt) in enumerate(submitted, start=1):
+            final_attempt = attempt
+            update_position = attempt.filled_shares > 0 or attempt.state in {LivePositionState.FILLED, LivePositionState.PARTIAL}
+            cancel_response: CancelSubmission | None = None
             refreshed_raw: dict[str, Any] | None = None
-            if refreshed is not None:
-                refreshed_state, refreshed_filled_shares, refreshed_cost_usd, refreshed_avg_price, refreshed_raw = refreshed
-                if refreshed_filled_shares > 0 and refreshed_state == LivePositionState.SUBMITTED:
-                    refreshed_state = LivePositionState.PARTIAL
-                final_attempt = LiveAttemptResult(
-                    OrderSubmission(
-                        True,
-                        attempt.response.order_id,
-                        str(refreshed_state),
-                        None,
-                        {"submit": attempt.response.raw, "after_ttl": refreshed_raw},
-                    ),
-                    refreshed_state,
-                    limit_price,
-                    target_notional_usd,
-                    attempt.target_shares,
-                    refreshed_filled_shares,
-                    refreshed_cost_usd,
-                    refreshed_avg_price,
+            if attempt.response.order_id is not None and attempt.state in {LivePositionState.SUBMITTED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN}:
+                refreshed = self._refresh_order_state(
+                    attempt.response.order_id,
+                    position,
+                    float(order["limit_price"]),
+                    float(order["target_notional_usd"]),
                 )
-                update_position = refreshed_filled_shares > 0 or refreshed_state in {LivePositionState.FILLED, LivePositionState.PARTIAL}
-            if final_attempt.state != LivePositionState.FILLED:
-                cancel_response = self._cancel_resting_order(attempt.response.order_id)
-                if not update_position:
-                    cancel_state = LivePositionState.CANCELLED if cancel_response.success else LivePositionState.UNKNOWN
+                if refreshed is not None:
+                    refreshed_state, refreshed_filled_shares, refreshed_cost_usd, refreshed_avg_price, refreshed_raw = refreshed
+                    if refreshed_filled_shares > 0 and refreshed_state == LivePositionState.SUBMITTED:
+                        refreshed_state = LivePositionState.PARTIAL
                     final_attempt = LiveAttemptResult(
                         OrderSubmission(
-                            cancel_response.success,
+                            True,
                             attempt.response.order_id,
-                            str(cancel_state),
-                            cancel_response.error_msg or "RESTING_TTL_EXPIRED",
-                            {"submit": attempt.response.raw, "after_ttl": refreshed_raw, "cancel": cancel_response.raw},
+                            str(refreshed_state),
+                            None,
+                            {"submit": attempt.response.raw, "after_ttl": refreshed_raw},
                         ),
-                        cancel_state,
-                        limit_price,
-                        target_notional_usd,
+                        refreshed_state,
+                        float(order["limit_price"]),
+                        float(order["target_notional_usd"]),
                         attempt.target_shares,
-                        0.0,
-                        0.0,
-                        None,
+                        refreshed_filled_shares,
+                        refreshed_cost_usd,
+                        refreshed_avg_price,
                     )
-                else:
-                    final_attempt = LiveAttemptResult(
-                        OrderSubmission(
-                            final_attempt.response.success,
-                            attempt.response.order_id,
-                            final_attempt.response.status,
-                            final_attempt.response.error_msg,
-                            {"submit": attempt.response.raw, "after_ttl": refreshed_raw, "cancel": cancel_response.raw},
-                        ),
-                        final_attempt.state,
-                        final_attempt.limit_price,
-                        final_attempt.target_notional_usd,
-                        final_attempt.target_shares,
-                        final_attempt.filled_shares,
-                        final_attempt.cost_usd,
-                        final_attempt.avg_price,
-                    )
+                    update_position = refreshed_filled_shares > 0 or refreshed_state in {LivePositionState.FILLED, LivePositionState.PARTIAL}
+                if final_attempt.state != LivePositionState.FILLED:
+                    cancel_response = self._cancel_resting_order(attempt.response.order_id)
+                    if not update_position:
+                        cancel_state = LivePositionState.CANCELLED if cancel_response.success else LivePositionState.UNKNOWN
+                        final_attempt = LiveAttemptResult(
+                            OrderSubmission(
+                                cancel_response.success,
+                                attempt.response.order_id,
+                                str(cancel_state),
+                                cancel_response.error_msg or "RESTING_TTL_EXPIRED",
+                                {"submit": attempt.response.raw, "after_ttl": refreshed_raw, "cancel": cancel_response.raw},
+                            ),
+                            cancel_state,
+                            float(order["limit_price"]),
+                            float(order["target_notional_usd"]),
+                            attempt.target_shares,
+                            0.0,
+                            0.0,
+                            None,
+                        )
+                    else:
+                        final_attempt = LiveAttemptResult(
+                            OrderSubmission(
+                                final_attempt.response.success,
+                                attempt.response.order_id,
+                                final_attempt.response.status,
+                                final_attempt.response.error_msg,
+                                {"submit": attempt.response.raw, "after_ttl": refreshed_raw, "cancel": cancel_response.raw},
+                            ),
+                            final_attempt.state,
+                            final_attempt.limit_price,
+                            final_attempt.target_notional_usd,
+                            final_attempt.target_shares,
+                            final_attempt.filled_shares,
+                            final_attempt.cost_usd,
+                            final_attempt.avg_price,
+                        )
+
+            cumulative_filled_shares += final_attempt.filled_shares
+            cumulative_cost_usd += final_attempt.cost_usd
+            cumulative_avg_price = cumulative_cost_usd / cumulative_filled_shares if cumulative_filled_shares > 0 else None
+            any_new_fill = any_new_fill or final_attempt.filled_shares > 0 or final_attempt.cost_usd > 0
+            any_live_state = any_live_state or final_attempt.state in {LivePositionState.SUBMITTED, LivePositionState.DELAYED, LivePositionState.UNKNOWN}
+            final_states.append(final_attempt.state)
+            raw_patch = dict(raw_base)
+            raw_patch["resting_fallback"] = {**raw_base["resting_fallback"], "child_index": index, "child_order": dict(order)}
             raw_patch["resting_fallback"].update(
                 {
                     "order_status_after_ttl": final_attempt.response.status,
                     "cancel_response": cancel_response.raw if cancel_response is not None else None,
                 }
             )
+            self._record_live_attempt(
+                position_id,
+                position,
+                attempt_label=f"resting_ladder_{index}",
+                attempt=final_attempt,
+                update_position=update_position,
+                position_state=final_attempt.state,
+                position_filled_shares=cumulative_filled_shares,
+                position_cost_usd=cumulative_cost_usd,
+                position_avg_price=cumulative_avg_price,
+                raw_patch=raw_patch,
+                order_mode=LiveOrderMode.GTC,
+            )
 
-        cumulative_filled_shares = current_filled_shares + final_attempt.filled_shares
-        cumulative_cost_usd = current_cost_usd + final_attempt.cost_usd
-        cumulative_avg_price = cumulative_cost_usd / cumulative_filled_shares if cumulative_filled_shares > 0 else None
-        self._record_live_attempt(
-            position_id,
-            position,
-            attempt_label="resting_fallback",
-            attempt=final_attempt,
-            update_position=update_position,
-            position_state=final_attempt.state,
-            position_filled_shares=cumulative_filled_shares,
-            position_cost_usd=cumulative_cost_usd,
-            position_avg_price=cumulative_avg_price,
-            raw_patch=raw_patch,
-            order_mode=LiveOrderMode.GTC,
-        )
-        return final_attempt.state if final_attempt.state in {LivePositionState.SUBMITTED, LivePositionState.FILLED, LivePositionState.PARTIAL, LivePositionState.DELAYED, LivePositionState.UNKNOWN} else None
+        target_notional = float(position.target_notional_usd)
+        if cumulative_cost_usd >= target_notional - 1e-6:
+            return LivePositionState.FILLED
+        if any_new_fill:
+            return LivePositionState.PARTIAL
+        if any_live_state:
+            return LivePositionState.SUBMITTED
+        if any(state in {LivePositionState.DELAYED, LivePositionState.UNKNOWN} for state in final_states):
+            return LivePositionState.UNKNOWN
+        return None
+
+    def _resting_ladder_orders(
+        self,
+        position: LivePolicyPosition,
+        book: BookSnapshot,
+        current_cost_usd: float,
+    ) -> tuple[list[dict[str, float]], str | None]:
+        limit_price, target_notional_usd, resting_reason = self._resting_order_parameters(position, book, current_cost_usd)
+        if resting_reason is not None or target_notional_usd <= 0.0:
+            return [], resting_reason
+        chunk_size = max(float(self.settings.live_min_order_notional), float(self.config.resting_fallback_chunk_usd))
+        price_step = max(0.0, float(self.config.resting_fallback_price_step))
+        min_order = float(self.settings.live_min_order_notional)
+        remaining = quantize_usdc(target_notional_usd)
+        chunks: list[float] = []
+        while remaining >= min_order:
+            chunk = quantize_usdc(min(chunk_size, remaining))
+            if chunk < min_order:
+                break
+            chunks.append(chunk)
+            remaining = quantize_usdc(max(0.0, remaining - chunk))
+
+        orders: list[dict[str, float]] = []
+        for index, chunk in enumerate(chunks):
+            child_price = _quantize_cent_price(limit_price - (price_step * index))
+            if child_price <= 0.0:
+                continue
+            if book.best_bid is not None and child_price <= book.best_bid:
+                continue
+            if book.best_ask is not None and child_price >= book.best_ask:
+                continue
+            orders.append(
+                {
+                    "child_index": float(index + 1),
+                    "limit_price": child_price,
+                    "target_notional_usd": chunk,
+                }
+            )
+        if not orders:
+            return [], "NO_VALID_LADDER_ORDERS"
+        return orders, None
 
     def _place_gtc_attempt(
         self,

@@ -1352,7 +1352,7 @@ def test_tui_config_tab_renders_effective_live_sizing_values(tmp_path) -> None:
             text = "\n".join(" ".join(str(cell) for cell in config.get_row_at(index)) for index in range(config.row_count))
             assert "Sizing bankroll $2000.00" in text
             assert "Sizing base notional $10.00" in text
-            assert "Risk caps total open $450.00" in text
+            assert "Risk caps total open $1125.00" in text
             assert "Strategy tiers consensus multiplier 0.60x" in text
             assert "Price bands < 0.10 0.25x except moonshot" in text
 
@@ -1438,8 +1438,8 @@ def test_tui_live_summary_and_positions_show_sizing_caps(tmp_path) -> None:
         async with app.run_test(size=(160, 40)):
             summary = app.query_one("#live-summary", DataTable)
             summary_text = "\n".join(" ".join(str(cell) for cell in summary.get_row_at(index)) for index in range(summary.row_count))
-            assert "open risk $4.50 / $450.00" in summary_text
-            assert "largest station/date $4.50 / $125.00 KATL:2026-05-25" in summary_text
+            assert "open risk $4.50 / $1125.00" in summary_text
+            assert "largest station/date $4.50 / $300.00 KATL:2026-05-25" in summary_text
             contracts = app.query_one("#live-contracts", DataTable)
             contract_text = "\n".join(" ".join(str(cell) for cell in contracts.get_row_at(index)) for index in range(contracts.row_count))
             assert "KATL" in contract_text

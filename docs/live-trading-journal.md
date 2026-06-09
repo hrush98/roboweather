@@ -12,9 +12,9 @@ Updated: 2026-06-09
 
 | Policy | Side | Target notional | Entry cap | Notes |
 | --- | --- | ---: | ---: | --- |
-| Consensus no-tiny | mixed | $50 BUY_NO; $25 BUY_YES | <= $0.50 | Canonical promoted US high-temp core. Selected by the raw-snapshot promotion report and mapped to `pm_us12_bucket_consensus_hc_late_no_tiny_by_bucket_side_delay_first`. |
+| Consensus no-tiny | mixed | $100 BUY_NO; $50 BUY_YES | <= $0.50 | Canonical promoted US high-temp core. Selected by the raw-snapshot promotion report and mapped to `pm_us12_bucket_consensus_hc_late_no_tiny_by_bucket_side_delay_first`. |
 | Moonshot | BUY_NO | $2 | <= $0.50 | Small US high-temperature tail allocation. Original tiny moonshot remains constrained by its tighter policy price rules. |
-| Global low-temp canary | BUY_NO | $50 | $0.05-$0.75 | Primary global low-temperature BUY_NO consensus canary for EGLC, LFPB, RJTT, RKSI, VHHH, and ZSPD, station-local 00:30-05:00. |
+| Global low-temp canary | BUY_NO | $100 | $0.05-$0.75 | Primary global low-temperature BUY_NO consensus canary for EGLC, LFPB, RJTT, RKSI, VHHH, and ZSPD, station-local 00:30-05:00. |
 | Global low-temp MVP add-on | BUY_NO | $25 | $0.05-$0.50 | Additive single-model MVP sleeve, mapped to `global_low_mvp_high_conviction_buy_no_entry_05_50_by_bucket_side_delay_first`; runs after the consensus canary and uses live caps/depth sizing. |
 | Global low-temp tiny tail | BUY_NO | $5 | <= $0.05 | Asymmetric global low-temperature tail sleeve on the same station/window set, mapped to `global_low_dynamic_mvp_tail_buy_no_entry_00_05_by_bucket_side_delay_first`. |
 
@@ -22,19 +22,19 @@ Updated: 2026-06-09
 
 | Cap | Current value |
 | --- | ---: |
-| Max order | $50 |
-| Station/date | $125 |
-| Station/date/side | $85 |
-| Exact bucket/side | $50 |
-| Total open risk | $450 |
-| Daily new risk | $300 |
+| Max order | $100 |
+| Station/date | $300 |
+| Station/date/side | $200 |
+| Exact bucket/side | $100 |
+| Total open risk | $1,125 |
+| Daily new risk | $750 |
 
 ### Execution rules
 
 - US high-temperature live entries are capped at `<= 0.50` because historical replay showed materially better return on risk below this price. The global low-temp canary is BUY_NO-only with a `0.05-0.75` entry band and station-local `00:30-05:00` decision window; the global low tiny-tail sleeve covers `<= 0.05`.
-- Orders use FAK first, with retry handling for transient depth/order-version failures. Explicit partial fills continue into a 120-second resting remainder for the leftover notional. Matched/filled responses with returned fill amounts are treated as partial only when the unfilled remainder exceeds $3.
-- Any live strategy may place a single resting fallback limit order after eligible FAK failure paths.
-- Resting fallback TTL is 120 seconds and targets the remaining notional after the FAK retry path; keep whatever fills before the cancel.
+- Orders use FAK first, with retry handling for transient depth/order-version failures. Explicit partial fills continue into a 180-second resting remainder for the leftover notional. Matched/filled responses with returned fill amounts are treated as partial only when the unfilled remainder exceeds $3.
+- Any live strategy may place a resting fallback ladder after eligible FAK failure paths.
+- Resting fallback TTL is 180 seconds and targets the remaining notional after the FAK retry path with $25 GTC child orders stepped down by $0.01 from the first eligible resting price; keep whatever fills before canceling open children after the shared TTL.
 - The resting fallback is intentionally narrow: it is for improving fill odds without adding a broad passive market-making system.
 - Live settlement in the live DB updates only when the Polymarket live resolver runs. Polymarket UI may show resolution before `live_policy_positions` is marked `SETTLED`.
 
@@ -63,22 +63,22 @@ This replaces any workflow that relies only on materialized `research_policy_pos
 
 The system uses fixed per-policy targets selected by the raw-snapshot promotion gatekeeper:
 
-- Consensus no-tiny: $50 BUY_NO and $25 BUY_YES for the canonical US high-temp live core.
+- Consensus no-tiny: $100 BUY_NO and $50 BUY_YES for the canonical US high-temp live core.
 - Moonshot: $2 because US high-temperature tail entries are high variance and should not drive daily risk.
-- Global low-temp canary: $50 BUY_NO-only with entry band `0.05-0.75` and station-local `00:30-05:00`, using the existing live FAK, retry, and 120-second resting fallback engine with no added depth gate.
+- Global low-temp canary: $100 BUY_NO-only with entry band `0.05-0.75` and station-local `00:30-05:00`, using the existing live FAK, retry, and 180-second resting fallback ladder with no added depth gate.
 - Global low-temp MVP add-on: $25 BUY_NO-only with entry band `0.05-0.50`; live-style replay showed this was additive behind the current stack, but it still competes for the same station/date/bucket/side caps.
 - Global low-temp tiny tail: $5 BUY_NO-only with entry cap `<= 0.05` and the same station-local `00:30-05:00` window.
 
-The max order cap is set to $50 so the largest intended order cannot exceed the current primary-policy size. Moving primary strategies to $100 requires raising max-order and exact bucket/side caps, plus a fresh depth-aware replay for larger fills.
+The max order cap is set to $100 so the largest intended order can fit the current primary-policy size. Exact bucket/side is also $100, station/date/side is $200, station/date is $300, daily new risk is $750, and total open risk is $1,125.
 
 
 ### Potential low-temp expansion shortlist
 
-Deep raw-snapshot replay showed low-temperature markets as the strongest expansion candidate so far. The broad global low BUY_NO overlay is now a $50 live canary for the `0.05-0.75` band, and the tiny-tail BUY_NO slice is live at $5 for `<= 0.05`. Other low-temp variants stay research-only until they pass de-duplicated replay, liquidity checks, and live-market availability review.
+Deep raw-snapshot replay showed low-temperature markets as the strongest expansion candidate so far. The broad global low BUY_NO overlay is now a $100 live canary for the `0.05-0.75` band, and the tiny-tail BUY_NO slice is live at $5 for `<= 0.05`. Other low-temp variants stay research-only until they pass de-duplicated replay, liquidity checks, and live-market availability review.
 
 Candidate shortlist:
 
-- `global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first`: promoted to live canary and now sized at $50, BUY_NO-only, `$0.05-$0.75`, station-local `00:30-05:00`, using existing execution and risk controls. Earlier all-day replay showed 36 resolved, 91.7% win rate, about +11.44 PnL, R/R about 0.53, Sharpe about 0.99 across 6 stations from 2026-05-30 through 2026-06-05. A later raw-snapshot window replay favored `00:30-05:00` with 36 resolved, 36-0, about +15.19 PnL, R/R about 0.73.
+- `global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first`: promoted to live canary and now sized at $100, BUY_NO-only, `$0.05-$0.75`, station-local `00:30-05:00`, using existing execution and risk controls. Earlier all-day replay showed 36 resolved, 91.7% win rate, about +11.44 PnL, R/R about 0.53, Sharpe about 0.99 across 6 stations from 2026-05-30 through 2026-06-05. A later raw-snapshot window replay favored `00:30-05:00` with 36 resolved, 36-0, about +15.19 PnL, R/R about 0.73.
 - `global_low_dynamic_mvp_hc_buy_no_10m_entry_50_75_by_bucket_side_delay_first`: more constrained high-conviction BUY_NO candidate; 11 resolved, 100% win rate, about +4.25 PnL, R/R about 0.63, Sharpe about 5.22. Needs more sample and execution validation.
 - `global_low_dynamic_mvp_tail_buy_no_entry_00_05_by_bucket_side_delay_first`: strongest tail niche; 24 resolved, 100% win rate, about +23.33 PnL, very high R/R due to sub-5-cent entries. Now live as a $5 tiny-entry tail allocation, not a core sizing candidate.
 - `low_pm_us12_consensus_hc_buy_no_entry_50_75_by_bucket_side_delay_first`: US low-temp consensus BUY_NO candidate; 23 resolved, 100% win rate, about +8.78 PnL, R/R about 0.62. Current replay flags execution/liquidity weakness, so do not promote without book-depth confirmation.
@@ -89,7 +89,7 @@ Working interpretation: low-temp BUY_NO overlays appear to be finding overpriced
 
 FAK retries address temporary book/depth/order-version issues. When those still fail for an eligible live strategy, a short-lived passive order can capture fills inside or near the intended risk price without leaving stale exposure in the market.
 
-The 120-second TTL is a deliberate compromise: weather does not normally reprice enough in two minutes to invalidate the original edge, but the order should not remain open after the cycle context has aged.
+The 180-second TTL is a deliberate compromise: weather does not normally reprice enough in three minutes to invalidate the original edge, but the order should not remain open after the cycle context has aged. The fallback now ladders the leftover notional into $25 chunks, stepped down by one cent per child order, so a $60 remainder posts as $25, $25, and $10 rather than one large passive order.
 
 ## Journal
 
@@ -99,6 +99,7 @@ The 120-second TTL is a deliberate compromise: weather does not normally reprice
 - Deactivated NGBoost BUY_YES after the standardized raw-snapshot replay showed weak overall and poor recent performance. Reallocated the live risk slot to global low-temperature BUY_NO: the broad canary is now $50 for `$0.05-$0.75` entries and the tiny-tail `<= $0.05` sleeve is live at $5.
 - Deactivated the US high-temperature 15m consensus overlay after cap-aware live-style replay showed it was negative incrementally behind the no-tiny consensus core. The earlier standalone promotion read did not account for plan order, same station/date bucket/side caps, and live depth sizing, which let the core consume the overlapping good rows first.
 - Added `global_low_mvp_high_conviction_buy_no_entry_05_50_by_bucket_side_delay_first` as a $25 BUY_NO MVP add-on after live-style portfolio replay showed it was additive behind the current stack: 41 incremental entries, about $523.50 risk, about +$1,187.55 PnL, and about 2.27x ROI before future live fill slippage.
+- Raised the main US consensus and global low consensus canary to $100 targets and raised live caps to max order/exact bucket-side $100, station/date/side $200, station/date $300, daily new risk $750, and total open risk $1,125. Resting fallback now posts $25 penny-stepped GTC child orders with one shared 180-second TTL before refresh/cancel.
 
 ### 2026-06-08
 

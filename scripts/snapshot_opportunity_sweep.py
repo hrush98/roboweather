@@ -221,6 +221,17 @@ def load_snapshot_rows(
     us_high_temp_only: bool = False,
 ) -> list[dict[str, Any]]:
     snapshot_columns = table_columns(db, "prediction_snapshots")
+    has_station_date_outcomes = table_exists(db, "station_date_outcomes")
+    outcome_fields = (
+        "sdo.final_high_tmpf,\n            sdo.final_low_tmpf,\n            sdo.resolved_at as weather_resolved_at"
+        if has_station_date_outcomes
+        else "null as final_high_tmpf,\n            null as final_low_tmpf,\n            null as weather_resolved_at"
+    )
+    outcome_join = (
+        "left join station_date_outcomes sdo\n            on sdo.station = ps.station\n           and sdo.market_date = ps.market_date"
+        if has_station_date_outcomes
+        else ""
+    )
 
     def ps_col(name: str, fallback: str = "null") -> str:
         return f"ps.{name}" if name in snapshot_columns else fallback
@@ -291,14 +302,10 @@ def load_snapshot_rows(
             pr.entry_price,
             pr.paper_pnl,
             pr.resolved_at,
-            sdo.final_high_tmpf,
-            sdo.final_low_tmpf,
-            sdo.resolved_at as weather_resolved_at
+            {outcome_fields}
         from prediction_snapshots ps
         left join prediction_results pr on pr.prediction_snapshot_id = ps.id
-        left join station_date_outcomes sdo
-            on sdo.station = ps.station
-           and sdo.market_date = ps.market_date
+        {outcome_join}
         where {" and ".join(where)}
         order by ps.timestamp, ps.id
     """
@@ -311,6 +318,10 @@ def load_snapshot_rows(
         score_snapshot_row(item)
         rows.append(item)
     return rows
+
+
+def table_exists(db: sqlite3.Connection, table: str) -> bool:
+    return bool(db.execute("select 1 from sqlite_master where type = ? and name = ?", ("table", table)).fetchone())
 
 
 def table_columns(db: sqlite3.Connection, table: str) -> set[str]:
