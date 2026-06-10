@@ -1244,6 +1244,49 @@ def test_live_position_uses_sizing_decision_and_persists_json(tmp_path: Path) ->
     assert f'"final_target_notional_usd": {EDGE_CORE_NOTIONAL_USD:.1f}' in raw
 
 
+def test_insufficient_sweep_depth_sizes_for_resting_ladder(tmp_path: Path) -> None:
+    from weather_trader.execution.contracts import ResearchPolicyPosition
+
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live"))
+    plan = live_execution.LiveStrategyPlan(
+        live_execution.edge_core_live_strategy(EDGE_CORE_NOTIONAL_USD),
+        (edge_core_policy_spec(LiveExecutionConfig()),),
+        EDGE_CORE_NOTIONAL_USD,
+        None,
+        0.0,
+    )
+    source = ResearchPolicyPosition(
+        timestamp="2026-05-25T18:00:00+00:00",
+        policy_name=EDGE_CORE_POLICY_NAME,
+        station="KATL",
+        market_date=date(2026, 5, 25),
+        scope_key="station_date_bucket_side_obs_delay:72-73F:BUY_NO:15m",
+        model_group=DYNAMIC_TUNED_MODEL,
+        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        obs_delay_bucket="15m",
+        selected_market_id="market-1",
+        selected_side=TradeAction.BUY_NO,
+        selected_bucket="72-73F",
+        entry_price=0.4,
+        entry_edge=0.5,
+        entry_fair=0.9,
+        source_prediction_snapshot_ids=[1],
+        raw_policy={},
+        selected_sweep_price_cap=0.4,
+        selected_sweep_depth_to_cap=0.0,
+        selected_book_age_seconds=1.0,
+    )
+
+    sizing = engine._size_candidate(live_execution.LiveCandidate(plan, source), as_of_utc=datetime(2026, 5, 25, 18, 0, tzinfo=timezone.utc))
+
+    assert sizing.blocked_reason is None
+    assert sizing.target_notional_usd == pytest.approx(EDGE_CORE_NOTIONAL_USD)
+    assert sizing.raw_json["resting_ladder_on_insufficient_depth"] is True
+    assert sizing.raw_json["resting_ladder_source_reason"] == "INSUFFICIENT_DEPTH"
+    assert sizing.raw_json["depth_limited_sweep_sizing"]["blocked_reason"] == "INSUFFICIENT_DEPTH"
+
+
 def test_blocked_sizing_can_be_recorded_as_rejected_position(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
     engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=()))
@@ -1273,11 +1316,13 @@ class SizingSubmitter(FakeSubmitter):
 class RestingFallbackSubmitter(FakeSubmitter):
     def __init__(self, *, after_ttl: dict[str, object]) -> None:
         self.after_ttl = after_ttl
+        self.fak_calls: list[tuple[str, str, float, float]] = []
         self.gtc_calls: list[tuple[str, str, float, float]] = []
         self.get_order_calls: list[str] = []
         self.cancel_calls: list[str] = []
 
     def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+        self.fak_calls.append((token_id, side, price, amount))
         return OrderSubmission(False, None, "rejected", "insufficient depth", {"success": False, "status": "rejected", "errorMsg": "insufficient depth"})
 
     def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
@@ -1745,6 +1790,66 @@ def test_resting_ladder_splits_sixty_dollar_remainder(tmp_path: Path) -> None:
         {"child_index": 2.0, "limit_price": 0.36, "target_notional_usd": 25.0},
         {"child_index": 3.0, "limit_price": 0.35, "target_notional_usd": 10.0},
     ]
+
+
+def test_insufficient_depth_position_skips_fak_and_posts_resting_ladder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    submitter = RestingFallbackSubmitter(after_ttl={"success": True, "status": "live"})
+    book = BookSnapshot(
+        token_id="no-token",
+        bids=[BookLevel(price=0.33, size=100.0)],
+        asks=[BookLevel(price=0.42, size=100.0)],
+        timestamp="2026-05-20T18:00:06+00:00",
+    )
+    book_client = StaticBookClient(book)
+    sleeps: list[float] = []
+    monkeypatch.setattr(live_execution.time, "sleep", lambda seconds: sleeps.append(seconds))
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live", resting_fallback_ttl_seconds=60.0),
+        book_client=book_client,
+        submitter=submitter,
+    )
+    base_position = _live_position()
+    position = base_position.__class__(
+        **{
+            **base_position.__dict__,
+            "target_notional_usd": 60.0,
+            "target_shares": 150.0,
+            "raw_json": {
+                "limit_price": 0.4,
+                "sizing": {
+                    "resting_ladder_on_insufficient_depth": True,
+                    "resting_ladder_source_reason": "INSUFFICIENT_DEPTH",
+                },
+            },
+        }
+    )
+    position_id = store.insert_live_policy_position(position)
+    assert position_id is not None
+
+    state = engine._submit(position_id, position, market=_retry_market(), initial_book=book)
+
+    assert state == LivePositionState.REJECTED
+    assert sleeps == [60.0]
+    assert book_client.calls == []
+    assert submitter.fak_calls == []
+    assert submitter.gtc_calls == [
+        ("no-token", "BUY", 0.37, 25.0),
+        ("no-token", "BUY", 0.36, 25.0),
+        ("no-token", "BUY", 0.35, 10.0),
+    ]
+    assert submitter.get_order_calls == ["gtc-1", "gtc-2", "gtc-3"]
+    assert submitter.cancel_calls == ["gtc-1", "gtc-2", "gtc-3"]
+    attempts = store.connection.execute("select attempt_seq, order_mode, external_order_id, limit_price, target_notional_usd, final_state from live_order_attempts order by attempt_seq").fetchall()
+    assert [(row["attempt_seq"], row["order_mode"], row["external_order_id"], row["limit_price"], row["target_notional_usd"], row["final_state"]) for row in attempts] == [
+        (1, "GTC", "gtc-1", 0.37, 25.0, "CANCELLED"),
+        (2, "GTC", "gtc-2", 0.36, 25.0, "CANCELLED"),
+        (3, "GTC", "gtc-3", 0.35, 10.0, "CANCELLED"),
+    ]
+    row = store.connection.execute("select state, raw_json from live_policy_positions where id = ?", (position_id,)).fetchone()
+    assert row["state"] == "REJECTED"
+    assert "RESTING_LADDER_SKIPPED_AFTER_INSUFFICIENT_DEPTH" in row["raw_json"]
 
 
 def test_resting_fallback_updates_position_when_filled_during_ttl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

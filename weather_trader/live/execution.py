@@ -37,7 +37,7 @@ from weather_trader.execution.liquidity import quantize_price, quantize_shares, 
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import CelsiusWeatherFeatureService, StationWeatherState, WeatherFeatureService
 from weather_trader.live.settings import LiveSettings, load_live_settings, private_key_from_env_or_keyfile
-from weather_trader.live.sizing import LiveSizingDecision, LiveSizingModel
+from weather_trader.live.sizing import INSUFFICIENT_DEPTH, LiveSizingDecision, LiveSizingModel
 from weather_trader.research.collector import ResearchConfig, build_prediction_snapshot, due_delay_buckets
 from weather_trader.stations.metadata import get_station
 from weather_trader.research.policies import (
@@ -913,7 +913,8 @@ class LiveExecutionEngine:
     def _size_candidate(self, candidate: LiveCandidate, as_of_utc: datetime) -> LiveSizingDecision:
         source = candidate.position
         entry_price = float(source.selected_sweep_price_cap or source.entry_price)
-        return self.sizing_model.size_candidate(
+        exposure = self.store.live_exposure_summary()
+        depth_limited = self.sizing_model.size_candidate(
             strategy_name=candidate.plan.strategy.name,
             entry_price=entry_price,
             station=str(source.station),
@@ -921,9 +922,41 @@ class LiveExecutionEngine:
             selected_side=source.selected_side,
             selected_bucket=source.selected_bucket,
             sweep_depth_to_cap=source.selected_sweep_depth_to_cap,
-            exposure=self.store.live_exposure_summary(),
+            exposure=exposure,
             target_notional_usd=candidate.plan.target_notional_usd,
             as_of_utc=as_of_utc,
+        )
+        if depth_limited.blocked_reason != INSUFFICIENT_DEPTH:
+            return depth_limited
+
+        risk_limited = self.sizing_model.size_candidate(
+            strategy_name=candidate.plan.strategy.name,
+            entry_price=entry_price,
+            station=str(source.station),
+            market_date=source.market_date,
+            selected_side=source.selected_side,
+            selected_bucket=source.selected_bucket,
+            sweep_depth_to_cap=None,
+            exposure=exposure,
+            target_notional_usd=candidate.plan.target_notional_usd,
+            as_of_utc=as_of_utc,
+        )
+        if risk_limited.blocked_reason is not None:
+            return risk_limited
+
+        raw = dict(risk_limited.raw_json)
+        raw["depth_limited_sweep_sizing"] = depth_limited.raw_json
+        raw["resting_ladder_on_insufficient_depth"] = True
+        raw["resting_ladder_source_reason"] = INSUFFICIENT_DEPTH
+        return LiveSizingDecision(
+            risk_limited.target_notional_usd,
+            risk_limited.base_notional_usd,
+            risk_limited.policy_multiplier,
+            risk_limited.price_multiplier,
+            risk_limited.pre_cap_target_usd,
+            risk_limited.caps,
+            risk_limited.blocked_reason,
+            raw,
         )
 
     def _live_position(
@@ -1003,6 +1036,26 @@ class LiveExecutionEngine:
     ) -> LivePositionState:
         errors = errors if errors is not None else []
         limit_price = float(position.raw_json["limit_price"])
+        sizing_raw = position.raw_json.get("sizing") if isinstance(position.raw_json, dict) else None
+        if isinstance(sizing_raw, dict) and sizing_raw.get("resting_ladder_on_insufficient_depth"):
+            fallback_state = self._submit_resting_fallback(
+                position_id=position_id,
+                position=position,
+                current_cost_usd=0.0,
+                current_filled_shares=0.0,
+                book=initial_book,
+                source_reason=str(sizing_raw.get("resting_ladder_source_reason") or INSUFFICIENT_DEPTH),
+                errors=errors,
+            )
+            if fallback_state is not None:
+                return fallback_state
+            self.store.update_live_policy_position_execution(
+                position_id,
+                state=str(LivePositionState.REJECTED),
+                raw_patch={"final_reason": "RESTING_LADDER_SKIPPED_AFTER_INSUFFICIENT_DEPTH"},
+            )
+            return LivePositionState.REJECTED
+
         first_attempt = self._place_attempt(
             position=position,
             limit_price=limit_price,
