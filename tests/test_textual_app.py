@@ -10,7 +10,7 @@ import pytest
 from textual.widgets import Button, DataTable, Input, Static, TabPane
 
 from weather_trader.ui.process_supervisor import ProcessSnapshot, ProcessSpec, ProcessSupervisor
-from weather_trader.ui.textual_app import RoboWeatherTUI, _live_position_risk_value, _live_start_label
+from weather_trader.ui.textual_app import RoboWeatherTUI, _live_performance_summary_or_empty, _live_position_risk_value, _live_start_label
 from weather_trader.ui.dashboard_rollups import _build_live_policy_view, _build_policy_view, _build_position_view, _bucket_label
 from weather_trader.execution.contracts import (
     BookLevel,
@@ -414,6 +414,12 @@ def test_live_performance_summary_builds_cumulative_series(tmp_path) -> None:
     assert summary["daily_rows"][1]["cumulative_pnl"] == pytest.approx(1.0)
     assert summary["last_7_days"] == summary["daily_rows"]
     assert summary["total_pnl"] == pytest.approx(1.0)
+
+
+def test_live_performance_summary_falls_back_when_store_returns_none() -> None:
+    summary = _live_performance_summary_or_empty(None)
+
+    assert summary == {"daily_rows": [], "last_7_days": [], "total_pnl": 0.0, "start_date": None, "end_date": None}
 
 
 def test_live_policy_view_scores_prelim_weather_when_books_are_missing() -> None:

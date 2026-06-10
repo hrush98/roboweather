@@ -86,6 +86,18 @@ def _age_minutes(value: str | None) -> float | None:
     return (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds() / 60.0
 
 
+def _live_performance_summary_or_empty(performance: dict[str, Any] | None) -> dict[str, Any]:
+    if isinstance(performance, dict):
+        return {
+            "daily_rows": performance.get("daily_rows") or [],
+            "last_7_days": performance.get("last_7_days") or [],
+            "total_pnl": performance.get("total_pnl") or 0.0,
+            "start_date": performance.get("start_date"),
+            "end_date": performance.get("end_date"),
+        }
+    return {"daily_rows": [], "last_7_days": [], "total_pnl": 0.0, "start_date": None, "end_date": None}
+
+
 def _sort_key(value: Any, reverse: bool = False) -> tuple[int, int, float | str]:
     text = str(value or "").strip()
     if text.lower() in {"", "n/a", "none", "nan"}:
@@ -999,7 +1011,7 @@ class RoboWeatherTUI(App):
             live_events = store.recent_live_trade_events(limit=100)
             live_risk = store.recent_live_risk_snapshots(limit=5)
             exposure = store.live_exposure_summary()
-            performance = store.live_performance_summary()
+            performance = _live_performance_summary_or_empty(store.live_performance_summary())
             strategies = store.live_strategies(active_only=False)
             overview = store.research_status_overview(self.target_date)
         finally:
