@@ -508,6 +508,7 @@ def global_low_mvp_buy_no_policy_spec() -> ResearchPolicySpec:
         StrategyBucket.HIGH_CONVICTION,
         model_name=GLOBAL_LOW_MVP_MODEL,
         selected_side=TradeAction.BUY_NO,
+        station_allow_set=GLOBAL_LOW_STATIONS,
         entry_price_min=GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
         entry_price_max=GLOBAL_LOW_MVP_BUY_NO_ENTRY_PRICE_MAX,
         uniqueness_key_mode="station_date_bucket_side_obs_delay",

@@ -232,7 +232,7 @@ def test_live_strategy_plans_include_moonshot_and_global_low_canary_tail() -> No
     assert global_low_mvp.policies[0].model_name == GLOBAL_LOW_MVP_MODEL
     assert global_low_mvp.policies[0].model_group is None
     assert global_low_mvp.policies[0].selected_side == TradeAction.BUY_NO
-    assert global_low_mvp.policies[0].station_allow_set is None
+    assert global_low_mvp.policies[0].station_allow_set == GLOBAL_LOW_STATIONS
     assert global_low_mvp.policies[0].entry_price_min == pytest.approx(GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN)
     assert global_low_mvp.policies[0].entry_price_max == pytest.approx(GLOBAL_LOW_MVP_BUY_NO_ENTRY_PRICE_MAX)
     assert global_low_mvp.selected_side == TradeAction.BUY_NO
@@ -477,7 +477,7 @@ def test_global_low_mvp_buy_no_policy_spec_filters_buy_no_cap_and_bucket_side_de
         _snapshot(
             GLOBAL_LOW_MVP_MODEL,
             id=2,
-            station="WSSS",
+            station="KLGA",
             market_family="LOW_TEMP",
             selected_no_ask=0.49,
             selected_bucket="12-13C",
@@ -520,8 +520,8 @@ def test_global_low_mvp_buy_no_policy_spec_filters_buy_no_cap_and_bucket_side_de
     filtered = evaluator._candidates_for_policy(spec, rows, [])
     selected = evaluator._first_by_scope(spec, filtered)
 
-    assert [item["selected_bucket"] for item in selected] == ["10-11C", "12-13C"]
-    assert {item["station"] for item in selected} == {"EGLC", "WSSS"}
+    assert [item["selected_bucket"] for item in selected] == ["10-11C"]
+    assert {item["station"] for item in selected} == {"EGLC"}
     assert all(item["model_name"] == GLOBAL_LOW_MVP_MODEL for item in selected)
     assert all(item["selected_side"] == "BUY_NO" for item in selected)
 
@@ -665,7 +665,7 @@ def test_live_market_admission_follows_active_strategy_plans() -> None:
     assert live_execution._market_admitted_by_strategy_plans(us_high, plans) is True
     assert live_execution._market_admitted_by_strategy_plans(global_low, plans) is True
     assert live_execution._market_admitted_by_strategy_plans(global_high, plans) is False
-    assert live_execution._market_admitted_by_strategy_plans(unrelated_low, plans) is True
+    assert live_execution._market_admitted_by_strategy_plans(unrelated_low, plans) is False
 
 
 def test_ngboost_best_buy_yes_policy_spec_filters_late_medium_entries(tmp_path: Path) -> None:
