@@ -6,7 +6,7 @@ Git history remains the source of truth for code changes. This journal is the so
 
 ## Current Live State
 
-Updated: 2026-06-09
+Updated: 2026-06-12
 
 ### Active policies
 
@@ -15,7 +15,7 @@ Updated: 2026-06-09
 | Consensus no-tiny | mixed | $100 BUY_NO; $50 BUY_YES | <= $0.50 | Canonical promoted US high-temp core. Selected by the raw-snapshot promotion report and mapped to `pm_us12_bucket_consensus_hc_late_no_tiny_by_bucket_side_delay_first`. |
 | Moonshot | BUY_NO | $2 | <= $0.50 | Small US high-temperature tail allocation. Original tiny moonshot remains constrained by its tighter policy price rules. |
 | Global low-temp canary | BUY_NO | $100 | $0.05-$0.75 | Primary global low-temperature BUY_NO consensus canary for EGLC, LFPB, RJTT, RKSI, VHHH, and ZSPD, station-local 00:30-05:00. |
-| Global low-temp MVP add-on | BUY_NO | $25 | $0.05-$0.50 | Additive single-model MVP sleeve, mapped to `global_low_mvp_high_conviction_buy_no_entry_05_50_by_bucket_side_delay_first`; runs after the consensus canary and uses live caps/depth sizing. |
+| Global low-temp MVP add-on | BUY_NO | $50 | $0.05-$0.50 | Additive single-model MVP sleeve, mapped to `global_low_mvp_high_conviction_buy_no_entry_05_50_by_bucket_side_delay_first`; runs after the consensus canary and uses live caps/depth sizing. |
 | Global low-temp tiny tail | BUY_NO | $5 | <= $0.05 | Asymmetric global low-temperature tail sleeve on the same station/window set, mapped to `global_low_dynamic_mvp_tail_buy_no_entry_00_05_by_bucket_side_delay_first`. |
 
 ### Risk caps
@@ -32,15 +32,16 @@ Updated: 2026-06-09
 ### Execution rules
 
 - US high-temperature live entries are capped at `<= 0.50` because historical replay showed materially better return on risk below this price. The global low-temp canary is BUY_NO-only with a `0.05-0.75` entry band and station-local `00:30-05:00` decision window; the global low tiny-tail sleeve covers `<= 0.05`.
-- Orders use FAK first, with retry handling for transient depth/order-version failures. Explicit partial fills continue into a 180-second resting remainder for the leftover notional. Matched/filled responses with returned fill amounts are treated as partial only when the unfilled remainder exceeds $3.
+- Orders use FAK first, with retry handling for transient depth/order-version failures. Explicit partial fills continue into a 360-second resting remainder for the leftover notional. Matched/filled responses with returned fill amounts are treated as partial only when the unfilled remainder exceeds $3.
 - Any live strategy may place a resting fallback ladder after eligible FAK failure paths.
-- Resting fallback TTL is 180 seconds and targets the remaining notional after the FAK retry path with $25 GTC child orders stepped down by $0.01 from the first eligible resting price; keep whatever fills before canceling open children after the shared TTL.
+- Candidates blocked only by insufficient ask-sweep depth skip the FAK attempt and route directly into the same resting GTC ladder, while keeping risk/exposure caps intact.
+- Resting fallback TTL is 360 seconds and targets the remaining notional after the FAK retry path with $25 GTC child orders stepped down by $0.01 from the first eligible resting price; keep whatever fills before canceling open children after the shared TTL.
 - The resting fallback is intentionally narrow: it is for improving fill odds without adding a broad passive market-making system.
 - Live settlement in the live DB updates only when the Polymarket live resolver runs. Polymarket UI may show resolution before `live_policy_positions` is marked `SETTLED`.
 
 ### Known operator caveats
 
-- The TUI config page still shows legacy base notional from bankroll and fixed fraction. Actual live policy sizing now comes from fixed per-policy targets.
+- The TUI strategy and performance tables are the primary place to inspect per-policy target caps, entry bands, market family, and recent/live/historical performance. The Config tab is intentionally limited to operational execution, sizing, and risk caps.
 - Research policy scoring uses official weather outcomes from IEM ASOS. Live PnL settlement uses Polymarket resolution.
 - Same-day weather snapshots are useful for preliminary reads, but official Polymarket resolution is what determines live settlement.
 - Polymarket's portfolio P/L is account-level. The live SQLite ledger tracks the bot's positions, fills, and settlements, so any mismatch means the bot ledger is missing some mark, settlement, or timing state relative to the exchange view.
@@ -65,8 +66,8 @@ The system uses fixed per-policy targets selected by the raw-snapshot promotion 
 
 - Consensus no-tiny: $100 BUY_NO and $50 BUY_YES for the canonical US high-temp live core.
 - Moonshot: $2 because US high-temperature tail entries are high variance and should not drive daily risk.
-- Global low-temp canary: $100 BUY_NO-only with entry band `0.05-0.75` and station-local `00:30-05:00`, using the existing live FAK, retry, and 180-second resting fallback ladder with no added depth gate.
-- Global low-temp MVP add-on: $25 BUY_NO-only with entry band `0.05-0.50`; live-style replay showed this was additive behind the current stack, but it still competes for the same station/date/bucket/side caps.
+- Global low-temp canary: $100 BUY_NO-only with entry band `0.05-0.75` and station-local `00:30-05:00`, using the existing live FAK, retry, and 360-second resting fallback ladder with no added depth gate.
+- Global low-temp MVP add-on: $50 BUY_NO-only with entry band `0.05-0.50`; cap-aware portfolio replay showed the move from $25 to $50 remained positive after the current stack, caps, and recorded depth, but it still competes for the same station/date/bucket/side caps.
 - Global low-temp tiny tail: $5 BUY_NO-only with entry cap `<= 0.05` and the same station-local `00:30-05:00` window.
 
 The max order cap is set to $100 so the largest intended order can fit the current primary-policy size. Exact bucket/side is also $100, station/date/side is $200, station/date is $300, daily new risk is $750, and total open risk is $1,125.
@@ -89,9 +90,25 @@ Working interpretation: low-temp BUY_NO overlays appear to be finding overpriced
 
 FAK retries address temporary book/depth/order-version issues. When those still fail for an eligible live strategy, a short-lived passive order can capture fills inside or near the intended risk price without leaving stale exposure in the market.
 
-The 180-second TTL is a deliberate compromise: weather does not normally reprice enough in three minutes to invalidate the original edge, but the order should not remain open after the cycle context has aged. The fallback now ladders the leftover notional into $25 chunks, stepped down by one cent per child order, so a $60 remainder posts as $25, $25, and $10 rather than one large passive order.
+The 360-second TTL is a deliberate compromise: weather does not normally reprice enough in six minutes to invalidate the original edge, but the order should not remain open after the cycle context has aged. The fallback now ladders the leftover notional into $25 chunks, stepped down by one cent per child order, so a $60 remainder posts as $25, $25, and $10 rather than one large passive order.
 
 ## Journal
+
+### 2026-06-12
+
+- Raised the global low-temperature MVP add-on from $25 to $50 after the new cap-aware portfolio replay showed the size-up stayed positive behind the current stack with recorded ask-sweep depth. All-loaded replay moved the MVP sleeve from about $672.85 risk / +$1,645.78 PnL / 2.45 R/R to about $884.32 risk / +$2,111.15 PnL / 2.39 R/R; recent replay from 2026-06-04 moved it from about $366.35 risk / +$514.91 PnL / 1.41 R/R to about $445.23 risk / +$667.65 PnL / 1.50 R/R. This is a controlled size-up, not a broad cap increase; US consensus no-tiny remains unchanged until post-fix live settlement confirms replay quality.
+- HRRR-rich dynamic-tuned inland late-day disagreement replay looks promising as a future additive US high-temperature overlay, not a standalone/core strategy. In the initial resolved overlap window from 2026-06-04 through 2026-06-10, `dynamic_bucket_tuned_hrrr_rich_pm_active_us12_obs_2022_2025` additive inland-only rows showed 10 resolved, 60.0% win rate, about +1.80 PnL, and R/R about 0.43 when HRRR found late local `12:00-15:00` `HIGH_CONVICTION` `<= 0.50` opportunities the obs bucket consensus did not already own or saw much more weakly. Coastal HRRR disagreement was negative, and HRRR CatBoost was poor in this overlay shape, so revisit only as a tiny canary/research sleeve after more resolved inland sample, likely around `hrrr_dynamic_tuned_inland_late_disagreement_entry_00_50_by_bucket_side_delay_first`.
+
+### 2026-06-11
+
+- Live global low-temperature review showed the `$0.50-$0.75` canary band has been selected, but realized live exposure is uneven: filled cost is far below intended target notional, and some parent rows overstated completion after partial resting fills. Live execution now keeps parent positions `PARTIAL` until cumulative cost reaches the parent target.
+
+### 2026-06-10
+
+- Live order review showed recent LFPB resting fallback ladders were posted and cancelled after TTL with no fills. Parent position summaries now report that as `RESTING_TTL_EXPIRED`, while truly skipped ladders remain separate from accepted-but-unhit passive orders.
+- Fixed the FAK/retry/GTC execution handoff after KSEA HIGH_TEMP only filled the sweep-depth-sized `$13.50` child against a `$100` target and stopped. Sweep depth now limits the initial FAK amount only; the position keeps the full risk-capped target and routes remaining notional through retry and the resting GTC ladder.
+- Fixed the live v2 resting fallback order path after recent RKSI LOW_TEMP showed FAK partial fills followed by rejected GTC ladder children with invalid tick-size prices. Passive GTC/GTD children now use explicit limit-order submission with price and share size instead of market-order amount reconstruction.
+- Fixed the global low-temperature MVP add-on station filter after live KLGA LOW_TEMP BUY_NO fills showed it was admitting US low-temperature markets. The MVP add-on now uses the same global station allow-list as the global low consensus and tiny-tail sleeves: EGLC, LFPB, RJTT, RKSI, VHHH, and ZSPD.
 
 ### 2026-06-09
 
@@ -99,7 +116,7 @@ The 180-second TTL is a deliberate compromise: weather does not normally reprice
 - Deactivated NGBoost BUY_YES after the standardized raw-snapshot replay showed weak overall and poor recent performance. Reallocated the live risk slot to global low-temperature BUY_NO: the broad canary is now $50 for `$0.05-$0.75` entries and the tiny-tail `<= $0.05` sleeve is live at $5.
 - Deactivated the US high-temperature 15m consensus overlay after cap-aware live-style replay showed it was negative incrementally behind the no-tiny consensus core. The earlier standalone promotion read did not account for plan order, same station/date bucket/side caps, and live depth sizing, which let the core consume the overlapping good rows first.
 - Added `global_low_mvp_high_conviction_buy_no_entry_05_50_by_bucket_side_delay_first` as a $25 BUY_NO MVP add-on after live-style portfolio replay showed it was additive behind the current stack: 41 incremental entries, about $523.50 risk, about +$1,187.55 PnL, and about 2.27x ROI before future live fill slippage.
-- Raised the main US consensus and global low consensus canary to $100 targets and raised live caps to max order/exact bucket-side $100, station/date/side $200, station/date $300, daily new risk $750, and total open risk $1,125. Resting fallback now posts $25 penny-stepped GTC child orders with one shared 180-second TTL before refresh/cancel.
+- Raised the main US consensus and global low consensus canary to $100 targets and raised live caps to max order/exact bucket-side $100, station/date/side $200, station/date $300, daily new risk $750, and total open risk $1,125. Resting fallback now posts $25 penny-stepped GTC child orders with one shared 360-second TTL before refresh/cancel.
 
 ### 2026-06-08
 

@@ -2,8 +2,33 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-06-12
+
+- Integrated current-stack promotion/candidate replay into `scripts/trading_retrospective_report.py` so the weekly review packet shows live sleeves, candidate sleeves, empirical PnL/R/R, fill/sample counts, and watch/review status in one run.
+- Renamed weekly retrospective EV labels so entry-edge EV is explicitly treated as uncalibrated model-implied EV, while current-stack resolved replay PnL is presented as the empirical EV proxy until calibration improves.
+- Enhanced `scripts/trading_retrospective_report.py` to separate uncalibrated model-implied intended EV from filled model-implied EV, estimate missed model-implied EV from unfilled exposure, classify execution outcomes as terminal rejects vs child FAK misses/resting TTL/order-construction issues, and support `--start-timestamp`/`--end-timestamp` for post-deployment reviews.
+- Added `scripts/trading_retrospective_report.py` for manual Sunday/Monday weekly live retrospectives covering uncalibrated model-implied EV, empirical replay EV/PnL, realized PnL, fills vs intended notional, rejects by reason, current-stack replay comparison, and policy review/kill threshold flags.
+- Added `docs/continuous-improvement-loop.md` and `docs/hypotheses/README.md` to formalize the hypothesis-to-replay-to-live-canary-to-gate workflow for recursive trading-system improvement.
+- Raised the live global low-temperature MVP add-on default target from $25 to $50 after cap-aware portfolio replay showed the size-up remained positive behind the current live stack using current caps and recorded ask-sweep depth.
+- Added `scripts/portfolio_promotion_report.py` as the cap-aware current-stack replay gate for live sizing and promotion decisions; it reports each sleeve's incremental risk/PnL/RR after current live plan order, risk caps, and recorded ask-sweep depth.
+- Added `docs/roadmap-to-1000-ev-day.md` as the strategic scaling roadmap, including portfolio-promotion requirements, calibration/regime sizing, HRRR specialist overlay replay results, breadth expansion, and execution-attribution milestones.
+
+## 2026-06-11
+
+- Fixed live resting fallback accounting so a parent position is marked `PARTIAL`, not `FILLED`, when GTC child orders fill only part of the parent target; filled shares, cost, and average entry are now persisted from cumulative parent-level execution before returning from the fallback path.
+
+## 2026-06-10
+
+- Raised the live resting fallback TTL from 180 seconds to 360 seconds so accepted passive GTC ladder children have more time to fill before refresh/cancel.
+- Changed live resting fallback parent summaries so GTC ladders that are posted, left unfilled for the TTL, and then cancelled are reported as `RESTING_TTL_EXPIRED` instead of the misleading `RESTING_LADDER_SKIPPED_AFTER_INSUFFICIENT_DEPTH`.
+- Fixed depth-limited live entries so selected sweep depth caps only the initial FAK child, not the full intended risk target; filled sweep children now continue through retry and resting GTC ladder for the remaining risk-capped notional.
+- Fixed live Polymarket v2 resting fallback submission so passive GTC/GTD child orders use explicit limit-order args with tick-resolved price and share size, avoiding invalid signed prices from market-order amount/price reconstruction.
+- Routed live entries blocked only by insufficient ask-sweep depth directly into the resting $25 GTC ladder, preserving risk caps while avoiding no-op FAK rejects when passive fills are acceptable.
+- Restricted the live `global_low_mvp_high_conviction_buy_no_entry_05_50_by_bucket_side_delay_first` add-on to the global low-temperature station allow-list after KLGA LOW_TEMP fills showed the MVP sleeve was missing the station filter used by the other global low sleeves.
+
 ## 2026-06-09
 
+- Updated the Textual live dashboard for the US plus global live stack: Live exposure now aggregates all open positions across market dates instead of filtering to only the newest date, station/contract/strategy rows show market family, strategy rows show caps and decision windows, the Performance tab adds per-strategy recent/live/historical R/R and Sharpe columns, and the Config tab was trimmed to operational execution/sizing/risk settings.
 - Raised main live sizing to $100 targets for the US no-tiny consensus core and global low-temperature consensus canary, with risk caps raised to max order/exact bucket-side $100, station/date/side $200, station/date $300, daily new risk $750, and total open risk $1,125. Resting fallback now ladders leftover notional into $25 penny-stepped GTC child orders under one shared 180-second TTL before refresh/cancel.
 - Added a $25 live `global_low_mvp_high_conviction_buy_no_entry_05_50_by_bucket_side_delay_first` BUY_NO add-on after live-style portfolio replay showed positive incremental value behind the current stack; exposed `--global-low-mvp-notional-usd` for independent sizing.
 - Deactivated the live US high-temperature 15m consensus overlay after cap-aware live-style replay showed the policy was negative incrementally behind the no-tiny consensus core; the active US high-temperature stack now keeps the canonical no-tiny consensus core plus the small moonshot sleeve.
