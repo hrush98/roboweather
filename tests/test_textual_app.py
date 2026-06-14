@@ -10,7 +10,14 @@ import pytest
 from textual.widgets import Button, DataTable, Input, Static, TabPane
 
 from weather_trader.ui.process_supervisor import ProcessSnapshot, ProcessSpec, ProcessSupervisor
-from weather_trader.ui.textual_app import RoboWeatherTUI, _live_performance_summary_or_empty, _live_position_risk_value, _live_start_label
+from weather_trader.ui.textual_app import (
+    RoboWeatherTUI,
+    _dict_or_empty,
+    _list_of_dicts,
+    _live_performance_summary_or_empty,
+    _live_position_risk_value,
+    _live_start_label,
+)
 from weather_trader.ui.dashboard_rollups import _build_live_policy_view, _build_policy_view, _build_position_view, _bucket_label
 from weather_trader.execution.contracts import (
     BookLevel,
@@ -416,10 +423,45 @@ def test_live_performance_summary_builds_cumulative_series(tmp_path) -> None:
     assert summary["total_pnl"] == pytest.approx(1.0)
 
 
+def test_dict_or_empty_normalizes_non_dict_values() -> None:
+    value = {"ok": True}
+
+    assert _dict_or_empty(value) is value
+    assert _dict_or_empty(None) == {}
+    assert _dict_or_empty(["bad"]) == {}
+
+
+def test_list_of_dicts_filters_malformed_rows() -> None:
+    row = {"ok": True}
+
+    assert _list_of_dicts(None) == []
+    assert _list_of_dicts([row, None, "bad", {"also": "ok"}]) == [row, {"also": "ok"}]
+
+
 def test_live_performance_summary_falls_back_when_store_returns_none() -> None:
     summary = _live_performance_summary_or_empty(None)
 
     assert summary == {"daily_rows": [], "last_7_days": [], "total_pnl": 0.0, "start_date": None, "end_date": None}
+
+
+def test_live_performance_summary_filters_malformed_rows() -> None:
+    summary = _live_performance_summary_or_empty(
+        {
+            "daily_rows": [{"utc_date": "2026-05-10"}, None, "bad"],
+            "last_7_days": None,
+            "total_pnl": None,
+            "start_date": "2026-05-10",
+            "end_date": "2026-05-11",
+        }
+    )
+
+    assert summary == {
+        "daily_rows": [{"utc_date": "2026-05-10"}],
+        "last_7_days": [],
+        "total_pnl": 0.0,
+        "start_date": "2026-05-10",
+        "end_date": "2026-05-11",
+    }
 
 
 def test_live_policy_view_scores_prelim_weather_when_books_are_missing() -> None:
@@ -748,6 +790,75 @@ def test_tui_live_resolution_exception_is_captured_and_dashboard_renders(tmp_pat
             assert app._last_live_resolution_summary is not None
             assert app._last_live_resolution_summary["errors"] == 1
             assert "resolver unavailable" in app._last_live_resolution_summary["detail"]
+
+    asyncio.run(scenario())
+
+
+def test_tui_refresh_table_handles_none_store_results(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeStore:
+        def __init__(self, db_path) -> None:
+            self.db_path = db_path
+
+        def latest_live_market_date(self):
+            return None
+
+        def latest_research_market_date(self):
+            return None
+
+        def recent_signals(self, *, limit: int):
+            return None
+
+        def recent_decisions(self, *, limit: int):
+            return None
+
+        def recent_engine_states(self, *, limit: int):
+            return None
+
+        def live_dashboard_positions(self, *, limit: int):
+            return None
+
+        def recent_live_order_attempts(self, *, limit: int):
+            return [{"order_mode": "GTC", "raw_payload": '{"execution": null}'}]
+
+        def recent_live_trade_events(self, *, limit: int):
+            return None
+
+        def recent_live_risk_snapshots(self, *, limit: int):
+            return None
+
+        def live_exposure_summary(self):
+            return {"daily_new_risk_usd": None, "station_date_exposure_usd": None}
+
+        def live_performance_summary(self):
+            return None
+
+        def live_strategies(self, *, active_only: bool):
+            return None
+
+        def research_status_overview(self, market_date):
+            return None
+
+        def close(self) -> None:
+            pass
+
+    class FakeLiveResolutionService:
+        def __init__(self, store) -> None:
+            self.store = store
+
+        def resolve_due(self, *, as_of_utc=None):
+            return SimpleNamespace(candidates=0, resolved=0, pending=0, skipped=0, errors=[])
+
+    monkeypatch.setattr("weather_trader.ui.textual_app.ExecutionStore", FakeStore)
+    monkeypatch.setattr("weather_trader.ui.textual_app.LiveResolutionService", FakeLiveResolutionService)
+
+    async def scenario() -> None:
+        app = RoboWeatherTUI(tmp_path / "tui.sqlite", process_supervisor=_test_supervisor(tmp_path))
+        async with app.run_test(size=(140, 40)):
+            app.refresh_table()
+            assert app.query_one("#live-summary", DataTable).row_count > 0
+            assert app.query_one("#signals", DataTable).row_count == 0
+            assert app.query_one("#decisions", DataTable).row_count == 0
+            assert app.query_one("#engine", DataTable).row_count == 0
 
     asyncio.run(scenario())
 
@@ -1314,6 +1425,118 @@ def test_policy_performance_summary_rolls_up_resolved_policy_silos(tmp_path) -> 
         store.close()
 
 
+def test_tui_live_overview_shows_us_and_global_open_positions_across_dates(tmp_path) -> None:
+    db_path = tmp_path / "tui.sqlite"
+    store = ExecutionStore(db_path)
+    try:
+        store.upsert_live_strategy(
+            LiveStrategy(
+                name="us-high",
+                active=True,
+                source="consensus",
+                model_group="us-models",
+                model_names=["us-models"],
+                strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+                market_family=MarketFamily.HIGH_TEMP,
+                local_decision_start="12:00",
+                local_decision_end="15:00",
+                entry_price_min=0.05,
+                uniqueness_key_mode="station_date_bucket_side_obs_delay",
+                max_notional_usd=7.0,
+                raw_payload={"report": {"resolved": 30, "rr": 0.42, "sharpe": 0.31}},
+            )
+        )
+        store.upsert_live_strategy(
+            LiveStrategy(
+                name="global-low",
+                active=True,
+                source="consensus",
+                model_group="global-models",
+                model_names=["global-models"],
+                strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+                market_family=MarketFamily.LOW_TEMP,
+                local_decision_start="00:00",
+                local_decision_end="23:59",
+                entry_price_min=0.0,
+                uniqueness_key_mode="station_date_bucket_side_obs_delay",
+                max_notional_usd=3.0,
+                raw_payload={"report": {"role": "canary", "entry_price_max": 0.50}},
+            )
+        )
+        us_id = store.insert_live_policy_position(
+            LivePolicyPosition(
+                timestamp="2026-06-08T18:00:00+00:00",
+                strategy_name="us-high",
+                station="KHOU",
+                market_date=date(2026, 6, 8),
+                market_family=MarketFamily.HIGH_TEMP,
+                scope_key="us",
+                selected_market_id="us-market",
+                selected_token_id="us-token",
+                selected_side=TradeAction.BUY_NO,
+                selected_bucket="96-97F",
+                obs_delay_bucket="15m",
+                entry_price=0.40,
+                entry_fair=0.70,
+                entry_edge=0.30,
+                target_notional_usd=7.0,
+                target_shares=17.5,
+                state=LivePositionState.RESERVED,
+                source_prediction_snapshot_ids=[1],
+            )
+        )
+        global_id = store.insert_live_policy_position(
+            LivePolicyPosition(
+                timestamp="2026-06-09T02:00:00+00:00",
+                strategy_name="global-low",
+                station="VHHH",
+                market_date=date(2026, 6, 9),
+                market_family=MarketFamily.LOW_TEMP,
+                scope_key="global",
+                selected_market_id="global-market",
+                selected_token_id="global-token",
+                selected_side=TradeAction.BUY_NO,
+                selected_bucket="78-79F",
+                obs_delay_bucket="15m",
+                entry_price=0.20,
+                entry_fair=0.50,
+                entry_edge=0.30,
+                target_notional_usd=3.0,
+                target_shares=15.0,
+                state=LivePositionState.RESERVED,
+                source_prediction_snapshot_ids=[2],
+            )
+        )
+        assert us_id is not None and global_id is not None
+    finally:
+        store.close()
+
+    async def scenario() -> None:
+        app = RoboWeatherTUI(db_path, process_supervisor=_test_supervisor(tmp_path))
+        async with app.run_test(size=(180, 45)):
+            summary = app.query_one("#live-summary", DataTable)
+            summary_text = "\n".join(" ".join(str(cell) for cell in summary.get_row_at(index)) for index in range(summary.row_count))
+            assert "market dates 2026-06-08,2026-06-09" in summary_text
+            assert "market families HIGH_TEMP, LOW_TEMP" in summary_text
+
+            stations = app.query_one("#live-stations", DataTable)
+            station_text = "\n".join(" ".join(str(cell) for cell in stations.get_row_at(index)) for index in range(stations.row_count))
+            assert "KHOU HIGH_TEMP" in station_text
+            assert "VHHH LOW_TEMP" in station_text
+
+            strategies = app.query_one("#live-strategies", DataTable)
+            strategy_text = "\n".join(" ".join(str(cell) for cell in strategies.get_row_at(index)) for index in range(strategies.row_count))
+            assert "us-high HIGH_TEMP max $7.00" in strategy_text
+            assert "global-low LOW_TEMP max $3.00" in strategy_text
+
+            performance = app.query_one("#live-strategy-performance", DataTable)
+            performance_text = "\n".join(" ".join(str(cell) for cell in performance.get_row_at(index)) for index in range(performance.row_count))
+            assert "us-high HIGH_TEMP" in performance_text
+            assert "30 42.0% 0.310" in performance_text
+
+    asyncio.run(scenario())
+
+
 def _test_supervisor(tmp_path) -> ProcessSupervisor:
     return ProcessSupervisor(
         [
@@ -1359,8 +1582,8 @@ def test_tui_config_tab_renders_effective_live_sizing_values(tmp_path) -> None:
             assert "Sizing bankroll $2000.00" in text
             assert "Sizing base notional $10.00" in text
             assert "Risk caps total open $1125.00" in text
-            assert "Strategy tiers consensus multiplier 0.60x" in text
-            assert "Price bands < 0.10 0.25x except moonshot" in text
+            assert "Strategy caps per-strategy max shown on Live and Performance tabs" in text
+            assert "Strategy caps entry bands shown per active strategy" in text
 
     asyncio.run(scenario())
 

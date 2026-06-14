@@ -467,8 +467,8 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
     as_of = as_of_utc or datetime.now(timezone.utc)
     if as_of.tzinfo is None:
         as_of = as_of.replace(tzinfo=timezone.utc)
-    exposure_index: dict[tuple[str, str, str], dict[str, Any]] = {}
-    station_raw: dict[str, dict[str, Any]] = defaultdict(
+    exposure_index: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    station_raw: dict[tuple[str, str], dict[str, Any]] = defaultdict(
         lambda: {
             "raw_count": 0,
             "buy_yes": 0,
@@ -487,7 +487,7 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
             "weather_risk": 0.0,
         }
     )
-    station_unique: dict[str, dict[str, Any]] = defaultdict(lambda: {"unique_count": 0, "unique_mtm": 0.0, "done": 0})
+    station_unique: dict[tuple[str, str], dict[str, Any]] = defaultdict(lambda: {"unique_count": 0, "unique_mtm": 0.0, "done": 0})
     rows_by_policy: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     position_rows: list[dict[str, Any]] = []
     raw_count = 0
@@ -502,10 +502,12 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
         outcome = _weather_outcome(row, as_of)
         raw_count += 1
         station = str(row.get("station", ""))
+        market_family = str(row.get("market_family", ""))
+        station_key = (market_family, station)
         side = str(row.get("selected_side", ""))
         bucket = _bucket_from_row(row)
         market_date = str(row.get("market_date", ""))
-        key = (station, market_date, f"{side}|{bucket}")
+        key = (market_family, station, market_date, f"{side}|{bucket}")
         pnl = _safe_float(row.get("unrealized_pnl"))
         current_bid = _effective_current_bid(row)
         entry_price = _safe_float(row.get("entry_price"))
@@ -542,28 +544,29 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
             done += 1
         raw_mtm += pnl
 
-        station_raw[station]["raw_count"] += 1
-        station_raw[station]["raw_mtm"] += pnl
-        station_raw[station]["risk"] += risk
+        station_raw[station_key]["raw_count"] += 1
+        station_raw[station_key]["raw_mtm"] += pnl
+        station_raw[station_key]["risk"] += risk
         if current_bid is None:
-            station_raw[station]["missing"] += 1
+            station_raw[station_key]["missing"] += 1
         else:
-            station_raw[station]["marked"] += 1
+            station_raw[station_key]["marked"] += 1
             if _safe_float(current_bid) >= 0.95:
-                station_raw[station]["wins95"] += 1
+                station_raw[station_key]["wins95"] += 1
             if _safe_float(current_bid) <= 0.05:
-                station_raw[station]["loss05"] += 1
+                station_raw[station_key]["loss05"] += 1
         if side == "BUY_YES":
-            station_raw[station]["buy_yes"] += 1
+            station_raw[station_key]["buy_yes"] += 1
         elif side == "BUY_NO":
-            station_raw[station]["buy_no"] += 1
+            station_raw[station_key]["buy_no"] += 1
         if current_bid is not None and _safe_float(current_bid) >= 0.95:
-            station_raw[station]["done"] += 1
+            station_raw[station_key]["done"] += 1
 
         group = exposure_index.setdefault(
             key,
             {
                 "station": station,
+                "market_family": market_family,
                 "market_date": market_date,
                 "side": side,
                 "bucket": bucket,
@@ -639,13 +642,13 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
                 group["weather_status"] = "MIXED"
 
         if outcome["weather_correct"] is not None:
-            station_raw[station]["weather_scored"] += 1
-            station_raw[station]["weather_risk"] += risk
-            station_raw[station]["weather_pnl"] += weather_pnl
+            station_raw[station_key]["weather_scored"] += 1
+            station_raw[station_key]["weather_risk"] += risk
+            station_raw[station_key]["weather_pnl"] += weather_pnl
             if outcome["weather_correct"]:
-                station_raw[station]["weather_wins"] += 1
+                station_raw[station_key]["weather_wins"] += 1
             else:
-                station_raw[station]["weather_losses"] += 1
+                station_raw[station_key]["weather_losses"] += 1
 
         policy = str(row.get("policy_name", ""))
         model_group = _normalized_policy_model_group(row)
@@ -656,6 +659,7 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
             policy_key,
             {
                 "policy": policy,
+                "market_family": market_family,
                 "model_group": model_group,
                 "strategy_bucket": strategy_bucket,
                 "obs_delay_bucket": obs_delay_bucket,
@@ -724,6 +728,7 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
                 "model_group": model_group,
                 "strategy_bucket": strategy_bucket,
                 "obs_delay_bucket": obs_delay_bucket,
+                "market_family": str(row.get("market_family", "")),
                 "station": station,
                 "market_date": market_date,
                 "side": side,
@@ -772,19 +777,21 @@ def _build_live_policy_view(live_rows: list[dict[str, Any]], as_of_utc: datetime
                 "weather_rr": _ratio(group["weather_pnl"], group["weather_risk"]),
             }
         )
-        station_unique[group["station"]]["unique_count"] += 1
-        station_unique[group["station"]]["unique_mtm"] += group["pnl"]
+        group_station_key = (str(group.get("market_family", "")), str(group["station"]))
+        station_unique[group_station_key]["unique_count"] += 1
+        station_unique[group_station_key]["unique_mtm"] += group["pnl"]
         if group["max_bid"] >= 0.95:
-            station_unique[group["station"]]["done"] += 1
+            station_unique[group_station_key]["done"] += 1
 
     exposure_rows.sort(key=lambda row: (row["pnl"], row["station"], row["market_date"], row["bucket"]), reverse=True)
     station_rows: list[dict[str, Any]] = []
-    for station in sorted(set(list(station_raw.keys()) + list(station_unique.keys()))):
-        raw = station_raw[station]
-        unique = station_unique[station]
+    for market_family, station in sorted(set(list(station_raw.keys()) + list(station_unique.keys()))):
+        raw = station_raw[(market_family, station)]
+        unique = station_unique[(market_family, station)]
         station_rows.append(
             {
                 "station": station,
+                "market_family": market_family,
                 "raw_count": raw["raw_count"],
                 "unique_count": unique["unique_count"],
                 "buy_yes": raw["buy_yes"],

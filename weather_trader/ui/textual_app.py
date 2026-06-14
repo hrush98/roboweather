@@ -5,7 +5,7 @@ import json
 import math
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from zoneinfo import ZoneInfo
@@ -20,7 +20,6 @@ from weather_trader.execution.clob_executor import ClobExecutor
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.live.resolution import LiveResolutionService
 from weather_trader.live.settings import decrypt_age_keyfile_with_passphrase, load_live_settings
-from weather_trader.live.sizing import CORE_POLICY_MULTIPLIER, CONSENSUS_POLICY_MULTIPLIER, MOONSHOT_FIXED_NOTIONAL_USD
 from weather_trader.ui.dashboard_rollups import (
     _build_live_policy_view,
     _bucket_label,
@@ -33,7 +32,7 @@ from weather_trader.ui.dashboard_rollups import (
 from weather_trader.ui.process_supervisor import ProcessSpec, ProcessSupervisor
 
 
-CONFIG_STATIONS = {"KATL", "KBKF", "KDAL", "KDEN", "KHOU", "KLAX", "KLGA", "KMIA", "KORD", "KSEA", "KSFO"}
+LIVE_EXPOSURE_STATES = {"RESERVED", "SUBMITTED", "FILLED", "PARTIAL", "DELAYED", "UNKNOWN"}
 
 
 @dataclass(frozen=True)
@@ -42,7 +41,15 @@ class TableSort:
     reverse: bool
 
 
-OVERVIEW_TABLE_IDS = {"live-summary", "live-strategies", "live-stations", "live-contracts", "live-positions", "live-performance-table"}
+OVERVIEW_TABLE_IDS = {
+    "live-summary",
+    "live-strategies",
+    "live-stations",
+    "live-contracts",
+    "live-positions",
+    "live-performance-table",
+    "live-strategy-performance",
+}
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LIVE_RESOLUTION_POLL_INTERVAL_SECONDS = 6 * 60 * 60
 
@@ -59,6 +66,7 @@ DEFAULT_DESC_SORT_COLUMNS = {
     "filled",
     "live_minus_exp",
     "live_rr",
+    "live_sharpe",
     "mark_pct",
     "mtm",
     "open_positions",
@@ -66,6 +74,16 @@ DEFAULT_DESC_SORT_COLUMNS = {
     "risk",
     "target",
 }
+
+
+def _dict_or_empty(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [row for row in value if isinstance(row, dict)]
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -87,15 +105,14 @@ def _age_minutes(value: str | None) -> float | None:
 
 
 def _live_performance_summary_or_empty(performance: dict[str, Any] | None) -> dict[str, Any]:
-    if isinstance(performance, dict):
-        return {
-            "daily_rows": performance.get("daily_rows") or [],
-            "last_7_days": performance.get("last_7_days") or [],
-            "total_pnl": performance.get("total_pnl") or 0.0,
-            "start_date": performance.get("start_date"),
-            "end_date": performance.get("end_date"),
-        }
-    return {"daily_rows": [], "last_7_days": [], "total_pnl": 0.0, "start_date": None, "end_date": None}
+    normalized = _dict_or_empty(performance)
+    return {
+        "daily_rows": _list_of_dicts(normalized.get("daily_rows")),
+        "last_7_days": _list_of_dicts(normalized.get("last_7_days")),
+        "total_pnl": normalized.get("total_pnl") or 0.0,
+        "start_date": normalized.get("start_date"),
+        "end_date": normalized.get("end_date"),
+    }
 
 
 def _sort_key(value: Any, reverse: bool = False) -> tuple[int, int, float | str]:
@@ -197,6 +214,188 @@ def _live_position_risk_value(row: dict[str, Any]) -> float:
         return float(row.get("target_notional_usd") or 0.0)
     except (TypeError, ValueError, OverflowError):
         return 0.0
+
+
+def _safe_float_or_none(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _ratio_or_none(numerator: float, denominator: float) -> float | None:
+    return numerator / denominator if denominator else None
+
+
+def _sharpe(values: list[float]) -> float | None:
+    if not values:
+        return None
+    average = sum(values) / len(values)
+    variance = sum((value - average) ** 2 for value in values) / len(values)
+    if variance == 0:
+        return None
+    return average / math.sqrt(variance)
+
+
+def _json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _strategy_report(strategy: dict[str, Any]) -> dict[str, Any]:
+    raw = _json_dict(strategy.get("raw_json"))
+    report = raw.get("report")
+    if not isinstance(report, dict) and isinstance(raw.get("raw_payload"), dict):
+        report = raw["raw_payload"].get("report")
+    return report if isinstance(report, dict) else {}
+
+
+def _report_value(strategy: dict[str, Any], *keys: str) -> Any:
+    report = _strategy_report(strategy)
+    for key in keys:
+        if key in report:
+            return report[key]
+    nested = report.get("live_style_replay")
+    if isinstance(nested, dict):
+        for key in keys:
+            if key in nested:
+                return nested[key]
+    return None
+
+
+def _entry_band_label(strategy: dict[str, Any]) -> str:
+    report = _strategy_report(strategy)
+    low = report.get("entry_price_min", strategy.get("entry_price_min"))
+    high = report.get("entry_price_max")
+    if high is None:
+        return f">={float(low):.2f}" if low is not None else ""
+    low_value = float(low or 0.0)
+    return f"{low_value:.2f}-{float(high):.2f}"
+
+
+def _strategy_caps_label(strategy: dict[str, Any]) -> str:
+    parts = []
+    max_notional = _safe_float_or_none(strategy.get("max_notional_usd"))
+    if max_notional is not None:
+        parts.append(f"max {_fmt_money(max_notional)}")
+    entry_band = _entry_band_label(strategy)
+    if entry_band:
+        parts.append(f"entry {entry_band}")
+    selected_side = _report_value(strategy, "selected_side")
+    if selected_side:
+        parts.append(str(selected_side).replace("BUY_", ""))
+    edge_min = _report_value(strategy, "edge_min", "or_edge_min")
+    if edge_min is not None:
+        parts.append(f"edge>={float(edge_min):.2f}")
+    return ", ".join(parts)
+
+
+def _strategy_window_label(strategy: dict[str, Any]) -> str:
+    start = str(strategy.get("local_decision_start") or "")
+    end = str(strategy.get("local_decision_end") or "")
+    return f"{start}-{end}" if start or end else ""
+
+
+def _position_pnl_value(row: dict[str, Any]) -> float:
+    realized = _safe_float_or_none(row.get("realized_pnl"))
+    if str(row.get("state") or "") == "SETTLED" and realized is not None:
+        return realized
+    unrealized = _safe_float_or_none(row.get("unrealized_pnl"))
+    return unrealized or 0.0
+
+
+def _is_open_live_position(row: dict[str, Any]) -> bool:
+    return str(row.get("state") or "") in LIVE_EXPOSURE_STATES
+
+
+def _build_strategy_performance_rows(
+    live_rows: list[dict[str, Any]],
+    strategies: list[dict[str, Any]],
+    *,
+    as_of_utc: datetime | None = None,
+) -> list[dict[str, Any]]:
+    as_of = as_of_utc or datetime.now(timezone.utc)
+    recent_start = (as_of - timedelta(days=7)).date().isoformat()
+    groups: dict[str, dict[str, Any]] = {}
+    strategy_index = {str(strategy.get("name", "")): strategy for strategy in strategies}
+    for strategy in strategies:
+        name = str(strategy.get("name", ""))
+        groups[name] = {
+            "strategy": name,
+            "active": int(strategy.get("active") or 0) == 1,
+            "family": str(strategy.get("market_family", "")),
+            "bucket": str(strategy.get("strategy_bucket", "")),
+            "cap": _strategy_caps_label(strategy),
+            "window": _strategy_window_label(strategy),
+            "positions": 0,
+            "risk": 0.0,
+            "pnl": 0.0,
+            "pnls": [],
+            "recent_positions": 0,
+            "recent_risk": 0.0,
+            "recent_pnl": 0.0,
+            "recent_pnls": [],
+            "hist_resolved": _report_value(strategy, "resolved", "entries"),
+            "hist_rr": _report_value(strategy, "rr", "roi"),
+            "hist_sharpe": _report_value(strategy, "sharpe"),
+        }
+    for row in live_rows:
+        if str(row.get("state") or "") == "REJECTED":
+            continue
+        name = str(row.get("strategy_name") or row.get("policy_name") or "")
+        strategy = strategy_index.get(name, {})
+        group = groups.setdefault(
+            name,
+            {
+                "strategy": name,
+                "active": False,
+                "family": str(row.get("market_family", "")),
+                "bucket": str(row.get("strategy_bucket", "")),
+                "cap": "",
+                "window": "",
+                "positions": 0,
+                "risk": 0.0,
+                "pnl": 0.0,
+                "pnls": [],
+                "recent_positions": 0,
+                "recent_risk": 0.0,
+                "recent_pnl": 0.0,
+                "recent_pnls": [],
+                "hist_resolved": _report_value(strategy, "resolved", "entries"),
+                "hist_rr": _report_value(strategy, "rr", "roi"),
+                "hist_sharpe": _report_value(strategy, "sharpe"),
+            },
+        )
+        risk = _live_position_risk_value(row)
+        pnl = _position_pnl_value(row)
+        group["positions"] += 1
+        group["risk"] += risk
+        group["pnl"] += pnl
+        group["pnls"].append(pnl)
+        timestamp_date = str(row.get("timestamp") or "")[:10]
+        if timestamp_date >= recent_start:
+            group["recent_positions"] += 1
+            group["recent_risk"] += risk
+            group["recent_pnl"] += pnl
+            group["recent_pnls"].append(pnl)
+    rows = []
+    for group in groups.values():
+        group["rr"] = _ratio_or_none(group["pnl"], group["risk"])
+        group["recent_rr"] = _ratio_or_none(group["recent_pnl"], group["recent_risk"])
+        group["live_sharpe"] = _sharpe(group.pop("pnls"))
+        group["recent_sharpe"] = _sharpe(group.pop("recent_pnls"))
+        rows.append(group)
+    rows.sort(key=lambda row: (not row["active"], -(row["recent_pnl"] or 0.0), row["strategy"]))
+    return rows
 
 
 def _has_effective_book_mark(row: dict[str, Any]) -> bool:
@@ -356,6 +555,9 @@ def _registered_strategy_row(strategy: dict[str, Any]) -> dict[str, Any]:
         "model_group": str(strategy.get("model_group", "")),
         "strategy_bucket": str(strategy.get("strategy_bucket", "")),
         "obs_delay_bucket": "",
+        "market_family": str(strategy.get("market_family", "")),
+        "cap": _strategy_caps_label(strategy),
+        "window": _strategy_window_label(strategy),
         "open_positions": 0,
         "risk": 0.0,
         "mtm": 0.0,
@@ -457,15 +659,19 @@ class RoboWeatherTUI(App):
     }
 
     #live-strategies {
-        height: 10;
+        height: 12;
     }
 
     #live-stations {
-        height: 8;
+        height: 9;
     }
 
     #live-contracts {
         height: 10;
+    }
+
+    #live-strategy-performance {
+        height: 12;
     }
 
     #live-performance-line {
@@ -594,6 +800,8 @@ class RoboWeatherTUI(App):
                     yield Static("Open Exposure", classes="section-title")
                     yield DataTable(id="live-positions")
                 with TabPane("Performance", id="performance-tab"):
+                    yield Static("Strategy Performance", classes="section-title")
+                    yield DataTable(id="live-strategy-performance")
                     yield Static("Cumulative PnL", classes="section-title")
                     yield Static(id="live-performance-line")
                     yield Static("Daily PnL", classes="section-title")
@@ -645,6 +853,9 @@ class RoboWeatherTUI(App):
                 ("status", "status"),
                 ("book", "book_status"),
                 ("strategy", "policy"),
+                ("family", "market_family"),
+                ("cap", "cap"),
+                ("window", "window"),
                 ("pos", "open_positions"),
                 ("risk", "risk"),
                 ("mtm", "mtm"),
@@ -664,6 +875,7 @@ class RoboWeatherTUI(App):
             live_stations,
             [
                 ("station", "station"),
+                ("family", "market_family"),
                 ("status", "status"),
                 ("pos", "positions"),
                 ("risk", "risk"),
@@ -682,6 +894,7 @@ class RoboWeatherTUI(App):
             live_contracts,
             [
                 ("state", "state"),
+                ("family", "market_family"),
                 ("station", "station"),
                 ("date", "date"),
                 ("side", "side"),
@@ -696,6 +909,29 @@ class RoboWeatherTUI(App):
                 ("live R/R", "live_rr"),
                 ("weather", "weather"),
                 ("high", "high"),
+            ],
+        )
+
+        live_strategy_performance = self.query_one("#live-strategy-performance", DataTable)
+        live_strategy_performance.cursor_type = "row"
+        _add_keyed_columns(
+            live_strategy_performance,
+            [
+                ("status", "status"),
+                ("strategy", "strategy"),
+                ("family", "family"),
+                ("cap", "cap"),
+                ("recent pos", "recent_positions"),
+                ("recent pnl", "recent_pnl"),
+                ("recent R/R", "recent_rr"),
+                ("recent Sh", "recent_sharpe"),
+                ("live pos", "positions"),
+                ("live pnl", "pnl"),
+                ("live R/R", "rr"),
+                ("live Sh", "live_sharpe"),
+                ("hist n", "hist_resolved"),
+                ("hist R/R", "hist_rr"),
+                ("hist Sh", "hist_sharpe"),
             ],
         )
 
@@ -719,6 +955,7 @@ class RoboWeatherTUI(App):
                 ("time", "time"),
                 ("state", "state"),
                 ("strategy", "strategy"),
+                ("family", "market_family"),
                 ("station", "station"),
                 ("date", "date"),
                 ("side", "side"),
@@ -924,11 +1161,9 @@ class RoboWeatherTUI(App):
         rows = [
             ("Execution", "mode", self.process_supervisor.env.get("LIVE_MODE", "dry-run")),
             ("Execution", "CLOB URL", settings.polymarket_clob_url),
-            ("Execution", "client version", settings.polymarket_clob_client_version),
             ("Execution", "allowance check", str(settings.live_require_allowance_check)),
             ("Execution", "kill switch path", settings.live_kill_switch_path),
             ("Sizing", "bankroll", _fmt_money(settings.live_bankroll_usd)),
-            ("Sizing", "fixed fraction", _fmt_pct(settings.live_fixed_fraction)),
             ("Sizing", "base notional", _fmt_money(settings.live_base_notional_usd)),
             ("Sizing", "min order", _fmt_money(settings.live_min_order_notional)),
             ("Sizing", "max order", _fmt_money(settings.live_max_usd_per_order)),
@@ -937,16 +1172,20 @@ class RoboWeatherTUI(App):
             ("Risk caps", "station/date", _fmt_money(settings.live_max_exposure_per_station_date)),
             ("Risk caps", "station/date/side", _fmt_money(settings.live_max_exposure_per_station_date_side)),
             ("Risk caps", "exact bucket/side", _fmt_money(settings.live_max_exposure_per_exact_bucket_side)),
-            ("Strategy tiers", "core multiplier", f"{CORE_POLICY_MULTIPLIER:.2f}x"),
-            ("Strategy tiers", "consensus multiplier", f"{CONSENSUS_POLICY_MULTIPLIER:.2f}x"),
-            ("Strategy tiers", "moonshot fixed", _fmt_money(MOONSHOT_FIXED_NOTIONAL_USD)),
-            ("Price bands", "< 0.10", "0.25x except moonshot"),
-            ("Price bands", "0.10-0.25", "0.60x"),
-            ("Price bands", "0.25-0.75", "1.00x"),
-            ("Price bands", "> 0.75", "0.60x"),
+            ("Strategy caps", "per-strategy max", "shown on Live and Performance tabs"),
+            ("Strategy caps", "entry bands", "shown per active strategy"),
         ]
         for group, setting, value in rows:
             table.add_row(group, setting, str(value))
+
+    @staticmethod
+    def _live_market_dates_label(live_rows: list[dict[str, Any]]) -> str:
+        dates = sorted({str(row.get("market_date", "")) for row in live_rows if row.get("market_date")})
+        if not dates:
+            return "none"
+        if len(dates) <= 3:
+            return ",".join(dates)
+        return f"{dates[0]}..{dates[-1]} ({len(dates)})"
 
     def refresh_processes(self) -> None:
         try:
@@ -1003,23 +1242,25 @@ class RoboWeatherTUI(App):
         try:
             self._refresh_target_date(store)
             self._maybe_resolve_live_positions(store)
-            signals = store.recent_signals(limit=200)
-            decisions = store.recent_decisions(limit=50)
-            engine_states = store.recent_engine_states(limit=20)
-            live_rows = store.live_dashboard_positions(limit=1000, market_date=self.target_date)
-            live_orders = store.recent_live_order_attempts(limit=100)
-            live_events = store.recent_live_trade_events(limit=100)
-            live_risk = store.recent_live_risk_snapshots(limit=5)
-            exposure = store.live_exposure_summary()
+            signals = _list_of_dicts(store.recent_signals(limit=200))
+            decisions = _list_of_dicts(store.recent_decisions(limit=50))
+            engine_states = _list_of_dicts(store.recent_engine_states(limit=20))
+            all_live_rows = _list_of_dicts(store.live_dashboard_positions(limit=5000))
+            live_rows = [row for row in all_live_rows if _is_open_live_position(row)]
+            live_orders = _list_of_dicts(store.recent_live_order_attempts(limit=100))
+            live_events = _list_of_dicts(store.recent_live_trade_events(limit=100))
+            live_risk = _list_of_dicts(store.recent_live_risk_snapshots(limit=5))
+            exposure = _dict_or_empty(store.live_exposure_summary())
             performance = _live_performance_summary_or_empty(store.live_performance_summary())
-            strategies = store.live_strategies(active_only=False)
-            overview = store.research_status_overview(self.target_date)
+            strategies = _list_of_dicts(store.live_strategies(active_only=False))
+            overview = _dict_or_empty(store.research_status_overview(self.target_date))
         finally:
             store.close()
         if self.actionable_only:
             signals = [signal for signal in signals if signal.get("signal_side") != "SKIP"]
 
         view = _build_live_policy_view(live_rows)
+        strategy_performance_rows = _build_strategy_performance_rows(all_live_rows, strategies)
         kill_active = self.kill_switch_path.exists()
         latest_order = live_orders[0] if live_orders else {}
         latest_event = live_events[0] if live_events else {}
@@ -1033,13 +1274,14 @@ class RoboWeatherTUI(App):
         live_rr = total_mtm / total_cost if total_cost else None
         rejected = sum(1 for row in live_rows if str(row.get("state")) == "REJECTED")
         live_strategy_names = {str(row.get("strategy_name")) for row in live_rows}
+        active_families = sorted({str(row.get("market_family", "")) for row in live_rows if row.get("market_family")})
         resting_orders = []
         for order in live_orders:
             try:
                 payload = json.loads(str(order.get("raw_payload") or "{}"))
             except Exception:
                 payload = {}
-            execution = payload.get("execution") if isinstance(payload, dict) else {}
+            execution = _dict_or_empty(payload.get("execution"))
             if str(order.get("order_mode", "")) == "GTC" and execution.get("attempt_label") == "resting_fallback":
                 resting_orders.append(order)
         resting_filled = sum(1 for order in resting_orders if str(order.get("final_state", "")) == "FILLED")
@@ -1049,8 +1291,8 @@ class RoboWeatherTUI(App):
         settings = load_live_settings()
         daily_key = datetime.now(timezone.utc).date().isoformat()
         open_risk = float(exposure.get("open_risk_usd") or 0.0)
-        daily_new = float((exposure.get("daily_new_risk_usd") or {}).get(daily_key, 0.0))
-        station_exposures = exposure.get("station_date_exposure_usd") or {}
+        daily_new = float(_dict_or_empty(exposure.get("daily_new_risk_usd")).get(daily_key, 0.0))
+        station_exposures = _dict_or_empty(exposure.get("station_date_exposure_usd"))
         largest_station_date = max(station_exposures.items(), key=lambda item: item[1], default=("n/a", 0.0))
         registered_policy_names = {str(strategy.get("name", "")) for strategy in strategies}
         active_strategy_count = sum(1 for row in strategies if int(row.get("active") or 0) == 1)
@@ -1064,7 +1306,8 @@ class RoboWeatherTUI(App):
         live_summary_table.clear()
         summary_rows = [
             ("kill switch", "ACTIVE" if kill_active else "clear", str(self.kill_switch_path)),
-            ("market date", self.target_date, "live position filter"),
+            ("market dates", self._live_market_dates_label(live_rows), "open live exposure across dates"),
+            ("market families", ", ".join(active_families) if active_families else "none", "open live exposure"),
             self._live_resolution_summary_row(),
             ("open positions", str(len(live_rows)), f"{len(filled)} with fills, {rejected} rejected"),
             ("risk at work", _fmt_money(total_cost), f"target {_fmt_money(total_target)}"),
@@ -1073,7 +1316,7 @@ class RoboWeatherTUI(App):
             ("largest station/date", f"{_fmt_money(largest_station_date[1])} / {_fmt_money(settings.live_max_exposure_per_station_date)}", str(largest_station_date[0])),
             ("live mtm", _fmt_money(total_mtm), f"live R/R {_fmt_pct(live_rr)}"),
             ("quoted positions", f"{marked}/{len(live_rows)}", f"latest book age {'n/a' if latest_book_age is None else f'{latest_book_age:.1f}m'}"),
-            ("strategies", str(active_strategy_count), f"{len(live_strategy_names & registered_policy_names)} have positions today"),
+            ("strategies", str(active_strategy_count), f"{len(live_strategy_names & registered_policy_names)} have open positions"),
             ("order attempts", str(len(live_orders)), f"last {latest_order.get('final_state', '')} {latest_order.get('final_reason', '')}"),
             ("resting fallback", str(len(resting_orders)), f"{resting_filled} filled, {resting_incomplete} incomplete after 120s ({resting_partial} partial)"),
 
@@ -1087,11 +1330,15 @@ class RoboWeatherTUI(App):
 
         strategy_table = self.query_one("#live-strategies", DataTable)
         strategy_table.clear()
-        strategy_rows_by_policy = {str(row.get("policy", "")): row for row in view["policy_rows"]}
+        strategy_rows_by_policy = {str(row.get("policy", "")): dict(row) for row in view["policy_rows"]}
         for strategy in strategies:
             name = str(strategy.get("name", ""))
             if name not in strategy_rows_by_policy:
                 strategy_rows_by_policy[name] = _registered_strategy_row(strategy)
+            else:
+                strategy_rows_by_policy[name]["market_family"] = str(strategy.get("market_family", ""))
+                strategy_rows_by_policy[name]["cap"] = _strategy_caps_label(strategy)
+                strategy_rows_by_policy[name]["window"] = _strategy_window_label(strategy)
         strategy_rows = sorted(
             strategy_rows_by_policy.values(),
             key=lambda row: (_status_priority(str(row.get("status", ""))), -(row.get("risk") or 0.0), row.get("policy", "")),
@@ -1101,6 +1348,9 @@ class RoboWeatherTUI(App):
                 _status_text(row.get("status")),
                 _status_text(row.get("book_status")),
                 str(row.get("policy", "")),
+                str(row.get("market_family", "")),
+                str(row.get("cap", "")),
+                str(row.get("window", "")),
                 str(row.get("open_positions", 0)),
                 _fmt_money(row.get("risk")),
                 _money_text(row.get("mtm")),
@@ -1118,6 +1368,7 @@ class RoboWeatherTUI(App):
         for row in sorted(view["station_rows"], key=lambda item: (item.get("raw_mtm") or 0.0, item.get("station", "")), reverse=True):
             station_table.add_row(
                 str(row.get("station", "")),
+                str(row.get("market_family", "")),
                 _status_text(row.get("status")),
                 str(row.get("raw_count", 0)),
                 _fmt_money(row.get("risk")),
@@ -1134,6 +1385,7 @@ class RoboWeatherTUI(App):
         for row in view["exposure_rows"]:
             contracts_table.add_row(
                 _status_text(row.get("status")),
+                str(row.get("market_family", "")),
                 str(row.get("station", "")),
                 str(row.get("market_date", "")),
                 str(row.get("side", "")),
@@ -1148,6 +1400,27 @@ class RoboWeatherTUI(App):
                 _fmt_pct(row.get("live_rr")),
                 _status_text(row.get("weather_status")),
                 _fmt(row.get("weather_high")),
+            )
+
+        strategy_performance_table = self.query_one("#live-strategy-performance", DataTable)
+        strategy_performance_table.clear()
+        for row in strategy_performance_rows:
+            strategy_performance_table.add_row(
+                _status_text("ACTIVE" if row.get("active") else "STOPPED"),
+                str(row.get("strategy", "")),
+                str(row.get("family", "")),
+                str(row.get("cap", "")),
+                str(row.get("recent_positions", 0)),
+                _money_text(row.get("recent_pnl")),
+                _fmt_pct(row.get("recent_rr")),
+                _fmt(row.get("recent_sharpe")),
+                str(row.get("positions", 0)),
+                _money_text(row.get("pnl")),
+                _fmt_pct(row.get("rr")),
+                _fmt(row.get("live_sharpe")),
+                "" if row.get("hist_resolved") is None else str(row.get("hist_resolved")),
+                _fmt_pct(row.get("hist_rr")),
+                _fmt(row.get("hist_sharpe")),
             )
 
         performance_line = self.query_one("#live-performance-line", Static)
@@ -1186,6 +1459,7 @@ class RoboWeatherTUI(App):
                 str(row.get("time", "")),
                 _status_text(raw.get("state", "")),
                 str(row.get("policy", "")),
+                str(row.get("market_family", "")),
                 str(row.get("station", "")),
                 str(row.get("market_date", "")),
                 str(row.get("side", "")),
@@ -1290,8 +1564,9 @@ class RoboWeatherTUI(App):
             " | ".join(
                 [
                     f"{'STOPPED' if kill_active else 'LIVE'}",
-                    f"date {self.target_date}",
-                    f"positions {len(live_rows)} filled {len(filled)} rejected {rejected}",
+                    f"dates {self._live_market_dates_label(live_rows)}",
+                    f"families {','.join(active_families) if active_families else 'none'}",
+                    f"open positions {len(live_rows)} filled {len(filled)} rejected {rejected}",
                     f"risk {_fmt_money(total_cost)} target {_fmt_money(total_target)} mtm {_fmt_money(total_mtm)} R/R {_fmt_pct(live_rr)}",
                     f"quoted {marked}/{len(live_rows)}",
                     f"orders {len(live_orders)} events {len(live_events)}",
