@@ -70,7 +70,7 @@ MOONSHOT_NOTIONAL_USD = 2.0
 NGBOOST_BEST_BUY_YES_NOTIONAL_USD = 10.0
 GLOBAL_LOW_NOTIONAL_USD = 100.0
 GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD = 5.0
-GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD = 25.0
+GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD = 50.0
 GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN = 0.05
 GLOBAL_LOW_ENTRY_PRICE_MAX = 0.75
 GLOBAL_LOW_TINY_TAIL_ENTRY_PRICE_MAX = 0.05
@@ -122,7 +122,7 @@ class LiveExecutionConfig:
     require_allowance_check: bool = True
     retry_wait_seconds: float = 5.0
     enable_resting_fallback: bool = True
-    resting_fallback_ttl_seconds: float = 180.0
+    resting_fallback_ttl_seconds: float = 360.0
     resting_fallback_notional_fraction: float = 1.0
     resting_fallback_chunk_usd: float = 25.0
     resting_fallback_price_step: float = 0.01
@@ -926,7 +926,7 @@ class LiveExecutionEngine:
             target_notional_usd=candidate.plan.target_notional_usd,
             as_of_utc=as_of_utc,
         )
-        if depth_limited.blocked_reason != INSUFFICIENT_DEPTH:
+        if depth_limited.blocked_reason is not None and depth_limited.blocked_reason != INSUFFICIENT_DEPTH:
             return depth_limited
 
         risk_limited = self.sizing_model.size_candidate(
@@ -944,10 +944,22 @@ class LiveExecutionEngine:
         if risk_limited.blocked_reason is not None:
             return risk_limited
 
+        depth_cap = depth_limited.caps.get(INSUFFICIENT_DEPTH)
+        depth_clipped = (
+            depth_cap is not None
+            and depth_limited.target_notional_usd < risk_limited.target_notional_usd
+        )
+        if not depth_clipped and depth_limited.blocked_reason != INSUFFICIENT_DEPTH:
+            return depth_limited
+
         raw = dict(risk_limited.raw_json)
         raw["depth_limited_sweep_sizing"] = depth_limited.raw_json
-        raw["resting_ladder_on_insufficient_depth"] = True
         raw["resting_ladder_source_reason"] = INSUFFICIENT_DEPTH
+        if depth_limited.blocked_reason == INSUFFICIENT_DEPTH:
+            raw["resting_ladder_on_insufficient_depth"] = True
+        else:
+            raw["initial_fak_notional_usd"] = depth_limited.target_notional_usd
+            raw["resting_ladder_after_depth_limited_fak"] = True
         return LiveSizingDecision(
             risk_limited.target_notional_usd,
             risk_limited.base_notional_usd,
@@ -1056,27 +1068,41 @@ class LiveExecutionEngine:
             )
             return LivePositionState.REJECTED
 
+        initial_fak_notional = _initial_fak_notional_usd(position)
+        first_target_notional = initial_fak_notional if initial_fak_notional is not None else position.target_notional_usd
         first_attempt = self._place_attempt(
             position=position,
             limit_price=limit_price,
-            target_notional_usd=position.target_notional_usd,
+            target_notional_usd=first_target_notional,
             assume_filled=self.config.mode == "dry-run",
         )
+        full_target_notional = float(position.target_notional_usd)
+        remaining_after_first = max(0.0, full_target_notional - max(0.0, first_attempt.cost_usd))
+        depth_limited_initial = (
+            initial_fak_notional is not None
+            and initial_fak_notional < full_target_notional - 1e-6
+            and remaining_after_first >= float(self.settings.live_min_order_notional)
+        )
+        first_position_state = LivePositionState.PARTIAL if depth_limited_initial and first_attempt.cost_usd > 0 else first_attempt.state
+        first_raw_patch: dict[str, Any] = {"submit_phase": "initial"}
+        if initial_fak_notional is not None:
+            first_raw_patch["initial_fak_notional_usd"] = initial_fak_notional
+            first_raw_patch["full_target_notional_usd"] = full_target_notional
+            first_raw_patch["remaining_after_initial_fak_usd"] = remaining_after_first
         self._record_live_attempt(
             position_id,
             position,
             attempt_label="initial",
             attempt=first_attempt,
             update_position=True,
-            position_state=first_attempt.state,
+            position_state=first_position_state,
             position_filled_shares=first_attempt.filled_shares,
             position_cost_usd=first_attempt.cost_usd,
             position_avg_price=first_attempt.avg_price,
-            raw_patch={
-                "submit_phase": "initial",
-            },
+            raw_patch=first_raw_patch,
         )
-        if not self._is_retryable_attempt(first_attempt):
+        continue_after_depth_limited_fill = depth_limited_initial and first_attempt.cost_usd > 0
+        if not self._is_retryable_attempt(first_attempt) and not continue_after_depth_limited_fill:
             return first_attempt.state
         if first_attempt.response.order_id is None:
             fallback_state = self._submit_resting_fallback(
@@ -1089,53 +1115,70 @@ class LiveExecutionEngine:
             )
             return fallback_state or first_attempt.state
         if market is None or initial_book is None:
-            return first_attempt.state
+            return first_position_state
 
         first_order_open = first_attempt.state in {LivePositionState.SUBMITTED, LivePositionState.DELAYED, LivePositionState.UNKNOWN}
         time.sleep(float(self.config.retry_wait_seconds))
-        refreshed = self._refresh_order_state(first_attempt.response.order_id, position, limit_price, position.target_notional_usd)
-        if refreshed is not None:
-            refreshed_state, refreshed_filled_shares, refreshed_cost_usd, refreshed_avg_price, refreshed_raw = refreshed
-            first_order_open = refreshed_state in {LivePositionState.SUBMITTED, LivePositionState.DELAYED, LivePositionState.UNKNOWN}
-            if refreshed_filled_shares > 0 or refreshed_state in {LivePositionState.FILLED, LivePositionState.PARTIAL}:
-                self.store.update_live_policy_position_execution(
-                    position_id,
-                    state=str(refreshed_state),
-                    filled_shares=refreshed_filled_shares,
-                    avg_entry_price=refreshed_avg_price,
-                    cost_usd=refreshed_cost_usd,
-                    raw_patch={
-                        "retry": {
-                            "attempt": "refresh",
-                            "wait_seconds": float(self.config.retry_wait_seconds),
-                            "order_id": first_attempt.response.order_id,
-                            "state": str(refreshed_state),
-                            "filled_shares": refreshed_filled_shares,
-                            "cost_usd": refreshed_cost_usd,
-                            "avg_price": refreshed_avg_price,
-                        }
-                    },
-                )
+        if not continue_after_depth_limited_fill:
+            refreshed = self._refresh_order_state(first_attempt.response.order_id, position, limit_price, first_attempt.target_notional_usd)
+            if refreshed is not None:
+                refreshed_state, refreshed_filled_shares, refreshed_cost_usd, refreshed_avg_price, refreshed_raw = refreshed
+                first_order_open = refreshed_state in {LivePositionState.SUBMITTED, LivePositionState.DELAYED, LivePositionState.UNKNOWN}
+                if refreshed_filled_shares > 0 or refreshed_state in {LivePositionState.FILLED, LivePositionState.PARTIAL}:
+                    self.store.update_live_policy_position_execution(
+                        position_id,
+                        state=str(refreshed_state),
+                        filled_shares=refreshed_filled_shares,
+                        avg_entry_price=refreshed_avg_price,
+                        cost_usd=refreshed_cost_usd,
+                        raw_patch={
+                            "retry": {
+                                "attempt": "refresh",
+                                "wait_seconds": float(self.config.retry_wait_seconds),
+                                "order_id": first_attempt.response.order_id,
+                                "state": str(refreshed_state),
+                                "filled_shares": refreshed_filled_shares,
+                                "cost_usd": refreshed_cost_usd,
+                                "avg_price": refreshed_avg_price,
+                            }
+                        },
+                    )
+                    self.store.insert_live_trade_event(
+                        LiveTradeEvent(
+                            utc_now_iso(),
+                            position_id,
+                            position.strategy_name,
+                            LiveTradeEventType.ENTRY_CONFIRMED,
+                            "first order filled during retry wait",
+                            {"order_id": first_attempt.response.order_id, "state": str(refreshed_state), "raw": refreshed_raw},
+                        )
+                    )
+                    if refreshed_state != LivePositionState.PARTIAL:
+                        return refreshed_state
                 self.store.insert_live_trade_event(
                     LiveTradeEvent(
                         utc_now_iso(),
                         position_id,
                         position.strategy_name,
-                        LiveTradeEventType.ENTRY_CONFIRMED,
-                        "first order filled during retry wait",
+                        LiveTradeEventType.ENTRY_SUBMIT,
+                        "first order still open after retry wait",
                         {"order_id": first_attempt.response.order_id, "state": str(refreshed_state), "raw": refreshed_raw},
                     )
                 )
-                if refreshed_state != LivePositionState.PARTIAL:
-                    return refreshed_state
+        else:
             self.store.insert_live_trade_event(
                 LiveTradeEvent(
                     utc_now_iso(),
                     position_id,
                     position.strategy_name,
                     LiveTradeEventType.ENTRY_SUBMIT,
-                    "first order still open after retry wait",
-                    {"order_id": first_attempt.response.order_id, "state": str(refreshed_state), "raw": refreshed_raw},
+                    "initial depth-limited FAK filled; retrying remaining target",
+                    {
+                        "order_id": first_attempt.response.order_id,
+                        "initial_fak_notional_usd": initial_fak_notional,
+                        "full_target_notional_usd": full_target_notional,
+                        "remaining_after_initial_fak_usd": remaining_after_first,
+                    },
                 )
             )
 
@@ -1181,7 +1224,12 @@ class LiveExecutionEngine:
         cumulative_cost_usd = current_cost_usd + second_attempt.cost_usd
         cumulative_avg_price = cumulative_cost_usd / cumulative_filled_shares if cumulative_filled_shares > 0 else None
         second_attempt_state = second_attempt.state
-        if second_attempt_state in {LivePositionState.SUBMITTED, LivePositionState.DELAYED, LivePositionState.UNKNOWN} and cumulative_filled_shares > 0:
+        second_remaining_notional = max(0.0, float(position.target_notional_usd) - max(0.0, cumulative_cost_usd))
+        if (
+            cumulative_filled_shares > 0
+            and second_remaining_notional >= float(self.settings.live_min_order_notional)
+            and second_attempt_state in {LivePositionState.FILLED, LivePositionState.SUBMITTED, LivePositionState.DELAYED, LivePositionState.UNKNOWN}
+        ):
             second_attempt_state = LivePositionState.PARTIAL
         self._record_live_attempt(
             position_id,
@@ -1442,14 +1490,41 @@ class LiveExecutionEngine:
             )
 
         target_notional = float(position.target_notional_usd)
+        cumulative_avg_price = cumulative_cost_usd / cumulative_filled_shares if cumulative_filled_shares > 0 else None
         if cumulative_cost_usd >= target_notional - 1e-6:
+            self.store.update_live_policy_position_execution(
+                position_id,
+                state=str(LivePositionState.FILLED),
+                filled_shares=cumulative_filled_shares,
+                avg_entry_price=cumulative_avg_price,
+                cost_usd=cumulative_cost_usd,
+            )
             return LivePositionState.FILLED
         if any_new_fill:
+            self.store.update_live_policy_position_execution(
+                position_id,
+                state=str(LivePositionState.PARTIAL),
+                filled_shares=cumulative_filled_shares,
+                avg_entry_price=cumulative_avg_price,
+                cost_usd=cumulative_cost_usd,
+            )
             return LivePositionState.PARTIAL
         if any_live_state:
             return LivePositionState.SUBMITTED
         if any(state in {LivePositionState.DELAYED, LivePositionState.UNKNOWN} for state in final_states):
             return LivePositionState.UNKNOWN
+        if final_states and all(state == LivePositionState.CANCELLED for state in final_states):
+            position_state = LivePositionState.PARTIAL if cumulative_cost_usd > 0 else LivePositionState.REJECTED
+            cumulative_avg_price = cumulative_cost_usd / cumulative_filled_shares if cumulative_filled_shares > 0 else None
+            self.store.update_live_policy_position_execution(
+                position_id,
+                state=str(position_state),
+                filled_shares=cumulative_filled_shares,
+                avg_entry_price=cumulative_avg_price,
+                cost_usd=cumulative_cost_usd,
+                raw_patch={"final_reason": "RESTING_TTL_EXPIRED"},
+            )
+            return position_state
         return None
 
     def _resting_ladder_orders(
@@ -1704,7 +1779,9 @@ class LiveExecutionEngine:
         if best_ask is None:
             return 0.0, 0.0, "MISSING_BOOK"
         fair = position.entry_fair
-        limit_price = quantize_price(min(best_ask + 0.05, fair - 0.15) if fair is not None else best_ask + 0.05)
+        entry_cap = float(position.raw_json.get("limit_price") or position.entry_price)
+        fair_cap = (fair - 0.15) if fair is not None else best_ask + 0.05
+        limit_price = quantize_price(min(best_ask + 0.05, fair_cap, entry_cap))
         if limit_price <= 0.0:
             return 0.0, 0.0, "NO_RETRY_PRICE"
         remaining_notional = max(0.0, float(position.target_notional_usd) - max(0.0, current_cost_usd))
@@ -1751,6 +1828,20 @@ class LiveExecutionEngine:
                 exposure,
             )
         )
+
+
+def _initial_fak_notional_usd(position: LivePolicyPosition) -> float | None:
+    raw = position.raw_json.get("sizing") if isinstance(position.raw_json, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    value = raw.get("initial_fak_notional_usd")
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return None
+    if amount <= 0.0:
+        return None
+    return min(quantize_usdc(amount), float(position.target_notional_usd))
 
 
 def _quantize_cent_price(value: float) -> float:

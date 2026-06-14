@@ -151,7 +151,7 @@ def test_live_weather_feature_service_routes_global_stations_to_celsius_service(
 
 def test_live_execution_config_defaults_to_fifty_cent_entry_cap() -> None:
     assert LiveExecutionConfig().max_entry_price == pytest.approx(DEFAULT_LIVE_ENTRY_PRICE_MAX)
-    assert LiveExecutionConfig().resting_fallback_ttl_seconds == pytest.approx(180.0)
+    assert LiveExecutionConfig().resting_fallback_ttl_seconds == pytest.approx(360.0)
 
 
 def test_live_strategy_plans_include_moonshot_and_global_low_canary_tail() -> None:
@@ -1339,6 +1339,20 @@ class RestingFallbackSubmitter(FakeSubmitter):
         return CancelSubmission(True, [order_id], None, None, {"canceled": [order_id]})
 
 
+class DepthLimitedFakThenRestingSubmitter(RestingFallbackSubmitter):
+    def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+        self.fak_calls.append((token_id, side, price, amount))
+        order_id = f"fak-{len(self.fak_calls)}"
+        shares = amount / price
+        return OrderSubmission(
+            True,
+            order_id,
+            "matched",
+            None,
+            {"success": True, "status": "matched", "orderID": order_id, "makingAmount": str(amount), "takingAmount": str(shares)},
+        )
+
+
 class RetrySubmitter(FakeSubmitter):
     def __init__(self) -> None:
         self.place_calls: list[float] = []
@@ -1491,17 +1505,17 @@ def test_live_submit_retries_once_after_wait_with_fresh_book(tmp_path: Path, mon
     store = ExecutionStore(tmp_path / "live.sqlite")
     engine = LiveExecutionEngine(
         store,
-        LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live", retry_wait_seconds=5.0),
+        LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live", retry_wait_seconds=5.0, enable_resting_fallback=False),
         book_client=book_client,
         submitter=submitter,
     )
-    position = _live_position()
+    position = _live_position().__class__(**{**_live_position().__dict__, "raw_json": {"limit_price": 0.55}})
     position_id = store.insert_live_policy_position(position)
     assert position_id is not None
 
     state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
 
-    assert state == LivePositionState.FILLED
+    assert state == LivePositionState.PARTIAL
     assert sleeps == [5.0]
     assert submitter.place_calls == pytest.approx([3.0, 1.22])
     assert submitter.get_order_calls == ["order-1"]
@@ -1519,6 +1533,7 @@ def test_live_submit_retries_once_after_wait_with_fresh_book(tmp_path: Path, mon
     assert retry_payload["execution"]["retry"]["first_attempt_order_id"] == "order-1"
     assert retry_payload["execution"]["retry"]["retry_book_timestamp"] == "2026-05-20T18:00:05+00:00"
     row = store.live_open_positions()[0]
+    assert row["state"] == "PARTIAL"
     assert row["cost_usd"] == pytest.approx(1.22)
     assert row["filled_shares"] == pytest.approx(2.75)
 
@@ -1542,7 +1557,7 @@ def test_live_submit_partial_fak_rolls_remainder_into_resting_fallback(tmp_path:
     state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
 
     assert state == LivePositionState.PARTIAL
-    assert sleeps == [5.0, 180.0]
+    assert sleeps == [5.0, 360.0]
     assert len(submitter.place_calls) == 2
     assert submitter.place_calls[0] == pytest.approx(3.0)
     assert submitter.place_calls[1] > 0
@@ -1593,7 +1608,7 @@ def test_live_submit_matched_underfill_rolls_remainder_into_resting_fallback_for
     state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
 
     assert state == LivePositionState.PARTIAL
-    assert sleeps == [5.0, 180.0]
+    assert sleeps == [5.0, 360.0]
     assert len(submitter.place_calls) == 2
     assert submitter.get_order_calls == ["order-1", "gtc-1"]
     assert submitter.cancel_calls == ["gtc-1"]
@@ -1637,7 +1652,7 @@ def test_live_submit_polymarket_refresh_underfill_reaches_resting_fallback(tmp_p
     state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
 
     assert state == LivePositionState.PARTIAL
-    assert sleeps == [5.0, 180.0]
+    assert sleeps == [5.0, 360.0]
     assert submitter.get_order_calls == ["order-1", "gtc-1"]
     assert len(submitter.gtc_calls) == 1
     attempts = store.connection.execute("select attempt_seq, order_mode, final_state from live_order_attempts order by attempt_seq").fetchall()
@@ -1675,6 +1690,72 @@ def test_live_submit_does_not_retry_when_first_order_fills_during_wait(tmp_path:
     row = store.live_open_positions()[0]
     assert row["cost_usd"] == pytest.approx(3.0)
     assert row["filled_shares"] == pytest.approx(7.5)
+
+
+def test_depth_limited_initial_fak_continues_into_retry_and_resting_ladder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    submitter = DepthLimitedFakThenRestingSubmitter(after_ttl={"success": True, "status": "live"})
+    retry_book = BookSnapshot(
+        token_id="no-token",
+        bids=[BookLevel(price=0.33, size=100.0)],
+        asks=[BookLevel(price=0.42, size=12.0)],
+        timestamp="2026-05-20T18:00:06+00:00",
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr(live_execution.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setenv("LIVE_MIN_ORDER_NOTIONAL", "0.01")
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live", retry_wait_seconds=5.0, resting_fallback_ttl_seconds=60.0),
+        book_client=StaticBookClient(retry_book),
+        submitter=submitter,
+    )
+    base_position = _live_position()
+    position = base_position.__class__(
+        **{
+            **base_position.__dict__,
+            "target_notional_usd": 100.0,
+            "target_shares": 250.0,
+            "raw_json": {
+                "limit_price": 0.5,
+                "sizing": {
+                    "initial_fak_notional_usd": 13.5,
+                    "resting_ladder_after_depth_limited_fak": True,
+                    "resting_ladder_source_reason": "INSUFFICIENT_DEPTH",
+                },
+            },
+        }
+    )
+    position_id = store.insert_live_policy_position(position)
+    assert position_id is not None
+
+    state = engine._submit(position_id, position, market=_retry_market(), initial_book=retry_book)
+
+    assert state == LivePositionState.PARTIAL
+    assert sleeps == [5.0, 60.0]
+    assert submitter.fak_calls == pytest.approx([
+        ("no-token", "BUY", 0.5, 13.5),
+        ("no-token", "BUY", 0.47, 5.04),
+    ])
+    assert submitter.gtc_calls == pytest.approx([
+        ("no-token", "BUY", 0.37, 25.0),
+        ("no-token", "BUY", 0.36, 25.0),
+        ("no-token", "BUY", 0.35, 25.0),
+        ("no-token", "BUY", 0.34, 6.46),
+    ])
+    attempts = store.connection.execute("select attempt_seq, order_mode, target_notional_usd, final_state from live_order_attempts order by attempt_seq").fetchall()
+    assert [(row["attempt_seq"], row["order_mode"], row["target_notional_usd"], row["final_state"]) for row in attempts] == [
+        (1, "FAK", 13.5, "FILLED"),
+        (2, "FAK", 5.04, "FILLED"),
+        (3, "GTC", 25.0, "CANCELLED"),
+        (4, "GTC", 25.0, "CANCELLED"),
+        (5, "GTC", 25.0, "CANCELLED"),
+        (6, "GTC", 6.46, "CANCELLED"),
+    ]
+    row = store.live_open_positions()[0]
+    assert row["state"] == "PARTIAL"
+    assert row["target_notional_usd"] == pytest.approx(100.0)
+    assert row["cost_usd"] == pytest.approx(18.54)
 
 
 def test_resting_fallback_places_gtc_for_full_remaining_notional_and_cancels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1849,7 +1930,8 @@ def test_insufficient_depth_position_skips_fak_and_posts_resting_ladder(tmp_path
     ]
     row = store.connection.execute("select state, raw_json from live_policy_positions where id = ?", (position_id,)).fetchone()
     assert row["state"] == "REJECTED"
-    assert "RESTING_LADDER_SKIPPED_AFTER_INSUFFICIENT_DEPTH" in row["raw_json"]
+    assert "RESTING_TTL_EXPIRED" in row["raw_json"]
+    assert "RESTING_LADDER_SKIPPED_AFTER_INSUFFICIENT_DEPTH" not in row["raw_json"]
 
 
 def test_resting_fallback_updates_position_when_filled_during_ttl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1869,23 +1951,24 @@ def test_resting_fallback_updates_position_when_filled_during_ttl(tmp_path: Path
         book_client=book_client,
         submitter=submitter,
     )
-    position = _live_position()
+    base_position = _live_position()
+    position = base_position.__class__(**{**base_position.__dict__, "target_notional_usd": 10.0, "target_shares": 25.0})
     position_id = store.insert_live_policy_position(position)
     assert position_id is not None
 
     state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
 
-    assert state == LivePositionState.FILLED
+    assert state == LivePositionState.PARTIAL
     assert sleeps == [60.0]
-    assert submitter.cancel_calls == []
+    assert submitter.cancel_calls == ["gtc-1"]
     row = store.live_open_positions()[0]
-    assert row["state"] == "FILLED"
+    assert row["state"] == "PARTIAL"
     assert row["cost_usd"] == pytest.approx(3.0)
     assert row["filled_shares"] == pytest.approx(8.1)
     assert row["avg_entry_price"] == pytest.approx(3.0 / 8.1)
     attempt = store.connection.execute("select order_mode, final_state, cost_usd, filled_shares from live_order_attempts order by attempt_seq desc limit 1").fetchone()
     assert attempt["order_mode"] == "GTC"
-    assert attempt["final_state"] == "FILLED"
+    assert attempt["final_state"] == "PARTIAL"
     assert attempt["cost_usd"] == pytest.approx(3.0)
     assert attempt["filled_shares"] == pytest.approx(8.1)
 
@@ -1932,6 +2015,35 @@ def test_resting_order_parameters_respect_entry_and_fair_caps(tmp_path: Path) ->
     assert reason is None
     assert limit_price == pytest.approx(0.33)
     assert target_notional == pytest.approx(3.0)
+
+
+def test_retry_order_parameters_respect_original_sweep_cap(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), mode="live"))
+    position = _live_position().__class__(
+        **{
+            **_live_position().__dict__,
+            "entry_price": 0.49,
+            "entry_fair": 0.8771,
+            "target_notional_usd": 50.0,
+            "raw_json": {"limit_price": 0.54},
+        }
+    )
+    book = BookSnapshot(
+        token_id="no-token",
+        bids=[BookLevel(price=0.45, size=100.0)],
+        asks=[
+            BookLevel(price=0.67, size=40.0),
+            BookLevel(price=0.72, size=40.0),
+        ],
+        timestamp="2026-06-14T17:49:05+00:00",
+    )
+
+    limit_price, target_notional, reason = engine._retry_order_parameters(position, book, current_cost_usd=10.2)
+
+    assert limit_price == pytest.approx(0.54)
+    assert target_notional == pytest.approx(0.0)
+    assert reason == "INSUFFICIENT_DEPTH"
 
 
 def test_live_submit_uses_exchange_returned_fill_amounts(tmp_path: Path) -> None:

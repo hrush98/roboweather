@@ -44,6 +44,7 @@ try:  # pragma: no cover - optional live dependency
         BalanceAllowanceParams as BalanceAllowanceParamsV2,
         ClobClient as ClobClientV2,
         MarketOrderArgs as MarketOrderArgsV2,
+        OrderArgs as OrderArgsV2,
         OrderPayload as OrderPayloadV2,
         OrderType as OrderTypeV2,
         PartialCreateOrderOptions as PartialCreateOrderOptionsV2,
@@ -55,6 +56,7 @@ except Exception as exc:  # pragma: no cover
     BalanceAllowanceParamsV2 = None
     ClobClientV2 = None
     MarketOrderArgsV2 = None
+    OrderArgsV2 = None
     OrderPayloadV2 = None
     OrderTypeV2 = None
     PartialCreateOrderOptionsV2 = None
@@ -238,17 +240,35 @@ class ClobExecutor:
             if self._client_version == "v2":
                 resolved_tick = normalized_tick or self._client.get_tick_size(token_id)
                 neg_risk = bool(self._client.get_neg_risk(token_id))
-                response = self._client.create_and_post_market_order(
-                    order_args=MarketOrderArgsV2(
-                        token_id=token_id,
-                        side=SideV2.BUY if order_side == "BUY" else SideV2.SELL,
-                        amount=amount,
-                        price=price,
-                        order_type=_v2_order_type(order_type),
-                    ),
-                    options=PartialCreateOrderOptionsV2(tick_size=str(resolved_tick), neg_risk=neg_risk),
-                    order_type=_v2_order_type(order_type),
-                )
+                price = _quantize_price(price, str(resolved_tick))
+                options = PartialCreateOrderOptionsV2(tick_size=str(resolved_tick), neg_risk=neg_risk)
+                v2_order_type = _v2_order_type(order_type)
+                if str(order_type).endswith(("GTC", "GTD")):
+                    size = _quantize_limit_order_size(amount / price if order_side == "BUY" else amount)
+                    if size <= 0:
+                        return _blocked_submission("order_size_zero_after_round")
+                    response = self._client.create_and_post_order(
+                        order_args=OrderArgsV2(
+                            token_id=token_id,
+                            side=SideV2.BUY if order_side == "BUY" else SideV2.SELL,
+                            price=price,
+                            size=size,
+                        ),
+                        options=options,
+                        order_type=v2_order_type,
+                    )
+                else:
+                    response = self._client.create_and_post_market_order(
+                        order_args=MarketOrderArgsV2(
+                            token_id=token_id,
+                            side=SideV2.BUY if order_side == "BUY" else SideV2.SELL,
+                            amount=amount,
+                            price=price,
+                            order_type=v2_order_type,
+                        ),
+                        options=options,
+                        order_type=v2_order_type,
+                    )
             else:
                 signed = self._client.create_market_order(
                     MarketOrderArgs(token_id=token_id, side=BUY if order_side == "BUY" else SELL, amount=amount, price=price, order_type=_legacy_order_type(order_type)),
@@ -344,6 +364,12 @@ def _quantize_usdc_amount(value: float) -> float:
 
 
 def _quantize_market_sell_amount(value: float) -> float:
+    if value <= 0:
+        return 0.0
+    return float(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_DOWN))
+
+
+def _quantize_limit_order_size(value: float) -> float:
     if value <= 0:
         return 0.0
     return float(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_DOWN))
