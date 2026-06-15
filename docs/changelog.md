@@ -2,6 +2,17 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-06-15
+
+- Hardened `docs/calibration-layer-1-design-2026-06-15.md` so Layer 1 calibration is explicitly a defensive gate, with copy-based live candidate handling, required raw metadata, unknown-bucket behavior, tests, and non-goals.
+- Updated `docs/roadmap-to-1000-ev-day.md` to make the whole-chain truth report the next scaling gate: raw replay, live-selected replay, actual fills, and Polymarket settlement must reconcile before calibration-driven sizing, sleeve promotion, or cap increases.
+- Upgraded live execution to anchor FAK, retry, and resting orders to the scored `entry_price`: initial/retry FAK are capped at `entry + $0.01`, the resting TTL is now 420 seconds, and the fallback ladder uses deterministic `entry+1c/entry/entry-1c/entry-2c` bands with `30/40/20/10` weights.
+- Added exchange-enforced post-only support for GTC child orders and apply it to the `entry` and lower resting ladder bands, while keeping the `entry+1c` child as normal GTC because immediate fills there are acceptable.
+- Extended live order attempt payloads with execution-contract metadata including scored entry, max immediate price, slippage versus entry, and execution-price violation flags; updated focused live execution/CLOB tests for the new order contract.
+
+- Documented the live/replay audit lesson in `docs/live-trading-journal.md`: raw-snapshot replay is hypothesis evidence, not sufficient live sizing evidence, until it reconciles to persisted live-selected candidates, actual fill prices, fair-band calibration, filled-vs-unfilled selected subsets, and settlement-source semantics.
+- Identified two operator follow-ups from the audit: persist the full live candidate snapshot universe with stable IDs, and add an execution guard or alert when submitted live limit price exceeds recorded entry by more than the intended tolerance.
+
 ## 2026-06-12
 
 - Integrated current-stack promotion/candidate replay into `scripts/trading_retrospective_report.py` so the weekly review packet shows live sleeves, candidate sleeves, empirical PnL/R/R, fill/sample counts, and watch/review status in one run.

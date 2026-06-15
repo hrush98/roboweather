@@ -29,9 +29,54 @@ The path to `$1000/day` therefore requires all three:
 - more independent opportunities;
 - more fillable size per opportunity.
 
+The most important current lesson is that these cannot be evaluated from raw
+snapshot replay alone. RoboWeather has positive-EV pockets, but the live
+portfolio can still lose money when those pockets are widened, filled at worse
+prices, settled differently by Polymarket than weather-outcome replay, or
+duplicated behind earlier sleeves. Before any material sizing increase, the
+system needs a single report that follows each sleeve through the whole chain:
+
+```text
+raw snapshot replay
+-> live-selected candidate replay
+-> actual filled replay at entry/fill price
+-> actual Polymarket settled PnL
+```
+
 ## Progression Plan
 
-### 1. Build The Portfolio Promotion Report
+### 1. Build The Whole-Chain Truth Report
+
+The next gate is a truth report that reconciles research replay to actual live
+trading. It should answer why a slice made or lost money, not just whether a
+standalone backtest looked good.
+
+Required report, by live sleeve and candidate sleeve:
+
+- raw `prediction_snapshots` replay at scored entry;
+- replay of the exact candidates selected/reserved by the live loop;
+- filled-subset replay using actual average fill prices;
+- actual settled live PnL from Polymarket resolution;
+- unfilled/reserved candidate results versus filled candidate results;
+- slippage versus scored entry by strategy, station, side, and entry band;
+- settlement-source mismatches between weather-outcome scoring and Polymarket;
+- capacity lost to caps, insufficient depth, no-match FAKs, and resting TTL expiry.
+
+This report is now the first gate before calibration-driven sizing, new sleeve
+promotion, or cap increases. A replay slice is only scale evidence when the same
+slice survives live selection, fills, and settlement.
+
+Initial sleeves to include:
+
+- US high-temp consensus no-tiny;
+- global low canary;
+- global low MVP add-on;
+- global low tiny tail;
+- METAR+HRRR inland late disagreement candidate;
+- HRRR-rich inland late disagreement candidate;
+- global high research candidates.
+
+### 2. Maintain The Portfolio Promotion Report
 
 Standalone policy leaderboards are no longer sufficient. Every candidate must be evaluated after the current live stack consumes plan order, station/date caps, station/date/side caps, exact bucket/side caps, entry bands, and recorded depth/VWAP.
 
@@ -43,14 +88,18 @@ Required report:
 - classify each candidate as duplicate size-up, overlapping variant, low-sample niche, or genuinely additive;
 - report incremental filled risk, incremental PnL, incremental R/R, and capacity blocked by caps/depth.
 
-This is the first gate before new policy promotion or sizing changes. It is the workflow that caught the weak NGBoost and 15m-overlay promotions.
+This remains the portfolio construction gate. It is the workflow that caught the
+weak NGBoost and 15m-overlay promotions. It is not sufficient by itself for live
+sizing until the whole-chain truth report also confirms live selection,
+execution, and settlement.
 
-### 2. Add Calibration And Regime Sizing
+### 3. Add Calibration And Regime Sizing
 
 The current replay history shows repeated overconfidence by station, side, entry band, and model family. Scaling without calibration will mostly scale the worst mistakes.
 
 Build:
 
+- a Layer 1 station/side/entry-band gate keyed by model family;
 - station-specific calibration layers;
 - side-specific calibration for `BUY_YES` and `BUY_NO`;
 - regime buckets such as inland/coastal, late-day, cloudy, humid, frontal, and low-liquidity;
@@ -63,9 +112,13 @@ Sizing should eventually depend on:
 target size = bankroll * fractional_kelly * calibrated_edge * liquidity_score * regime_confidence
 ```
 
-Hard caps still apply. The output should be conservative until live fill and settlement data confirms replay quality.
+Hard caps still apply. The output should be conservative until live fill and
+settlement data confirms replay quality. Negative live-settlement evidence
+overrides weather-outcome replay. Treat `BLOCK` buckets as no-trade,
+`CANARY` buckets as tiny size, and `WATCH` buckets as normal only when the
+whole-chain report is positive.
 
-### 3. Build HRRR/Regime Specialist Overlays
+### 4. Build HRRR/Regime Specialist Overlays
 
 HRRR should not be blanket-promoted. It should be a second-opinion overlay that trades only where HRRR adds orthogonal information to the observation-only core.
 
@@ -128,21 +181,40 @@ Example replay rows:
 
 This is evidence for a canary research overlay, not full promotion.
 
-### 4. Expand Breadth Across Market Families
+Fresher replay through `2026-06-15` keeps the direction but tightens the
+interpretation: METAR+HRRR inland remains the stronger canary candidate, while
+plain HRRR inland weakened in the recent cap-aware window. Do not promote broad
+HRRR or coastal HRRR from raw ranking tables; keep the candidate inland,
+late-day, entry `<= 0.50`, and disagreement/additive only until at least `30+`
+resolved additive trades remain positive.
+
+### 5. Expand Breadth Across Market Families
 
 US high-temperature alone is unlikely to support `$1000/day` EV. The system needs more independent, fillable sleeves:
 
 - US high-temp core consensus;
-- US low-temp where replay and liquidity are clean;
-- global low-temp BUY_NO core;
+- US low-temp where replay, liquidity, and settlement are clean;
+- global low-temp BUY_NO core, but only in the exact slices that survive live settlement and fill audits;
 - low-temp convex tail sleeve;
 - HRRR inland late-day specialist;
-- global high-temp only if raw-snapshot replay improves;
+- global high-temp only if sample grows and the whole-chain report confirms live viability;
 - future weather families such as precipitation, snowfall, wind, hurricane, and air-quality/event markets if market availability and data quality support them.
 
-Each new sleeve must pass the portfolio promotion report. Do not promote because a standalone leaderboard looks good.
+Current interpretation:
 
-### 5. Turn Execution Into Alpha, Not Leakage
+- global low MVP `entry <= 0.50` is the strongest global replay slice, but
+  global-low live settlement mismatches mean it must stay canary-sized until
+  Polymarket-vs-weather semantics are reconciled;
+- global low `0.50-0.75` is not scale evidence and should be reduced, blocked,
+  or separately proven;
+- global high is positive but thin and remains research-only;
+- US high-temp core should not be scaled from recent replay until calibration and
+  live-selected/fill attribution improve.
+
+Each new sleeve must pass the portfolio promotion report and the whole-chain
+truth report. Do not promote because a standalone leaderboard looks good.
+
+### 6. Turn Execution Into Alpha, Not Leakage
 
 Execution quality directly changes realized edge. The live DB already shows that invalid tick-size GTC rejects, insufficient depth, no-match FAKs, and TTL-expired resting orders can materially change capacity.
 
@@ -171,8 +243,10 @@ Execution upgrades should include:
 Requirements:
 
 - current live stack is settlement-positive after recent execution fixes;
-- portfolio promotion report exists for US high and global low;
+- whole-chain truth report exists for US high and global low;
+- portfolio promotion report exists for US high, global low, and candidate overlays;
 - all active policies have post-fix live fill attribution;
+- active global low slices have no unresolved settlement semantics mismatch;
 - daily filled risk can reach roughly `$500-$1000` with clean realized ROI.
 
 ### $250/day EV
@@ -180,9 +254,9 @@ Requirements:
 Requirements:
 
 - calibrated station/regime sizing is active;
-- global low-temp BUY_NO has enough resolved post-fix evidence to size beyond canary;
+- global low-temp BUY_NO has enough whole-chain post-fix evidence to size beyond canary;
 - low-temp tail sleeve has strict daily loss caps;
-- HRRR inland specialist remains positive after `30+` resolved additive trades.
+- METAR+HRRR or HRRR inland specialist remains positive after `30+` resolved additive trades.
 
 ### $500/day EV
 
@@ -205,4 +279,7 @@ Requirements:
 
 ## Operating Rule
 
-Do not scale a policy because it is profitable in isolation. Scale only when it is profitable, fillable, and additive behind the current live stack under current caps.
+Do not scale a policy because it is profitable in isolation. Scale only when it is
+profitable, fillable, additive behind the current live stack under current caps,
+and reconciled from raw replay through live selection, actual fills, and
+Polymarket settlement.

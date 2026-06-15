@@ -173,8 +173,8 @@ class ClobExecutor:
     def place_fok_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
         return self._place_order(token_id=token_id, side=side, price=price, amount=amount, tick_size=tick_size, order_type="FOK")
 
-    def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
-        return self._place_order(token_id=token_id, side=side, price=price, amount=amount, tick_size=tick_size, order_type="GTC")
+    def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None, post_only: bool = False) -> OrderSubmission:
+        return self._place_order(token_id=token_id, side=side, price=price, amount=amount, tick_size=tick_size, order_type="GTC", post_only=post_only)
 
     def place_fok_batch(self, orders: list[dict[str, Any]]) -> list[OrderSubmission]:
         if self.check_kill_switch():
@@ -227,7 +227,7 @@ class ClobExecutor:
         success = order_id in canceled or bool(canceled)
         return CancelSubmission(success, canceled, not_canceled, None if success else "cancel_failed", raw)
 
-    def _place_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None, order_type) -> OrderSubmission:
+    def _place_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None, order_type, post_only: bool = False) -> OrderSubmission:
         if self.check_kill_switch():
             return _blocked_submission("kill_switch")
         normalized_tick = _normalize_tick_size(tick_size)
@@ -243,7 +243,10 @@ class ClobExecutor:
                 price = _quantize_price(price, str(resolved_tick))
                 options = PartialCreateOrderOptionsV2(tick_size=str(resolved_tick), neg_risk=neg_risk)
                 v2_order_type = _v2_order_type(order_type)
-                if str(order_type).endswith(("GTC", "GTD")):
+                is_resting_order = str(order_type).endswith(("GTC", "GTD"))
+                if post_only and not is_resting_order:
+                    return _blocked_submission("INVALID_POST_ONLY_ORDER_TYPE")
+                if is_resting_order:
                     size = _quantize_limit_order_size(amount / price if order_side == "BUY" else amount)
                     if size <= 0:
                         return _blocked_submission("order_size_zero_after_round")
@@ -256,6 +259,7 @@ class ClobExecutor:
                         ),
                         options=options,
                         order_type=v2_order_type,
+                        post_only=bool(post_only),
                     )
                 else:
                     response = self._client.create_and_post_market_order(
@@ -270,11 +274,20 @@ class ClobExecutor:
                         order_type=v2_order_type,
                     )
             else:
+                legacy_order_type = _legacy_order_type(order_type)
+                is_resting_order = str(order_type).endswith(("GTC", "GTD"))
+                if post_only and not is_resting_order:
+                    return _blocked_submission("INVALID_POST_ONLY_ORDER_TYPE")
                 signed = self._client.create_market_order(
-                    MarketOrderArgs(token_id=token_id, side=BUY if order_side == "BUY" else SELL, amount=amount, price=price, order_type=_legacy_order_type(order_type)),
+                    MarketOrderArgs(token_id=token_id, side=BUY if order_side == "BUY" else SELL, amount=amount, price=price, order_type=legacy_order_type),
                     PartialCreateOrderOptions(tick_size=normalized_tick) if normalized_tick else None,
                 )
-                response = self._client.post_order(signed, _legacy_order_type(order_type))
+                if post_only:
+                    response = self._client.post_orders([PostOrdersArgs(order=signed, orderType=legacy_order_type, postOnly=True)])
+                    if isinstance(response, list) and response:
+                        response = response[0]
+                else:
+                    response = self._client.post_order(signed, legacy_order_type)
         except Exception as exc:  # pragma: no cover
             return _exception_submission(exc)
         return _submission_from_payload(response)

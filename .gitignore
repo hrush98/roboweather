@@ -14,6 +14,10 @@ data/logs/
 .poly_key_enc/
 data/paper/
 
+# Local alpha model artifacts — keep out of repo and out of git clean.
+# gitignore only affects UNTRACKED files; the 19 base models tracked in git are safe.
+data/models/*.joblib
+
 # Bulky/generated research artifacts. Keep curated docs and model artifacts in Git,
 # but leave raw generated datasets and validation dumps local unless requested.
 data/raw/dataset_2022-01-01_2025-12-31_pm_active_us12.csv

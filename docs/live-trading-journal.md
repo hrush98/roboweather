@@ -32,11 +32,12 @@ Updated: 2026-06-12
 ### Execution rules
 
 - US high-temperature live entries are capped at `<= 0.50` because historical replay showed materially better return on risk below this price. The global low-temp canary is BUY_NO-only with a `0.05-0.75` entry band and station-local `00:30-05:00` decision window; the global low tiny-tail sleeve covers `<= 0.05`.
-- Orders use FAK first, with retry handling for transient depth/order-version failures. Explicit partial fills continue into a 360-second resting remainder for the leftover notional. Matched/filled responses with returned fill amounts are treated as partial only when the unfilled remainder exceeds $3.
-- Any live strategy may place a resting fallback ladder after eligible FAK failure paths.
-- Candidates blocked only by insufficient ask-sweep depth skip the FAK attempt and route directly into the same resting GTC ladder, while keeping risk/exposure caps intact.
-- Resting fallback TTL is 360 seconds and targets the remaining notional after the FAK retry path with $25 GTC child orders stepped down by $0.01 from the first eligible resting price; keep whatever fills before canceling open children after the shared TTL.
-- The resting fallback is intentionally narrow: it is for improving fill odds without adding a broad passive market-making system.
+- Live execution is entry-anchored: the scored `entry_price` is the execution contract, and `selected_sweep_price_cap` is retained only as research/liquidity diagnostics.
+- Initial FAK uses `entry_price + $0.01` only. Retry FAK uses the same entry-anchored cap and is skipped when the refreshed ask is above that cap; raw model fair no longer permits chasing up to `best_ask + $0.05`.
+- Any live strategy may place a resting fallback ladder after eligible FAK failure paths. Candidates blocked only by insufficient `ask + $0.01` depth skip FAK and route directly into the same ladder while keeping risk/exposure caps intact.
+- Resting fallback TTL is 420 seconds. The ladder allocates remaining notional across deterministic bands `entry + $0.01`, `entry`, `entry - $0.01`, and `entry - $0.02` with weights `30% / 40% / 20% / 10%`, skipping children below the live minimum order size.
+- The `entry + $0.01` resting child is normal GTC because immediate fills at that price are acceptable; `entry` and lower children are exchange-enforced post-only GTC where the CLOB client supports it.
+- The resting fallback is intentionally narrow: it is for improving fill odds at replay-compatible prices without adding a broad passive market-making system.
 - Live settlement in the live DB updates only when the Polymarket live resolver runs. Polymarket UI may show resolution before `live_policy_positions` is marked `SETTLED`.
 
 ### Known operator caveats
@@ -47,6 +48,12 @@ Updated: 2026-06-12
 - Polymarket's portfolio P/L is account-level. The live SQLite ledger tracks the bot's positions, fills, and settlements, so any mismatch means the bot ledger is missing some mark, settlement, or timing state relative to the exchange view.
 
 ## Rationale
+### 2026-06-15 entry-anchored execution upgrade
+
+Live execution now treats replay EV as an entry-price claim, not a broad directional permission to chase. The old FAK/retry path could inherit `selected_sweep_price_cap` and submit several cents above the scored entry, which made live fills a different trade than replay. The new contract caps immediate FAK/retry at `entry + 1c`, then rests a 7-minute ladder at `entry+1c`, `entry`, `entry-1c`, and `entry-2c`, with entry-and-lower children post-only.
+
+The operating lesson is that missed fills are acceptable evidence, while adverse fills above the replay-compatible entry contaminate policy evaluation. Live reviews should compare replay at scored entry, theoretical PnL at actual average fill, and final settlement PnL before promoting or sizing policies.
+
 
 ### Entry cap at 50 cents
 
@@ -93,6 +100,15 @@ FAK retries address temporary book/depth/order-version issues. When those still 
 The 360-second TTL is a deliberate compromise: weather does not normally reprice enough in six minutes to invalidate the original edge, but the order should not remain open after the cycle context has aged. The fallback now ladders the leftover notional into $25 chunks, stepped down by one cent per child order, so a $60 remainder posts as $25, $25, and $10 rather than one large passive order.
 
 ## Journal
+
+### 2026-06-15
+
+- Live/replay audit lesson: positive raw-snapshot replay is not sufficient evidence of tradable edge unless it can be reconciled to the exact live candidate and fill path. The live DB stores selected/reserved live positions and raw candidate payloads in `live_policy_positions`, but the live loop currently leaves `prediction_snapshots` empty; live execution builds snapshots in memory with temporary IDs and does not persist the full candidate universe the way the research collector does. This means current reports can compare actual fills to selected/reserved live candidates, but cannot yet audit every unselected candidate the live scanner considered.
+- Current selected-live-candidate audit showed the core failure mode clearly: actual filled rows were negative while selected-candidate replay was positive. On persisted selected/reserved rows, filled candidates replayed worse than unfilled reserved candidates, consistent with adverse fill selection. Actual average fill prices also materially exceeded recorded entry prices in several policies; submitted live limit prices were often much wider than the intended one-or-two-cent tolerance, so replay at `entry_price` can overstate executable edge.
+- Directional model confidence is not enough for bucket trading. Bucket `BUY_NO` can be directionally plausible and still lose if the final temperature lands inside the exact selected bucket, and live filled fair bands showed bad calibration in the traded subset. Treat raw model fair as uncalibrated until live/resolved fair-band diagnostics support it.
+- Global low-temperature settlement needs extra scrutiny. Several live global-low rows had official weather-outcome scoring that implied `BUY_NO` should win, while live settlement recorded `BUY_YES`. Do not use global-low replay for promotion or size-up until resolver-vs-Polymarket-settlement semantics are reconciled.
+- New promotion standard: before any policy size-up or new live sleeve, require positive actual filled R/R when available, positive replay on persisted live-selected candidates, filled-subset R/R not materially worse than unfilled/reserved selected candidates, no inverted fair-band calibration, and no unresolved settlement-source mismatch. Raw-snapshot portfolio replay remains useful for hypothesis generation, but not sufficient for live sizing without this live-candidate/fill audit.
+- Engineering follow-up: persist live prediction snapshots or a dedicated live candidate snapshot table before policy filtering, with stable candidate IDs linked from `live_policy_positions`. Also add a hard execution guard or alert when submitted limit price exceeds recorded entry by more than the intended tolerance.
 
 ### 2026-06-12
 

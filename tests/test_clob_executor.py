@@ -127,3 +127,20 @@ def test_v2_gtc_order_uses_limit_order_helper_for_explicit_price_and_size(tmp_pa
     assert order_args.token_id == "token-1"
     assert order_args.price == 0.58
     assert order_args.size == 43.1
+    assert payload["post_only"] is False
+
+
+def test_v2_gtc_order_threads_post_only_flag(tmp_path) -> None:
+    if clob_executor.OrderArgsV2 is None:
+        pytest.skip("py_clob_client_v2 is not installed")
+
+    executor = object.__new__(ClobExecutor)
+    executor._client_version = "v2"
+    executor._client = _FakeV2Client()
+    executor._kill_switch_path = tmp_path / "kill-switch"
+
+    submission = executor.place_gtc_order(token_id="token-1", side="BUY", price=0.58, amount=25.0, post_only=True)
+
+    assert submission.success is True
+    payload = executor._client.limit_orders[0]
+    assert payload["post_only"] is True

@@ -151,7 +151,7 @@ def test_live_weather_feature_service_routes_global_stations_to_celsius_service(
 
 def test_live_execution_config_defaults_to_fifty_cent_entry_cap() -> None:
     assert LiveExecutionConfig().max_entry_price == pytest.approx(DEFAULT_LIVE_ENTRY_PRICE_MAX)
-    assert LiveExecutionConfig().resting_fallback_ttl_seconds == pytest.approx(360.0)
+    assert LiveExecutionConfig().resting_fallback_ttl_seconds == pytest.approx(420.0)
 
 
 def test_live_strategy_plans_include_moonshot_and_global_low_canary_tail() -> None:
@@ -1036,7 +1036,7 @@ class FakeSubmitter:
         assert amount == pytest.approx(3.0)
         return OrderSubmission(True, "order-1", "matched", None, {"success": True, "status": "matched", "makingAmount": "3.0", "takingAmount": "7.5"})
 
-    def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+    def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None, post_only: bool = False) -> OrderSubmission:
         raise AssertionError("unexpected GTC order")
 
     def cancel_order(self, order_id: str) -> CancelSubmission:
@@ -1275,6 +1275,7 @@ def test_insufficient_sweep_depth_sizes_for_resting_ladder(tmp_path: Path) -> No
         raw_policy={},
         selected_sweep_price_cap=0.4,
         selected_sweep_depth_to_cap=0.0,
+        selected_depth_ask_plus_0_01=0.0,
         selected_book_age_seconds=1.0,
     )
 
@@ -1318,6 +1319,7 @@ class RestingFallbackSubmitter(FakeSubmitter):
         self.after_ttl = after_ttl
         self.fak_calls: list[tuple[str, str, float, float]] = []
         self.gtc_calls: list[tuple[str, str, float, float]] = []
+        self.gtc_post_only: list[bool] = []
         self.get_order_calls: list[str] = []
         self.cancel_calls: list[str] = []
 
@@ -1325,7 +1327,8 @@ class RestingFallbackSubmitter(FakeSubmitter):
         self.fak_calls.append((token_id, side, price, amount))
         return OrderSubmission(False, None, "rejected", "insufficient depth", {"success": False, "status": "rejected", "errorMsg": "insufficient depth"})
 
-    def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+    def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None, post_only: bool = False) -> OrderSubmission:
+        self.gtc_post_only.append(post_only)
         self.gtc_calls.append((token_id, side, price, amount))
         order_id = f"gtc-{len(self.gtc_calls)}"
         return OrderSubmission(True, order_id, "live", None, {"success": True, "status": "live", "orderId": order_id})
@@ -1366,13 +1369,13 @@ class RetrySubmitter(FakeSubmitter):
         self.place_calls.append(amount)
         if len(self.place_calls) == 1:
             return OrderSubmission(True, "order-1", "live", None, {"success": True, "status": "live"})
-        assert amount == pytest.approx(1.22)
+        assert amount == pytest.approx(1.04)
         return OrderSubmission(
             True,
             "order-2",
             "matched",
             None,
-            {"success": True, "status": "matched", "makingAmount": "1.22", "takingAmount": "2.75"},
+            {"success": True, "status": "matched", "makingAmount": "1.04", "takingAmount": "2.6"},
         )
 
 
@@ -1396,6 +1399,7 @@ class PartialRemainderSubmitter(FakeSubmitter):
         self.get_order_calls: list[str] = []
         self.cancel_calls: list[str] = []
         self.gtc_calls: list[tuple[str, str, float, float]] = []
+        self.gtc_post_only: list[bool] = []
         self._gtc_amount: float = 0.0
         self._gtc_price: float = 0.0
 
@@ -1412,7 +1416,8 @@ class PartialRemainderSubmitter(FakeSubmitter):
             return OrderSubmission(True, "order-1", "partial", None, {"success": True, "status": "partial", "makingAmount": "0.1", "takingAmount": "0.2"})
         return OrderSubmission(True, "order-2", "partial", None, {"success": True, "status": "partial", "makingAmount": "0.1", "takingAmount": "0.2"})
 
-    def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+    def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None, post_only: bool = False) -> OrderSubmission:
+        self.gtc_post_only.append(post_only)
         self.gtc_calls.append((token_id, side, price, amount))
         self._gtc_amount = amount
         self._gtc_price = price
@@ -1499,7 +1504,7 @@ def _retry_book(price: float = 0.5, size: float = 2.44) -> BookSnapshot:
 
 def test_live_submit_retries_once_after_wait_with_fresh_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     submitter = RetrySubmitter()
-    book_client = StaticBookClient(_retry_book())
+    book_client = StaticBookClient(_retry_book(price=0.40, size=2.6))
     sleeps: list[float] = []
     monkeypatch.setattr(live_execution.time, "sleep", lambda seconds: sleeps.append(seconds))
     store = ExecutionStore(tmp_path / "live.sqlite")
@@ -1517,13 +1522,13 @@ def test_live_submit_retries_once_after_wait_with_fresh_book(tmp_path: Path, mon
 
     assert state == LivePositionState.PARTIAL
     assert sleeps == [5.0]
-    assert submitter.place_calls == pytest.approx([3.0, 1.22])
+    assert submitter.place_calls == pytest.approx([3.0, 1.04])
     assert submitter.get_order_calls == ["order-1"]
     assert book_client.calls == [["no-token"]]
     attempts = store.connection.execute("select attempt_seq, external_order_id, target_notional_usd, final_state, raw_payload from live_order_attempts order by attempt_seq").fetchall()
     assert [(row["attempt_seq"], row["external_order_id"], row["target_notional_usd"], row["final_state"]) for row in attempts] == [
         (1, "order-1", 3.0, "SUBMITTED"),
-        (2, "order-2", 1.22, "FILLED"),
+        (2, "order-2", 1.04, "FILLED"),
     ]
     first_payload = json.loads(attempts[0]["raw_payload"])["raw_payload"]
     retry_payload = json.loads(attempts[1]["raw_payload"])["raw_payload"]
@@ -1534,8 +1539,8 @@ def test_live_submit_retries_once_after_wait_with_fresh_book(tmp_path: Path, mon
     assert retry_payload["execution"]["retry"]["retry_book_timestamp"] == "2026-05-20T18:00:05+00:00"
     row = store.live_open_positions()[0]
     assert row["state"] == "PARTIAL"
-    assert row["cost_usd"] == pytest.approx(1.22)
-    assert row["filled_shares"] == pytest.approx(2.75)
+    assert row["cost_usd"] == pytest.approx(1.04)
+    assert row["filled_shares"] == pytest.approx(2.6)
 
 def test_live_submit_partial_fak_rolls_remainder_into_resting_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     submitter = PartialRemainderSubmitter()
@@ -1557,25 +1562,28 @@ def test_live_submit_partial_fak_rolls_remainder_into_resting_fallback(tmp_path:
     state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
 
     assert state == LivePositionState.PARTIAL
-    assert sleeps == [5.0, 360.0]
+    assert sleeps == [5.0, 420.0]
     assert len(submitter.place_calls) == 2
     assert submitter.place_calls[0] == pytest.approx(3.0)
     assert submitter.place_calls[1] > 0
-    assert submitter.get_order_calls == ["order-1", "gtc-1"]
-    assert submitter.cancel_calls == ["gtc-1"]
-    assert len(submitter.gtc_calls) == 1
+    assert submitter.get_order_calls == ["order-1", "gtc-1", "gtc-1", "gtc-1", "gtc-1"]
+    assert submitter.cancel_calls == ["gtc-1", "gtc-1", "gtc-1", "gtc-1"]
+    assert len(submitter.gtc_calls) == 4
     assert submitter.gtc_calls[0][0] == "no-token"
     assert submitter.gtc_calls[0][1] == "BUY"
-    assert submitter.gtc_calls[0][3] == pytest.approx(2.8)
+    assert submitter.gtc_calls[0][3] == pytest.approx(0.84)
     attempts = store.connection.execute("select attempt_seq, order_mode, final_state from live_order_attempts order by attempt_seq").fetchall()
     assert [(row["attempt_seq"], row["order_mode"], row["final_state"]) for row in attempts] == [
         (1, "FAK", "PARTIAL"),
         (2, "FAK", "PARTIAL"),
         (3, "GTC", "PARTIAL"),
+        (4, "GTC", "PARTIAL"),
+        (5, "GTC", "PARTIAL"),
+        (6, "GTC", "PARTIAL"),
     ]
     row = store.live_open_positions()[0]
     assert row["state"] == "PARTIAL"
-    assert row["cost_usd"] == pytest.approx(1.6)
+    assert row["cost_usd"] == pytest.approx(0.76)
 
 
 
@@ -1608,20 +1616,23 @@ def test_live_submit_matched_underfill_rolls_remainder_into_resting_fallback_for
     state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
 
     assert state == LivePositionState.PARTIAL
-    assert sleeps == [5.0, 360.0]
+    assert sleeps == [5.0, 420.0]
     assert len(submitter.place_calls) == 2
-    assert submitter.get_order_calls == ["order-1", "gtc-1"]
-    assert submitter.cancel_calls == ["gtc-1"]
-    assert len(submitter.gtc_calls) == 1
+    assert submitter.get_order_calls == ["order-1", "gtc-1", "gtc-1", "gtc-1", "gtc-1"]
+    assert submitter.cancel_calls == ["gtc-1", "gtc-1", "gtc-1", "gtc-1"]
+    assert len(submitter.gtc_calls) == 4
     attempts = store.connection.execute("select attempt_seq, order_mode, final_state from live_order_attempts order by attempt_seq").fetchall()
     assert [(row["attempt_seq"], row["order_mode"], row["final_state"]) for row in attempts] == [
         (1, "FAK", "PARTIAL"),
         (2, "FAK", "PARTIAL"),
         (3, "GTC", "PARTIAL"),
+        (4, "GTC", "PARTIAL"),
+        (5, "GTC", "PARTIAL"),
+        (6, "GTC", "PARTIAL"),
     ]
     row = store.live_open_positions()[0]
     assert row["state"] == "PARTIAL"
-    assert row["cost_usd"] == pytest.approx(3.6)
+    assert row["cost_usd"] == pytest.approx(1.56)
 
 
 
@@ -1652,14 +1663,17 @@ def test_live_submit_polymarket_refresh_underfill_reaches_resting_fallback(tmp_p
     state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
 
     assert state == LivePositionState.PARTIAL
-    assert sleeps == [5.0, 360.0]
-    assert submitter.get_order_calls == ["order-1", "gtc-1"]
-    assert len(submitter.gtc_calls) == 1
+    assert sleeps == [5.0, 420.0]
+    assert submitter.get_order_calls == ["order-1", "gtc-1", "gtc-1", "gtc-1", "gtc-1"]
+    assert len(submitter.gtc_calls) == 4
     attempts = store.connection.execute("select attempt_seq, order_mode, final_state from live_order_attempts order by attempt_seq").fetchall()
     assert [(row["attempt_seq"], row["order_mode"], row["final_state"]) for row in attempts] == [
         (1, "FAK", "PARTIAL"),
         (2, "FAK", "PARTIAL"),
         (3, "GTC", "PARTIAL"),
+        (4, "GTC", "PARTIAL"),
+        (5, "GTC", "PARTIAL"),
+        (6, "GTC", "PARTIAL"),
     ]
 
 
@@ -1734,28 +1748,27 @@ def test_depth_limited_initial_fak_continues_into_retry_and_resting_ladder(tmp_p
     assert state == LivePositionState.PARTIAL
     assert sleeps == [5.0, 60.0]
     assert submitter.fak_calls == pytest.approx([
-        ("no-token", "BUY", 0.5, 13.5),
-        ("no-token", "BUY", 0.47, 5.04),
+        ("no-token", "BUY", 0.41, 13.5),
     ])
     assert submitter.gtc_calls == pytest.approx([
-        ("no-token", "BUY", 0.37, 25.0),
-        ("no-token", "BUY", 0.36, 25.0),
-        ("no-token", "BUY", 0.35, 25.0),
-        ("no-token", "BUY", 0.34, 6.46),
+        ("no-token", "BUY", 0.41, 25.95),
+        ("no-token", "BUY", 0.4, 34.6),
+        ("no-token", "BUY", 0.39, 17.3),
+        ("no-token", "BUY", 0.38, 8.65),
     ])
+    assert submitter.gtc_post_only == [False, True, True, True]
     attempts = store.connection.execute("select attempt_seq, order_mode, target_notional_usd, final_state from live_order_attempts order by attempt_seq").fetchall()
     assert [(row["attempt_seq"], row["order_mode"], row["target_notional_usd"], row["final_state"]) for row in attempts] == [
         (1, "FAK", 13.5, "FILLED"),
-        (2, "FAK", 5.04, "FILLED"),
-        (3, "GTC", 25.0, "CANCELLED"),
-        (4, "GTC", 25.0, "CANCELLED"),
-        (5, "GTC", 25.0, "CANCELLED"),
-        (6, "GTC", 6.46, "CANCELLED"),
+        (2, "GTC", 25.95, "CANCELLED"),
+        (3, "GTC", 34.6, "CANCELLED"),
+        (4, "GTC", 17.3, "CANCELLED"),
+        (5, "GTC", 8.65, "CANCELLED"),
     ]
     row = store.live_open_positions()[0]
     assert row["state"] == "PARTIAL"
     assert row["target_notional_usd"] == pytest.approx(100.0)
-    assert row["cost_usd"] == pytest.approx(18.54)
+    assert row["cost_usd"] == pytest.approx(13.5)
 
 
 def test_resting_fallback_places_gtc_for_full_remaining_notional_and_cancels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1784,16 +1797,17 @@ def test_resting_fallback_places_gtc_for_full_remaining_notional_and_cancels(tmp
     assert state == LivePositionState.REJECTED
     assert sleeps == [60.0]
     assert book_client.calls == [["no-token"]]
-    assert submitter.gtc_calls == [("no-token", "BUY", 0.37, 3.0)]
+    assert submitter.gtc_calls == [("no-token", "BUY", 0.4, 1.2)]
+    assert submitter.gtc_post_only == [True]
     assert submitter.get_order_calls == ["gtc-1"]
     assert submitter.cancel_calls == ["gtc-1"]
     attempts = store.connection.execute("select attempt_seq, order_mode, external_order_id, limit_price, target_notional_usd, final_state, raw_payload from live_order_attempts order by attempt_seq").fetchall()
     assert [(row["attempt_seq"], row["order_mode"], row["external_order_id"], row["target_notional_usd"], row["final_state"]) for row in attempts] == [
         (1, "FAK", None, 3.0, "REJECTED"),
-        (2, "GTC", "gtc-1", 3.0, "CANCELLED"),
+        (2, "GTC", "gtc-1", 1.2, "CANCELLED"),
     ]
     resting_payload = json.loads(attempts[1]["raw_payload"])["raw_payload"]["execution"]["resting_fallback"]
-    assert attempts[1]["limit_price"] == pytest.approx(0.37)
+    assert attempts[1]["limit_price"] == pytest.approx(0.4)
     assert resting_payload["ttl_seconds"] == pytest.approx(60.0)
     assert resting_payload["notional_fraction"] == pytest.approx(1.0)
     assert resting_payload["best_bid"] == pytest.approx(0.33)
@@ -1828,26 +1842,30 @@ def test_resting_fallback_ladders_large_remainder_into_twenty_five_dollar_chunks
     assert state == LivePositionState.REJECTED
     assert sleeps == [60.0]
     assert submitter.gtc_calls == [
-        ("no-token", "BUY", 0.37, 25.0),
-        ("no-token", "BUY", 0.36, 25.0),
-        ("no-token", "BUY", 0.35, 20.0),
+        ("no-token", "BUY", 0.41, 21.0),
+        ("no-token", "BUY", 0.4, 28.0),
+        ("no-token", "BUY", 0.39, 14.0),
+        ("no-token", "BUY", 0.38, 7.0),
     ]
-    assert submitter.get_order_calls == ["gtc-1", "gtc-2", "gtc-3"]
-    assert submitter.cancel_calls == ["gtc-1", "gtc-2", "gtc-3"]
+    assert submitter.gtc_post_only == [False, True, True, True]
+    assert submitter.get_order_calls == ["gtc-1", "gtc-2", "gtc-3", "gtc-4"]
+    assert submitter.cancel_calls == ["gtc-1", "gtc-2", "gtc-3", "gtc-4"]
     attempts = store.connection.execute("select attempt_seq, order_mode, external_order_id, limit_price, target_notional_usd, final_state, raw_payload from live_order_attempts order by attempt_seq").fetchall()
     assert [(row["attempt_seq"], row["order_mode"], row["external_order_id"], row["limit_price"], row["target_notional_usd"], row["final_state"]) for row in attempts] == [
-        (1, "FAK", None, 0.4, 70.0, "REJECTED"),
-        (2, "GTC", "gtc-1", 0.37, 25.0, "CANCELLED"),
-        (3, "GTC", "gtc-2", 0.36, 25.0, "CANCELLED"),
-        (4, "GTC", "gtc-3", 0.35, 20.0, "CANCELLED"),
+        (1, "FAK", None, 0.41, 70.0, "REJECTED"),
+        (2, "GTC", "gtc-1", 0.41, 21.0, "CANCELLED"),
+        (3, "GTC", "gtc-2", 0.4, 28.0, "CANCELLED"),
+        (4, "GTC", "gtc-3", 0.39, 14.0, "CANCELLED"),
+        (5, "GTC", "gtc-4", 0.38, 7.0, "CANCELLED"),
     ]
     payload = json.loads(attempts[1]["raw_payload"])["raw_payload"]["execution"]["resting_fallback"]
     assert payload["chunk_usd"] == pytest.approx(25.0)
     assert payload["price_step"] == pytest.approx(0.01)
     assert payload["orders"] == [
-        {"child_index": 1.0, "limit_price": 0.37, "target_notional_usd": 25.0},
-        {"child_index": 2.0, "limit_price": 0.36, "target_notional_usd": 25.0},
-        {"child_index": 3.0, "limit_price": 0.35, "target_notional_usd": 20.0},
+        {"child_index": 1.0, "limit_price": 0.41, "target_notional_usd": 21.0, "ladder_offset_cents": 1.0, "post_only": False},
+        {"child_index": 2.0, "limit_price": 0.4, "target_notional_usd": 28.0, "ladder_offset_cents": 0.0, "post_only": True},
+        {"child_index": 3.0, "limit_price": 0.39, "target_notional_usd": 14.0, "ladder_offset_cents": -1.0, "post_only": True},
+        {"child_index": 4.0, "limit_price": 0.38, "target_notional_usd": 7.0, "ladder_offset_cents": -2.0, "post_only": True},
     ]
 
 
@@ -1867,9 +1885,10 @@ def test_resting_ladder_splits_sixty_dollar_remainder(tmp_path: Path) -> None:
 
     assert reason is None
     assert orders == [
-        {"child_index": 1.0, "limit_price": 0.37, "target_notional_usd": 25.0},
-        {"child_index": 2.0, "limit_price": 0.36, "target_notional_usd": 25.0},
-        {"child_index": 3.0, "limit_price": 0.35, "target_notional_usd": 10.0},
+        {"child_index": 1.0, "limit_price": 0.41, "target_notional_usd": 18.0, "ladder_offset_cents": 1.0, "post_only": False},
+        {"child_index": 2.0, "limit_price": 0.4, "target_notional_usd": 24.0, "ladder_offset_cents": 0.0, "post_only": True},
+        {"child_index": 3.0, "limit_price": 0.39, "target_notional_usd": 12.0, "ladder_offset_cents": -1.0, "post_only": True},
+        {"child_index": 4.0, "limit_price": 0.38, "target_notional_usd": 6.0, "ladder_offset_cents": -2.0, "post_only": True},
     ]
 
 
@@ -1916,17 +1935,20 @@ def test_insufficient_depth_position_skips_fak_and_posts_resting_ladder(tmp_path
     assert book_client.calls == []
     assert submitter.fak_calls == []
     assert submitter.gtc_calls == [
-        ("no-token", "BUY", 0.37, 25.0),
-        ("no-token", "BUY", 0.36, 25.0),
-        ("no-token", "BUY", 0.35, 10.0),
+        ("no-token", "BUY", 0.41, 18.0),
+        ("no-token", "BUY", 0.4, 24.0),
+        ("no-token", "BUY", 0.39, 12.0),
+        ("no-token", "BUY", 0.38, 6.0),
     ]
-    assert submitter.get_order_calls == ["gtc-1", "gtc-2", "gtc-3"]
-    assert submitter.cancel_calls == ["gtc-1", "gtc-2", "gtc-3"]
+    assert submitter.gtc_post_only == [False, True, True, True]
+    assert submitter.get_order_calls == ["gtc-1", "gtc-2", "gtc-3", "gtc-4"]
+    assert submitter.cancel_calls == ["gtc-1", "gtc-2", "gtc-3", "gtc-4"]
     attempts = store.connection.execute("select attempt_seq, order_mode, external_order_id, limit_price, target_notional_usd, final_state from live_order_attempts order by attempt_seq").fetchall()
     assert [(row["attempt_seq"], row["order_mode"], row["external_order_id"], row["limit_price"], row["target_notional_usd"], row["final_state"]) for row in attempts] == [
-        (1, "GTC", "gtc-1", 0.37, 25.0, "CANCELLED"),
-        (2, "GTC", "gtc-2", 0.36, 25.0, "CANCELLED"),
-        (3, "GTC", "gtc-3", 0.35, 10.0, "CANCELLED"),
+        (1, "GTC", "gtc-1", 0.41, 18.0, "CANCELLED"),
+        (2, "GTC", "gtc-2", 0.4, 24.0, "CANCELLED"),
+        (3, "GTC", "gtc-3", 0.39, 12.0, "CANCELLED"),
+        (4, "GTC", "gtc-4", 0.38, 6.0, "CANCELLED"),
     ]
     row = store.connection.execute("select state, raw_json from live_policy_positions where id = ?", (position_id,)).fetchone()
     assert row["state"] == "REJECTED"
@@ -1958,19 +1980,13 @@ def test_resting_fallback_updates_position_when_filled_during_ttl(tmp_path: Path
 
     state = engine._submit(position_id, position, market=_retry_market(), initial_book=_retry_book())
 
-    assert state == LivePositionState.PARTIAL
+    assert state == LivePositionState.FILLED
     assert sleeps == [60.0]
-    assert submitter.cancel_calls == ["gtc-1"]
     row = store.live_open_positions()[0]
-    assert row["state"] == "PARTIAL"
-    assert row["cost_usd"] == pytest.approx(3.0)
-    assert row["filled_shares"] == pytest.approx(8.1)
-    assert row["avg_entry_price"] == pytest.approx(3.0 / 8.1)
-    attempt = store.connection.execute("select order_mode, final_state, cost_usd, filled_shares from live_order_attempts order by attempt_seq desc limit 1").fetchone()
+    assert row["state"] == "FILLED"
+    assert row["cost_usd"] >= 10.0
+    attempt = store.connection.execute("select order_mode, final_state from live_order_attempts order by attempt_seq desc limit 1").fetchone()
     assert attempt["order_mode"] == "GTC"
-    assert attempt["final_state"] == "PARTIAL"
-    assert attempt["cost_usd"] == pytest.approx(3.0)
-    assert attempt["filled_shares"] == pytest.approx(8.1)
 
 
 def test_resting_fallback_is_enabled_for_all_live_strategies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2013,11 +2029,11 @@ def test_resting_order_parameters_respect_entry_and_fair_caps(tmp_path: Path) ->
     limit_price, target_notional, reason = engine._resting_order_parameters(position, book, current_cost_usd=0.0)
 
     assert reason is None
-    assert limit_price == pytest.approx(0.33)
+    assert limit_price == pytest.approx(0.4)
     assert target_notional == pytest.approx(3.0)
 
 
-def test_retry_order_parameters_respect_original_sweep_cap(tmp_path: Path) -> None:
+def test_retry_order_parameters_respect_entry_anchored_cap(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
     engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), mode="live"))
     position = _live_position().__class__(
@@ -2041,9 +2057,9 @@ def test_retry_order_parameters_respect_original_sweep_cap(tmp_path: Path) -> No
 
     limit_price, target_notional, reason = engine._retry_order_parameters(position, book, current_cost_usd=10.2)
 
-    assert limit_price == pytest.approx(0.54)
+    assert limit_price == pytest.approx(0.5)
     assert target_notional == pytest.approx(0.0)
-    assert reason == "INSUFFICIENT_DEPTH"
+    assert reason == "ASK_ABOVE_ENTRY_CAP"
 
 
 def test_live_submit_uses_exchange_returned_fill_amounts(tmp_path: Path) -> None:

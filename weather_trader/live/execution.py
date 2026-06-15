@@ -122,10 +122,15 @@ class LiveExecutionConfig:
     require_allowance_check: bool = True
     retry_wait_seconds: float = 5.0
     enable_resting_fallback: bool = True
-    resting_fallback_ttl_seconds: float = 360.0
+    resting_fallback_ttl_seconds: float = 420.0
     resting_fallback_notional_fraction: float = 1.0
     resting_fallback_chunk_usd: float = 25.0
     resting_fallback_price_step: float = 0.01
+    initial_fak_slippage_cents: int = 1
+    retry_fak_slippage_cents: int = 1
+    resting_ladder_offsets_cents: tuple[int, ...] = (1, 0, -1, -2)
+    resting_ladder_weights: tuple[float, ...] = (0.30, 0.40, 0.20, 0.10)
+    resting_post_only_offsets_cents: tuple[int, ...] = (0, -1, -2)
 
 
 @dataclass(frozen=True)
@@ -176,7 +181,7 @@ class LiveSubmitter(Protocol):
     def place_fak_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
         ...
 
-    def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None) -> OrderSubmission:
+    def place_gtc_order(self, *, token_id: str, side: str, price: float, amount: float, tick_size: float | None = None, post_only: bool = False) -> OrderSubmission:
         ...
 
     def get_order(self, order_id: str) -> dict[str, Any]:
@@ -910,9 +915,34 @@ class LiveExecutionEngine:
             return "STALE_BOOK"
         return None
 
+
+    def _initial_execution_price(self, entry_price: float) -> float:
+        return _quantize_cent_price(float(entry_price) + (float(self.config.initial_fak_slippage_cents) / 100.0))
+
+    def _retry_execution_price(self, entry_price: float) -> float:
+        return _quantize_cent_price(float(entry_price) + (float(self.config.retry_fak_slippage_cents) / 100.0))
+
+    def _execution_contract(self, source: Any) -> dict[str, Any]:
+        scored_entry = _quantize_cent_price(float(source.entry_price))
+        return {
+            "version": 1,
+            "scored_entry_price": scored_entry,
+            "max_immediate_price": self._initial_execution_price(scored_entry),
+            "max_retry_price": self._retry_execution_price(scored_entry),
+            "resting_ladder_offsets_cents": list(self.config.resting_ladder_offsets_cents),
+            "resting_ladder_weights": list(self.config.resting_ladder_weights),
+            "resting_post_only_offsets_cents": list(self.config.resting_post_only_offsets_cents),
+            "resting_ttl_seconds": float(self.config.resting_fallback_ttl_seconds),
+            "model_fair_price": source.entry_fair,
+            "model_edge_at_entry": source.entry_edge,
+            "selected_book_timestamp": source.selected_book_timestamp,
+            "selected_book_age_seconds": source.selected_book_age_seconds,
+            "legacy_selected_sweep_price_cap": source.selected_sweep_price_cap,
+        }
+
     def _size_candidate(self, candidate: LiveCandidate, as_of_utc: datetime) -> LiveSizingDecision:
         source = candidate.position
-        entry_price = float(source.selected_sweep_price_cap or source.entry_price)
+        entry_price = self._initial_execution_price(source.entry_price)
         exposure = self.store.live_exposure_summary()
         depth_limited = self.sizing_model.size_candidate(
             strategy_name=candidate.plan.strategy.name,
@@ -921,7 +951,7 @@ class LiveExecutionEngine:
             market_date=source.market_date,
             selected_side=source.selected_side,
             selected_bucket=source.selected_bucket,
-            sweep_depth_to_cap=source.selected_sweep_depth_to_cap,
+            sweep_depth_to_cap=source.selected_depth_ask_plus_0_01,
             exposure=exposure,
             target_notional_usd=candidate.plan.target_notional_usd,
             as_of_utc=as_of_utc,
@@ -981,7 +1011,8 @@ class LiveExecutionEngine:
     ) -> LivePolicyPosition:
         source = candidate.position
         token_id = market.yes_token_id if source.selected_side == TradeAction.BUY_YES else market.no_token_id
-        limit_price = quantize_price(float(source.selected_sweep_price_cap or source.entry_price))
+        limit_price = self._initial_execution_price(source.entry_price)
+        execution_contract = self._execution_contract(source)
         target_notional = quantize_usdc(sizing.target_notional_usd)
         target_shares = quantize_shares(target_notional / limit_price) if limit_price > 0 else 0.0
         return LivePolicyPosition(
@@ -1047,7 +1078,7 @@ class LiveExecutionEngine:
         errors: list[str] | None = None,
     ) -> LivePositionState:
         errors = errors if errors is not None else []
-        limit_price = float(position.raw_json["limit_price"])
+        limit_price = self._initial_execution_price(float(position.entry_price))
         sizing_raw = position.raw_json.get("sizing") if isinstance(position.raw_json, dict) else None
         if isinstance(sizing_raw, dict) and sizing_raw.get("resting_ladder_on_insufficient_depth"):
             fallback_state = self._submit_resting_fallback(
@@ -1373,6 +1404,7 @@ class LiveExecutionEngine:
                 position=position,
                 limit_price=float(order["limit_price"]),
                 target_notional_usd=float(order["target_notional_usd"]),
+                post_only=bool(order.get("post_only", False)),
             )
             submitted.append((order, attempt))
 
@@ -1468,7 +1500,7 @@ class LiveExecutionEngine:
             any_live_state = any_live_state or final_attempt.state in {LivePositionState.SUBMITTED, LivePositionState.DELAYED, LivePositionState.UNKNOWN}
             final_states.append(final_attempt.state)
             raw_patch = dict(raw_base)
-            raw_patch["resting_fallback"] = {**raw_base["resting_fallback"], "child_index": index, "child_order": dict(order)}
+            raw_patch["resting_fallback"] = {**raw_base["resting_fallback"], "child_index": index, "child_order": dict(order), "post_only": bool(order.get("post_only", False))}
             raw_patch["resting_fallback"].update(
                 {
                     "order_status_after_ttl": final_attempt.response.status,
@@ -1532,41 +1564,52 @@ class LiveExecutionEngine:
         position: LivePolicyPosition,
         book: BookSnapshot,
         current_cost_usd: float,
-    ) -> tuple[list[dict[str, float]], str | None]:
-        limit_price, target_notional_usd, resting_reason = self._resting_order_parameters(position, book, current_cost_usd)
+    ) -> tuple[list[dict[str, float | bool]], str | None]:
+        target_notional_usd, resting_reason = self._resting_target_notional(position, current_cost_usd)
         if resting_reason is not None or target_notional_usd <= 0.0:
             return [], resting_reason
-        chunk_size = max(float(self.settings.live_min_order_notional), float(self.config.resting_fallback_chunk_usd))
-        price_step = max(0.0, float(self.config.resting_fallback_price_step))
-        min_order = float(self.settings.live_min_order_notional)
-        remaining = quantize_usdc(target_notional_usd)
-        chunks: list[float] = []
-        while remaining >= min_order:
-            chunk = quantize_usdc(min(chunk_size, remaining))
-            if chunk < min_order:
-                break
-            chunks.append(chunk)
-            remaining = quantize_usdc(max(0.0, remaining - chunk))
+        offsets = tuple(int(offset) for offset in self.config.resting_ladder_offsets_cents)
+        weights = tuple(float(weight) for weight in self.config.resting_ladder_weights)
+        if len(offsets) != len(weights) or not offsets:
+            return [], "INVALID_LADDER_CONFIG"
+        weight_sum = sum(max(0.0, weight) for weight in weights)
+        if weight_sum <= 0.0:
+            return [], "INVALID_LADDER_CONFIG"
 
-        orders: list[dict[str, float]] = []
-        for index, chunk in enumerate(chunks):
-            child_price = _quantize_cent_price(limit_price - (price_step * index))
+        min_order = float(self.settings.live_min_order_notional)
+        scored_entry = _quantize_cent_price(float(position.entry_price))
+        post_only_offsets = {int(offset) for offset in self.config.resting_post_only_offsets_cents}
+        orders: list[dict[str, float | bool]] = []
+        for offset, weight in zip(offsets, weights):
+            child_price = _quantize_cent_price(scored_entry + (offset / 100.0))
             if child_price <= 0.0:
                 continue
-            if book.best_bid is not None and child_price <= book.best_bid:
-                continue
-            if book.best_ask is not None and child_price >= book.best_ask:
+            child_notional = quantize_usdc(target_notional_usd * (max(0.0, weight) / weight_sum))
+            if child_notional < min_order:
                 continue
             orders.append(
                 {
-                    "child_index": float(index + 1),
+                    "child_index": float(len(orders) + 1),
                     "limit_price": child_price,
-                    "target_notional_usd": chunk,
+                    "target_notional_usd": child_notional,
+                    "ladder_offset_cents": float(offset),
+                    "post_only": bool(offset in post_only_offsets),
                 }
             )
         if not orders:
             return [], "NO_VALID_LADDER_ORDERS"
         return orders, None
+
+    def _resting_target_notional(
+        self,
+        position: LivePolicyPosition,
+        current_cost_usd: float,
+    ) -> tuple[float, str | None]:
+        remaining_notional = max(0.0, float(position.target_notional_usd) - max(0.0, current_cost_usd))
+        target_notional = quantize_usdc(remaining_notional * max(0.0, float(self.config.resting_fallback_notional_fraction)))
+        if target_notional < float(self.settings.live_min_order_notional):
+            return target_notional, "NO_REMAINING_NOTIONAL"
+        return target_notional, None
 
     def _place_gtc_attempt(
         self,
@@ -1574,6 +1617,7 @@ class LiveExecutionEngine:
         position: LivePolicyPosition,
         limit_price: float,
         target_notional_usd: float,
+        post_only: bool = False,
     ) -> LiveAttemptResult:
         limit_price = quantize_price(limit_price)
         target_notional_usd = quantize_usdc(target_notional_usd)
@@ -1587,12 +1631,28 @@ class LiveExecutionEngine:
             if not allowance.ok:
                 response = OrderSubmission(False, None, "rejected", f"allowance:{allowance.reason}", {"success": False, "errorMsg": f"allowance:{allowance.reason}", "allowance": allowance.raw})
                 return LiveAttemptResult(response, LivePositionState.REJECTED, limit_price, target_notional_usd, target_shares, 0.0, 0.0, None)
-        response = submitter.place_gtc_order(
-            token_id=position.selected_token_id,
-            side="BUY",
-            price=limit_price,
-            amount=target_notional_usd,
-        )
+        place_gtc = getattr(submitter, "place_gtc_order", None)
+        if not callable(place_gtc):
+            response = OrderSubmission(False, None, "blocked", "GTC_UNSUPPORTED", {"blocked": True, "reason": "GTC_UNSUPPORTED", "post_only": post_only})
+            return LiveAttemptResult(response, LivePositionState.REJECTED, limit_price, target_notional_usd, target_shares, 0.0, 0.0, None)
+        try:
+            response = place_gtc(
+                token_id=position.selected_token_id,
+                side="BUY",
+                price=limit_price,
+                amount=target_notional_usd,
+                post_only=post_only,
+            )
+        except TypeError:
+            if post_only:
+                response = OrderSubmission(False, None, "blocked", "POST_ONLY_UNSUPPORTED", {"blocked": True, "reason": "POST_ONLY_UNSUPPORTED", "post_only": True})
+                return LiveAttemptResult(response, LivePositionState.REJECTED, limit_price, target_notional_usd, target_shares, 0.0, 0.0, None)
+            response = place_gtc(
+                token_id=position.selected_token_id,
+                side="BUY",
+                price=limit_price,
+                amount=target_notional_usd,
+            )
         state = _state_from_response(response)
         filled_shares, cost_usd, avg_price = _buy_fill_from_response(response, state, position, limit_price, target_notional_usd, assume_filled=False)
         state = _state_from_fill_amount(state, cost_usd, target_notional_usd, filled_shares, target_shares)
@@ -1618,25 +1678,10 @@ class LiveExecutionEngine:
         best_ask = book.best_ask
         if best_bid is None or best_ask is None:
             return 0.0, 0.0, "MISSING_BOOK"
-        if best_ask - best_bid <= 0.01:
-            return 0.0, 0.0, "NO_SPREAD"
-        fair_cap = (float(position.entry_fair) - 0.15) if position.entry_fair is not None else float(position.entry_price)
-        entry_cap = float(position.raw_json.get("limit_price") or position.entry_price)
-        price_cap = _quantize_cent_price(min(best_ask - 0.01, fair_cap, entry_cap))
-        price_floor = _quantize_cent_price(best_bid + 0.01)
-        midpoint = _quantize_cent_price((best_bid + best_ask) / 2.0)
-        limit_price = _quantize_cent_price(min(price_cap, max(price_floor, midpoint)))
-        if limit_price <= 0.0:
-            return 0.0, 0.0, "NO_RESTING_PRICE"
-        if limit_price <= best_bid:
-            return limit_price, 0.0, "NO_BID_IMPROVEMENT"
-        if limit_price >= best_ask:
-            return limit_price, 0.0, "WOULD_CROSS_ASK"
-        remaining_notional = max(0.0, float(position.target_notional_usd) - max(0.0, current_cost_usd))
-        target_notional = quantize_usdc(remaining_notional * max(0.0, float(self.config.resting_fallback_notional_fraction)))
-        if target_notional < float(self.settings.live_min_order_notional):
-            return limit_price, target_notional, "NO_REMAINING_NOTIONAL"
-        return limit_price, target_notional, None
+        target_notional, reason = self._resting_target_notional(position, current_cost_usd)
+        if reason is not None:
+            return 0.0, target_notional, reason
+        return _quantize_cent_price(float(position.entry_price)), target_notional, None
 
     def _record_live_attempt(
         self,
@@ -1654,6 +1699,10 @@ class LiveExecutionEngine:
         order_mode: LiveOrderMode = LiveOrderMode.FAK,
     ) -> None:
         attempt_payload = dict(attempt.response.raw)
+        scored_entry_price = _quantize_cent_price(float(position.entry_price))
+        max_immediate_price = self._initial_execution_price(scored_entry_price)
+        slippage_vs_entry = (attempt.avg_price - scored_entry_price) if attempt.avg_price is not None else None
+        execution_price_violation = bool(attempt.avg_price is not None and attempt.avg_price > max_immediate_price + 1e-9)
         attempt_payload["execution"] = {
             "attempt_label": attempt_label,
             "update_position": update_position,
@@ -1663,6 +1712,12 @@ class LiveExecutionEngine:
             "filled_shares": attempt.filled_shares,
             "cost_usd": attempt.cost_usd,
             "avg_price": attempt.avg_price,
+            "execution_contract_version": 1,
+            "scored_entry_price": scored_entry_price,
+            "max_immediate_price": max_immediate_price,
+            "slippage_vs_entry": slippage_vs_entry,
+            "execution_price_violation": execution_price_violation,
+            "price_policy_reason": "entry_anchored",
         }
         if raw_patch:
             attempt_payload["execution"].update(raw_patch)
@@ -1778,12 +1833,11 @@ class LiveExecutionEngine:
         best_ask = book.best_ask
         if best_ask is None:
             return 0.0, 0.0, "MISSING_BOOK"
-        fair = position.entry_fair
-        entry_cap = float(position.raw_json.get("limit_price") or position.entry_price)
-        fair_cap = (fair - 0.15) if fair is not None else best_ask + 0.05
-        limit_price = quantize_price(min(best_ask + 0.05, fair_cap, entry_cap))
+        limit_price = self._retry_execution_price(float(position.entry_price))
         if limit_price <= 0.0:
             return 0.0, 0.0, "NO_RETRY_PRICE"
+        if best_ask > limit_price + 1e-9:
+            return limit_price, 0.0, "ASK_ABOVE_ENTRY_CAP"
         remaining_notional = max(0.0, float(position.target_notional_usd) - max(0.0, current_cost_usd))
         if remaining_notional <= 0.0:
             return limit_price, 0.0, "NO_REMAINING_NOTIONAL"
