@@ -4,6 +4,8 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-06-15
 
+- Implemented Layer 1 live calibration as an optional defensive gate: generated calibration JSON can now block known bad station/side/entry-band/model-family buckets or cap them to canary notional, with per-candidate metadata and cycle-debug counters. Added `--calibration-path` and `--calibration-canary-notional-usd` to live commands.
+- Extended `scripts/calibration_table.py` with `--out` JSON output and `--family all` while preserving the existing human-readable table output.
 - Hardened `docs/calibration-layer-1-design-2026-06-15.md` so Layer 1 calibration is explicitly a defensive gate, with copy-based live candidate handling, required raw metadata, unknown-bucket behavior, tests, and non-goals.
 - Updated `docs/roadmap-to-1000-ev-day.md` to make the whole-chain truth report the next scaling gate: raw replay, live-selected replay, actual fills, and Polymarket settlement must reconcile before calibration-driven sizing, sleeve promotion, or cap increases.
 - Upgraded live execution to anchor FAK, retry, and resting orders to the scored `entry_price`: initial/retry FAK are capped at `entry + $0.01`, the resting TTL is now 420 seconds, and the fallback ladder uses deterministic `entry+1c/entry/entry-1c/entry-2c` bands with `30/40/20/10` weights.

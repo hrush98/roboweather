@@ -24,12 +24,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sqlite3
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from itertools import groupby
+from pathlib import Path
 from typing import Any
 
 # ── Model family definitions ──────────────────────────────────────────────
@@ -466,9 +469,74 @@ def build_calibration(
             "avg_entry": round(avg_entry, 3),
             "decision": decision,
             "market_dates": len(data["dates"]),
+            "_market_dates": sorted(data["dates"]),
         }
 
     return results
+
+
+def build_json_payload(
+    *,
+    db_path: str,
+    family: str,
+    single_model: bool,
+    relaxed_consensus: bool,
+    per_station: bool,
+    trade_rr: float,
+    min_n_trade: int,
+    min_n_canary: int,
+    verbose: bool = False,
+) -> dict[str, Any]:
+    family_names = list(MODEL_FAMILIES) if family == "all" else [family]
+    generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    payload: dict[str, Any] = {
+        "version": 1,
+        "generated_at": generated_at,
+        "input_db_path": str(db_path),
+        "family_mode": family,
+        "single_model": bool(single_model),
+        "relaxed_consensus": bool(relaxed_consensus),
+        "per_station": bool(per_station),
+        "thresholds": {
+            "trade_rr": trade_rr,
+            "min_n_trade": min_n_trade,
+            "min_n_canary": min_n_canary,
+            "watch_rr_floor": -0.10,
+        },
+        "families": {},
+    }
+    families_payload: dict[str, Any] = payload["families"]
+    for family_name in family_names:
+        config = MODEL_FAMILIES[family_name]
+        results = build_calibration(
+            db_path=db_path,
+            family=family_name,
+            single_model=single_model,
+            relaxed_consensus=relaxed_consensus,
+            per_station=per_station,
+            trade_rr=trade_rr,
+            min_n_trade=min_n_trade,
+            min_n_canary=min_n_canary,
+            verbose=verbose,
+        )
+        nested: dict[str, dict[str, dict[str, Any]]] = {}
+        market_dates: set[str] = set()
+        row_count = 0
+        for (station, side, band), data in sorted(results.items()):
+            row_count += int(data["n"])
+            market_dates.update(str(item) for item in data.get("_market_dates", []))
+            public_data = {key: value for key, value in data.items() if not key.startswith("_")}
+            nested.setdefault(station, {}).setdefault(side, {})[band] = public_data
+        families_payload[family_name] = {
+            "label": config["label"],
+            "market_family": config["market_family"],
+            "models": list(config["models"]),
+            "primary_model": config["consensus_pair"][0],
+            "row_count": row_count,
+            "market_dates": len(market_dates),
+            "buckets": nested,
+        }
+    return payload
 
 
 # ── Display ───────────────────────────────────────────────────────────────
@@ -542,7 +610,7 @@ def main() -> None:
     parser.add_argument("--db", required=True, help="Path to research SQLite DB")
     parser.add_argument(
         "--family",
-        choices=list(MODEL_FAMILIES),
+        choices=[*MODEL_FAMILIES, "all"],
         default="obs",
         help="Model family to calibrate",
     )
@@ -590,9 +658,13 @@ def main() -> None:
         action="store_true",
         help="Print data-loading diagnostics to stderr",
     )
+    parser.add_argument(
+        "--out",
+        default=None,
+        help="Write calibration JSON to this path. Omitting this preserves table output.",
+    )
     args = parser.parse_args()
 
-    config = MODEL_FAMILIES[args.family]
     mode_parts = []
     if args.single_model:
         mode_parts.append("single-model")
@@ -604,21 +676,40 @@ def main() -> None:
         mode_parts.append("per-station")
     mode_label = ", ".join(mode_parts)
 
-    results = build_calibration(
-        db_path=args.db,
-        family=args.family,
-        single_model=args.single_model,
-        relaxed_consensus=args.relaxed,
-        per_station=args.per_station,
-        trade_rr=args.trade_rr,
-        min_n_trade=args.min_n_trade,
-        min_n_canary=args.min_n_canary,
-        verbose=args.verbose,
-    )
+    if args.out:
+        payload = build_json_payload(
+            db_path=args.db,
+            family=args.family,
+            single_model=args.single_model,
+            relaxed_consensus=args.relaxed,
+            per_station=args.per_station,
+            trade_rr=args.trade_rr,
+            min_n_trade=args.min_n_trade,
+            min_n_canary=args.min_n_canary,
+            verbose=args.verbose,
+        )
+        out_path = Path(args.out).expanduser()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return
 
-    print_calibration(
-        results, config["label"], mode_label, min_n_show=args.min_n_show
-    )
+    for family_name in (list(MODEL_FAMILIES) if args.family == "all" else [args.family]):
+        config = MODEL_FAMILIES[family_name]
+        results = build_calibration(
+            db_path=args.db,
+            family=family_name,
+            single_model=args.single_model,
+            relaxed_consensus=args.relaxed,
+            per_station=args.per_station,
+            trade_rr=args.trade_rr,
+            min_n_trade=args.min_n_trade,
+            min_n_canary=args.min_n_canary,
+            verbose=args.verbose,
+        )
+
+        print_calibration(
+            results, config["label"], mode_label, min_n_show=args.min_n_show
+        )
 
 
 if __name__ == "__main__":

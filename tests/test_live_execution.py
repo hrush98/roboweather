@@ -2096,3 +2096,185 @@ class ResponseFillSubmitter(FakeSubmitter):
             None,
             {"success": True, "status": "matched", "makingAmount": "2.4", "takingAmount": "8.0"},
         )
+
+
+def _write_calibration_file(tmp_path: Path, *, decision: str = "BLOCK", station: str = "KATL", side: str = "BUY_NO", band: str = "0.35-0.45") -> Path:
+    path = tmp_path / "calibration.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "generated_at": "2026-06-15T12:00:00Z",
+                "families": {
+                    "obs": {
+                        "label": "Obs",
+                        "market_dates": 2,
+                        "buckets": {
+                            station: {
+                                side: {
+                                    band: {
+                                        "decision": decision,
+                                        "n": 6,
+                                        "avg_rr": -0.2 if decision == "BLOCK" else 0.05,
+                                        "win_pct": 50.0,
+                                        "market_dates": 2,
+                                    }
+                                }
+                            }
+                        },
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _calibration_candidate(*, entry_price: float = 0.40, station: str = "KATL", strategy_name: str = LIVE_POLICY_NAME, target: float = 50.0):
+    from weather_trader.execution.contracts import ResearchPolicyPosition
+
+    strategy = default_live_strategy(target) if strategy_name == LIVE_POLICY_NAME else LiveStrategy(
+        name=strategy_name,
+        active=True,
+        source="model",
+        model_group="test",
+        model_names=["test"],
+        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        market_family=MarketFamily.HIGH_TEMP,
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+        entry_price_min=0.0,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+        max_notional_usd=target,
+    )
+    plan = live_execution.LiveStrategyPlan(
+        strategy,
+        (live_policy_spec(LiveExecutionConfig()),),
+        target,
+        None,
+        0.0,
+    )
+    source = ResearchPolicyPosition(
+        timestamp="2026-06-15T18:00:00+00:00",
+        policy_name=strategy_name,
+        station=station,
+        market_date=date(2026, 6, 15),
+        scope_key="station_date_bucket_side_obs_delay:72-73F:BUY_NO:15m",
+        model_group=LIVE_MODEL_GROUP,
+        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        obs_delay_bucket="15m",
+        selected_market_id="market-1",
+        selected_side=TradeAction.BUY_NO,
+        selected_bucket="72-73F",
+        entry_price=entry_price,
+        entry_edge=0.5,
+        entry_fair=0.9,
+        source_prediction_snapshot_ids=[1, 2],
+        raw_policy={},
+        selected_sweep_price_cap=entry_price,
+        selected_sweep_depth_to_cap=100.0,
+        selected_depth_ask_plus_0_01=100.0,
+        selected_book_age_seconds=1.0,
+    )
+    return live_execution.LiveCandidate(plan, source)
+
+
+def test_bad_calibration_json_fails_engine_startup(tmp_path: Path) -> None:
+    path = tmp_path / "bad-calibration.json"
+    path.write_text(json.dumps({"version": 1}), encoding="utf-8")
+    store = ExecutionStore(tmp_path / "live.sqlite")
+
+    with pytest.raises(ValueError):
+        LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=path))
+
+
+def test_no_calibration_path_leaves_candidate_unchanged(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=()))
+    candidate = _calibration_candidate(target=50.0)
+
+    decision = engine._apply_calibration(candidate)
+
+    assert decision.reject_reason is None
+    assert decision.candidate.plan.target_notional_usd == pytest.approx(50.0)
+    assert decision.metadata == {"enabled": False, "reason": "disabled", "decision": "DISABLED"}
+
+
+def test_calibration_block_records_rejected_position_and_attempt_metadata(tmp_path: Path) -> None:
+    path = _write_calibration_file(tmp_path, decision="BLOCK")
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=path))
+    candidate = _calibration_candidate()
+
+    decision = engine._apply_calibration(candidate)
+    sizing = engine._size_candidate(decision.candidate, datetime(2026, 6, 15, 18, 0, tzinfo=timezone.utc))
+    position = engine._live_position(
+        decision.candidate,
+        _candidate_market("market-1", 72, 73, "yes-token", "no-token"),
+        reject_reason=decision.reject_reason,
+        sizing=sizing,
+        calibration=decision.metadata,
+    )
+    position_id = store.insert_live_policy_position(position)
+    assert position_id is not None
+    engine._record_rejected(position_id, position, decision.reject_reason or "")
+
+    row = store.connection.execute("select raw_json from live_policy_positions where id = ?", (position_id,)).fetchone()
+    raw = json.loads(row["raw_json"])
+    assert raw["calibration"]["decision"] == "BLOCK"
+    assert raw["calibration"]["reason"] == "bucket_match"
+    attempt = store.connection.execute("select final_reason, raw_payload from live_order_attempts").fetchone()
+    assert attempt["final_reason"] == "CALIBRATION_BLOCK"
+    assert json.loads(attempt["raw_payload"])["raw_payload"]["calibration"]["decision"] == "BLOCK"
+
+
+def test_calibration_canary_caps_target_before_sizing(tmp_path: Path) -> None:
+    path = _write_calibration_file(tmp_path, decision="CANARY")
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(
+            live_db_path=store.path,
+            model_paths=(),
+            calibration_path=path,
+            calibration_canary_notional_usd=4.0,
+        ),
+    )
+    candidate = _calibration_candidate(target=50.0)
+
+    decision = engine._apply_calibration(candidate)
+    sizing = engine._size_candidate(decision.candidate, datetime(2026, 6, 15, 18, 0, tzinfo=timezone.utc))
+
+    assert decision.reject_reason is None
+    assert decision.candidate.plan.target_notional_usd == pytest.approx(4.0)
+    assert sizing.target_notional_usd == pytest.approx(4.0)
+    assert decision.metadata["calibration_target_notional_before"] == pytest.approx(50.0)
+    assert decision.metadata["calibration_target_notional_after"] == pytest.approx(4.0)
+
+
+def test_calibration_watch_trade_missing_and_unmapped_metadata(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    watch_engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=_write_calibration_file(tmp_path, decision="WATCH")),
+    )
+    watch = watch_engine._apply_calibration(_calibration_candidate())
+    assert watch.reject_reason is None
+    assert watch.metadata["decision"] == "WATCH"
+    assert watch.metadata["reason"] == "bucket_match"
+
+    trade_path = _write_calibration_file(tmp_path, decision="TRADE", station="KLAX")
+    trade_engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=trade_path))
+    trade = trade_engine._apply_calibration(_calibration_candidate(station="KLAX"))
+    assert trade.reject_reason is None
+    assert trade.metadata["decision"] == "TRADE"
+
+    missing = trade_engine._apply_calibration(_calibration_candidate(station="KSEA"))
+    assert missing.reject_reason is None
+    assert missing.metadata["reason"] == "bucket_missing"
+    assert missing.metadata["decision"] == "INSUFFICIENT_DATA"
+
+    unmapped = trade_engine._apply_calibration(_calibration_candidate(strategy_name="unmapped_strategy"))
+    assert unmapped.reject_reason is None
+    assert unmapped.metadata["reason"] == "family_unmapped"

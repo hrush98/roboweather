@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import json
 import math
 from datetime import datetime, timezone
 from pathlib import Path
@@ -100,6 +101,24 @@ PM_ACTIVE_US12_STATIONS = frozenset(
     }
 )
 GLOBAL_LOW_STATIONS = frozenset({"EGLC", "LFPB", "RJTT", "RKSI", "VHHH", "ZSPD"})
+CALIBRATION_FAMILY_MAP = {
+    LIVE_POLICY_NAME: "obs",
+    EDGE_CORE_POLICY_NAME: "obs",
+    MOONSHOT_POLICY_NAME: "obs",
+    GLOBAL_LOW_CANARY_POLICY_NAME: "global_low",
+    GLOBAL_LOW_MVP_BUY_NO_POLICY_NAME: "global_low",
+    GLOBAL_LOW_TINY_TAIL_POLICY_NAME: "global_low",
+}
+CALIBRATION_COUNTER_KEYS = (
+    "BLOCK",
+    "CANARY",
+    "WATCH",
+    "TRADE",
+    "INSUFFICIENT_DATA",
+    "bucket_missing",
+    "family_unmapped",
+    "disabled",
+)
 
 
 @dataclass(frozen=True)
@@ -131,6 +150,9 @@ class LiveExecutionConfig:
     resting_ladder_offsets_cents: tuple[int, ...] = (1, 0, -1, -2)
     resting_ladder_weights: tuple[float, ...] = (0.30, 0.40, 0.20, 0.10)
     resting_post_only_offsets_cents: tuple[int, ...] = (0, -1, -2)
+    calibration_path: Path | None = None
+    calibration_canary_notional_usd: float = 5.0
+    calibration_unknown_behavior: str = "allow"
 
 
 @dataclass(frozen=True)
@@ -169,6 +191,13 @@ class LiveAttemptResult:
 class LiveCandidate:
     plan: LiveStrategyPlan
     position: Any
+
+
+@dataclass(frozen=True)
+class CalibrationDecision:
+    candidate: LiveCandidate
+    reject_reason: str | None
+    metadata: dict[str, Any]
 
 
 class LiveSubmitter(Protocol):
@@ -601,6 +630,7 @@ class LiveExecutionEngine:
         self.sizing_model = LiveSizingModel(self.settings)
         self.submitter = submitter
         self._default_submitter_instance: LiveSubmitter | None = None
+        self.calibration = self._load_calibration(self.config.calibration_path)
 
     def run_once(self, as_of_utc: datetime | None = None) -> LiveCycleResult:
         now = as_of_utc or datetime.now(timezone.utc)
@@ -617,6 +647,9 @@ class LiveExecutionEngine:
             "global_low_notional_usd": self.config.global_low_notional_usd,
             "global_low_entry_price_max": self.config.global_low_entry_price_max,
             "models": [str(path) for path in self.config.model_paths],
+            "calibration_enabled": self.config.calibration_path is not None,
+            "calibration_path": str(self.config.calibration_path) if self.config.calibration_path else None,
+            "calibration": self._empty_calibration_counts(),
         }
         for plan in self.strategy_plans:
             self.store.upsert_live_strategy(plan.strategy)
@@ -661,10 +694,15 @@ class LiveExecutionEngine:
                 continue
             selected_book = book_by_market_side.get((candidate.position.selected_market_id, str(candidate.position.selected_side)))
             reject_reason = self._candidate_reject_reason(candidate, selected_book)
+            calibration_decision = self._apply_calibration(candidate)
+            self._increment_calibration_debug(debug, calibration_decision.metadata)
+            candidate = calibration_decision.candidate
+            if reject_reason is None and calibration_decision.reject_reason is not None:
+                reject_reason = calibration_decision.reject_reason
             sizing = self._size_candidate(candidate, now)
             if reject_reason is None and sizing.blocked_reason is not None:
                 reject_reason = sizing.blocked_reason
-            position = self._live_position(candidate, market, reject_reason=reject_reason, sizing=sizing)
+            position = self._live_position(candidate, market, reject_reason=reject_reason, sizing=sizing, calibration=calibration_decision.metadata)
             position_id = self.store.insert_live_policy_position(position)
             if position_id is None:
                 skipped += 1
@@ -915,6 +953,80 @@ class LiveExecutionEngine:
             return "STALE_BOOK"
         return None
 
+    def _load_calibration(self, path: Path | None) -> dict[str, Any]:
+        if path is None:
+            return {"version": 1, "families": {}}
+        with Path(path).expanduser().open("r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+        if not isinstance(payload, dict) or payload.get("version") != 1 or not isinstance(payload.get("families"), dict):
+            raise ValueError(f"Invalid calibration JSON: {path}")
+        return payload
+
+    def _empty_calibration_counts(self) -> dict[str, int]:
+        return {key: 0 for key in CALIBRATION_COUNTER_KEYS}
+
+    def _increment_calibration_debug(self, debug: dict[str, Any], metadata: dict[str, Any]) -> None:
+        counts = debug.setdefault("calibration", self._empty_calibration_counts())
+        reason = str(metadata.get("reason") or "")
+        decision = str(metadata.get("decision") or "")
+        key = reason if reason in {"disabled", "family_unmapped", "bucket_missing"} else decision
+        if key in counts:
+            counts[key] += 1
+
+    def _apply_calibration(self, candidate: LiveCandidate) -> CalibrationDecision:
+        metadata = self._calibration_metadata(candidate)
+        decision = metadata.get("decision")
+        if decision == "BLOCK":
+            return CalibrationDecision(candidate, "CALIBRATION_BLOCK", metadata)
+        if decision == "CANARY":
+            capped_notional = min(
+                float(candidate.plan.target_notional_usd),
+                float(self.config.calibration_canary_notional_usd),
+            )
+            metadata = dict(metadata)
+            metadata["calibration_target_notional_before"] = candidate.plan.target_notional_usd
+            metadata["calibration_target_notional_after"] = capped_notional
+            plan = replace(candidate.plan, target_notional_usd=capped_notional)
+            return CalibrationDecision(replace(candidate, plan=plan), None, metadata)
+        return CalibrationDecision(candidate, None, metadata)
+
+    def _calibration_metadata(self, candidate: LiveCandidate) -> dict[str, Any]:
+        if self.config.calibration_path is None:
+            return {"enabled": False, "reason": "disabled", "decision": "DISABLED"}
+        family = CALIBRATION_FAMILY_MAP.get(candidate.plan.strategy.name)
+        if family is None:
+            return {
+                "enabled": True,
+                "reason": "family_unmapped",
+                "decision": "UNMAPPED",
+                "strategy": candidate.plan.strategy.name,
+                "generated_at": self.calibration.get("generated_at"),
+            }
+        source = candidate.position
+        side = str(source.selected_side)
+        band = _calibration_entry_band(float(source.entry_price))
+        family_data = self.calibration.get("families", {}).get(family) or {}
+        bucket_data = (
+            family_data.get("buckets", {})
+            .get(str(source.station), {})
+            .get(side, {})
+            .get(band)
+        )
+        base = {
+            "enabled": True,
+            "family": family,
+            "station": str(source.station),
+            "side": side,
+            "entry_band": band,
+            "generated_at": self.calibration.get("generated_at"),
+        }
+        if not isinstance(bucket_data, dict):
+            base.update({"reason": "bucket_missing", "decision": "INSUFFICIENT_DATA"})
+            return base
+        base.update({key: value for key, value in bucket_data.items() if not str(key).startswith("_")})
+        base["reason"] = "bucket_match"
+        return base
+
 
     def _initial_execution_price(self, entry_price: float) -> float:
         return _quantize_cent_price(float(entry_price) + (float(self.config.initial_fak_slippage_cents) / 100.0))
@@ -1008,6 +1120,7 @@ class LiveExecutionEngine:
         *,
         reject_reason: str | None,
         sizing: LiveSizingDecision,
+        calibration: dict[str, Any] | None = None,
     ) -> LivePolicyPosition:
         source = candidate.position
         token_id = market.yes_token_id if source.selected_side == TradeAction.BUY_YES else market.no_token_id
@@ -1040,6 +1153,7 @@ class LiveExecutionEngine:
                 "limit_price": limit_price,
                 "reject_reason": reject_reason,
                 "sizing": sizing.raw_json,
+                "calibration": calibration or {"enabled": False, "reason": "disabled", "decision": "DISABLED"},
             },
         )
 
@@ -1063,7 +1177,7 @@ class LiveExecutionEngine:
                 0.0,
                 None,
                 0.0,
-                {"blocked": True, "reason": reason},
+                {"blocked": True, "reason": reason, "calibration": position.raw_json.get("calibration")},
             )
         )
 
@@ -1882,6 +1996,20 @@ class LiveExecutionEngine:
                 exposure,
             )
         )
+
+
+def _calibration_entry_band(entry_price: float) -> str:
+    if entry_price < 0.15:
+        return "<0.15"
+    if entry_price < 0.25:
+        return "0.15-0.25"
+    if entry_price < 0.35:
+        return "0.25-0.35"
+    if entry_price < 0.45:
+        return "0.35-0.45"
+    if entry_price < 0.55:
+        return "0.45-0.55"
+    return ">=0.55"
 
 
 def _initial_fak_notional_usd(position: LivePolicyPosition) -> float | None:

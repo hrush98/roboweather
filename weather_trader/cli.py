@@ -290,6 +290,8 @@ def main() -> None:
     live_cycle.add_argument("--model", dest="model_paths", action="append", default=[])
     live_cycle.add_argument("--skip-allowance-check", action="store_true")
     live_cycle.add_argument("--retry-wait-seconds", type=float, default=5.0)
+    live_cycle.add_argument("--calibration-path", default=None, help="Layer 1 calibration JSON path")
+    live_cycle.add_argument("--calibration-canary-notional-usd", type=float, default=5.0)
     live_cycle.add_argument("--debug-log", default=None, help="Append live-cycle debug JSONL to this path")
 
     live_loop = subparsers.add_parser("live-loop", help="Run repeated live execution cycles")
@@ -311,6 +313,8 @@ def main() -> None:
     live_loop.add_argument("--model", dest="model_paths", action="append", default=[])
     live_loop.add_argument("--skip-allowance-check", action="store_true")
     live_loop.add_argument("--retry-wait-seconds", type=float, default=5.0)
+    live_loop.add_argument("--calibration-path", default=None, help="Layer 1 calibration JSON path")
+    live_loop.add_argument("--calibration-canary-notional-usd", type=float, default=5.0)
     live_loop.add_argument("--debug-log", default=None, help="Append live-loop debug JSONL to this path")
 
     resolve_live = subparsers.add_parser("resolve-live", help="Resolve settled live positions from official Polymarket outcomes")
@@ -523,6 +527,8 @@ def main() -> None:
             model_paths=args.model_paths,
             require_allowance_check=not args.skip_allowance_check,
             retry_wait_seconds=args.retry_wait_seconds,
+            calibration_path=args.calibration_path,
+            calibration_canary_notional_usd=args.calibration_canary_notional_usd,
             debug_log_path=args.debug_log,
         )
         return
@@ -546,6 +552,8 @@ def main() -> None:
             model_paths=args.model_paths,
             require_allowance_check=not args.skip_allowance_check,
             retry_wait_seconds=args.retry_wait_seconds,
+            calibration_path=args.calibration_path,
+            calibration_canary_notional_usd=args.calibration_canary_notional_usd,
             debug_log_path=args.debug_log,
         )
         return
@@ -1593,6 +1601,8 @@ def live_cycle_command(
     model_paths: list[str] | None,
     require_allowance_check: bool,
     retry_wait_seconds: float,
+    calibration_path: str | None = None,
+    calibration_canary_notional_usd: float = 5.0,
     debug_log_path: str | None = None,
 ) -> None:
     if max_notional_usd is not None:
@@ -1617,6 +1627,8 @@ def live_cycle_command(
             global_low_entry_price_max=global_low_entry_price_max,
             require_allowance_check=require_allowance_check,
             retry_wait_seconds=retry_wait_seconds,
+            calibration_path=Path(calibration_path) if calibration_path else None,
+            calibration_canary_notional_usd=calibration_canary_notional_usd,
         )
         result = LiveExecutionEngine(store, config).run_once()
         _append_live_debug_log(debug_log_path, result.debug)
@@ -1632,6 +1644,8 @@ def live_cycle_command(
                     "global_low_notional_usd": global_low_notional_usd,
                     "global_low_mvp_buy_no_notional_usd": global_low_mvp_buy_no_notional_usd,
                     "global_low_max_entry_price": global_low_entry_price_max,
+                    "calibration_path": calibration_path,
+                    "calibration_canary_notional_usd": calibration_canary_notional_usd,
                     "candidates": result.candidates,
                     "reserved": result.reserved,
                     "submitted": result.submitted,
@@ -1670,6 +1684,8 @@ def live_loop_command(
     model_paths: list[str] | None,
     require_allowance_check: bool,
     retry_wait_seconds: float,
+    calibration_path: str | None = None,
+    calibration_canary_notional_usd: float = 5.0,
     debug_log_path: str | None = None,
 ) -> None:
     if max_notional_usd is not None:
@@ -1694,6 +1710,8 @@ def live_loop_command(
             global_low_entry_price_max=global_low_entry_price_max,
             require_allowance_check=require_allowance_check,
             retry_wait_seconds=retry_wait_seconds,
+            calibration_path=Path(calibration_path) if calibration_path else None,
+            calibration_canary_notional_usd=calibration_canary_notional_usd,
         )
         engine = LiveExecutionEngine(store, config)
         cycle = 0
@@ -1729,6 +1747,8 @@ def live_loop_command(
                             "global_low_notional_usd": global_low_notional_usd,
                             "global_low_mvp_buy_no_notional_usd": global_low_mvp_buy_no_notional_usd,
                             "global_low_max_entry_price": global_low_entry_price_max,
+                            "calibration_path": calibration_path,
+                            "calibration_canary_notional_usd": calibration_canary_notional_usd,
                             "candidates": 0,
                             "reserved": 0,
                             "submitted": 0,
@@ -1758,6 +1778,8 @@ def live_loop_command(
                             "global_low_notional_usd": global_low_notional_usd,
                             "global_low_mvp_buy_no_notional_usd": global_low_mvp_buy_no_notional_usd,
                             "global_low_max_entry_price": global_low_entry_price_max,
+                            "calibration_path": calibration_path,
+                            "calibration_canary_notional_usd": calibration_canary_notional_usd,
                             "candidates": result.candidates,
                             "reserved": result.reserved,
                             "submitted": result.submitted,
