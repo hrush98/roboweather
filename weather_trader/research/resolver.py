@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal
+import json
+import re
+import time as time_module
 from zoneinfo import ZoneInfo
+
+import requests
 
 from weather_trader.execution.contracts import (
     PredictionResult,
@@ -20,10 +26,17 @@ from weather_trader.stations.iem_asos_client import IEMASOSClient
 from weather_trader.stations.metadata import get_international_station, get_station, get_station_any
 
 
+GAMMA_URL = "https://gamma-api.polymarket.com"
+POLYMARKET_LOW_TEMP_STATIONS = frozenset({"RJTT", "RKSI", "VHHH", "ZSPD"})
+
+
 @dataclass(frozen=True)
 class ResolverConfig:
     resolve_after_local_hour: int = 6
     source: str = "IEM_ASOS"
+    polymarket_timeout_seconds: int = 30
+    polymarket_max_retries: int = 3
+    polymarket_retry_backoff_seconds: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -32,6 +45,15 @@ class ResolveSummary:
     groups_resolved: int
     results_written: int
     errors: list[str]
+
+
+@dataclass(frozen=True)
+class PolymarketLowTempResolution:
+    final_low_tmpf: float
+    event_slug: str
+    winning_market_id: str
+    winning_slug: str
+    resolution_source: str
 
 
 class ResearchResolver:
@@ -61,10 +83,11 @@ class ResearchResolver:
             if not self._is_due(station_id, market_date, now):
                 continue
             try:
-                outcome = self._resolve_station_date(station_id, market_date)
+                snapshots = self.store.prediction_snapshots_for_group(station_id, str(market_date))
+                market_families = _snapshot_market_families(snapshots)
+                outcome = self._resolve_station_date(station_id, market_date, market_families=market_families)
                 self.store.upsert_station_date_outcome(outcome)
                 resolved += 1
-                snapshots = self.store.prediction_snapshots_for_group(station_id, str(market_date))
                 for snapshot in snapshots:
                     self.store.upsert_prediction_result(score_snapshot(snapshot, outcome))
                     results_written += 1
@@ -87,9 +110,14 @@ class ResearchResolver:
         )
         return as_of_utc >= resolve_at_local.astimezone(timezone.utc)
 
-    def _resolve_station_date(self, station_id: str, market_date: date) -> StationDateOutcome:
+    def _resolve_station_date(
+        self,
+        station_id: str,
+        market_date: date,
+        market_families: set[MarketFamily] | None = None,
+    ) -> StationDateOutcome:
         if _is_international_station(station_id):
-            return self._resolve_global_station_date(station_id, market_date)
+            return self._resolve_global_station_date(station_id, market_date, market_families=market_families)
         station = get_station(station_id)
         observations = self.obs_client.fetch_observations(
             station=station.station,
@@ -113,7 +141,12 @@ class ResearchResolver:
             final_low_tmpf=final_low,
         )
 
-    def _resolve_global_station_date(self, station_id: str, market_date: date) -> StationDateOutcome:
+    def _resolve_global_station_date(
+        self,
+        station_id: str,
+        market_date: date,
+        market_families: set[MarketFamily] | None = None,
+    ) -> StationDateOutcome:
         station = get_international_station(station_id)
         resolved_at = utc_now_iso()
         if station.station == "VHHH":
@@ -122,7 +155,7 @@ class ResearchResolver:
             daily = high.merge(low, on="local_date", how="outer")
             row = daily.loc[daily["local_date"] == market_date]
             if not row.empty:
-                return StationDateOutcome(
+                outcome = StationDateOutcome(
                     timestamp=resolved_at,
                     station=station.station,
                     market_date=market_date,
@@ -131,8 +164,100 @@ class ResearchResolver:
                     source="HKO_CLMMAXT_CLMMINT_C",
                     resolved_at=resolved_at,
                 )
-            return self._resolve_global_metar_station_date(station_id, market_date, resolved_at)
-        return self._resolve_global_metar_station_date(station_id, market_date, resolved_at)
+                return self._with_polymarket_low_temp_if_needed(outcome, market_families)
+            outcome = self._resolve_global_metar_station_date(station_id, market_date, resolved_at)
+            return self._with_polymarket_low_temp_if_needed(outcome, market_families)
+        outcome = self._resolve_global_metar_station_date(station_id, market_date, resolved_at)
+        return self._with_polymarket_low_temp_if_needed(outcome, market_families)
+
+    def _with_polymarket_low_temp_if_needed(
+        self,
+        outcome: StationDateOutcome,
+        market_families: set[MarketFamily] | None,
+    ) -> StationDateOutcome:
+        if outcome.station not in POLYMARKET_LOW_TEMP_STATIONS:
+            return outcome
+        if market_families is None or MarketFamily.LOW_TEMP not in market_families:
+            return outcome
+        resolution = self._resolve_polymarket_low_temp(outcome.station, outcome.market_date)
+        return StationDateOutcome(
+            timestamp=outcome.timestamp,
+            station=outcome.station,
+            market_date=outcome.market_date,
+            final_high_tmpf=outcome.final_high_tmpf,
+            final_low_tmpf=resolution.final_low_tmpf,
+            source=f"POLYMARKET_GAMMA_LOW_TEMP:{outcome.source}",
+            resolved_at=outcome.resolved_at,
+        )
+
+    def _resolve_polymarket_low_temp(self, station_id: str, market_date: date) -> PolymarketLowTempResolution:
+        local_markets = self._local_low_temp_markets(station_id, market_date)
+        if not local_markets:
+            raise ValueError(f"No local LOW_TEMP markets for {station_id} on {market_date}")
+        event_slugs = {_event_slug_from_market_slug(str(row["slug"])) for row in local_markets}
+        if len(event_slugs) != 1:
+            raise ValueError(f"Expected one LOW_TEMP event for {station_id} on {market_date}, found {sorted(event_slugs)}")
+        event_slug = next(iter(event_slugs))
+        event = self._fetch_gamma_event_by_slug(event_slug)
+        gamma_markets = {str(item.get("id")): item for item in event.get("markets") or []}
+        winners: list[dict] = []
+        for row in local_markets:
+            gamma_market = gamma_markets.get(str(row["market_id"]))
+            if gamma_market is None:
+                raise ValueError(f"Polymarket event {event_slug} missing local market {row['market_id']}")
+            if not gamma_market.get("closed"):
+                raise ValueError(f"Polymarket event {event_slug} is not fully closed")
+            winning_yes = _gamma_yes_won(gamma_market.get("outcomePrices"))
+            if winning_yes is None:
+                raise ValueError(
+                    f"Polymarket market {row['market_id']} is closed without binary settlement prices: "
+                    f"{gamma_market.get('outcomePrices')}"
+                )
+            if winning_yes:
+                winners.append(row)
+        if len(winners) != 1:
+            raise ValueError(f"Expected one winning LOW_TEMP market in {event_slug}, found {len(winners)}")
+        winner = winners[0]
+        final_low = _representative_bucket_value(winner["lower_f"], winner["upper_f"])
+        return PolymarketLowTempResolution(
+            final_low_tmpf=final_low,
+            event_slug=event_slug,
+            winning_market_id=str(winner["market_id"]),
+            winning_slug=str(winner["slug"]),
+            resolution_source=str(event.get("resolutionSource") or ""),
+        )
+
+    def _local_low_temp_markets(self, station_id: str, market_date: date) -> list[dict]:
+        rows = self.store.connection.execute(
+            """
+            select market_id, slug, lower_f, upper_f
+            from markets
+            where station = ?
+              and market_date = ?
+              and market_family = ?
+            order by coalesce(lower_f, upper_f), coalesce(upper_f, lower_f), market_id
+            """,
+            (station_id, str(market_date), str(MarketFamily.LOW_TEMP)),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def _fetch_gamma_event_by_slug(self, slug: str) -> dict:
+        last_error: requests.RequestException | None = None
+        for attempt in range(1, self.config.polymarket_max_retries + 1):
+            try:
+                response = requests.get(
+                    f"{GAMMA_URL}/events/slug/{slug}",
+                    timeout=self.config.polymarket_timeout_seconds,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload if isinstance(payload, dict) else {}
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt >= self.config.polymarket_max_retries or not _retryable_request_error(exc):
+                    raise
+                time_module.sleep(self.config.polymarket_retry_backoff_seconds * attempt)
+        raise last_error or RuntimeError("gamma event request failed")
 
     def _resolve_global_metar_station_date(
         self,
@@ -229,6 +354,74 @@ def _float_or_none(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _snapshot_market_families(snapshots: list[dict]) -> set[MarketFamily]:
+    families: set[MarketFamily] = set()
+    for snapshot in snapshots:
+        try:
+            families.add(MarketFamily(str(snapshot.get("market_family") or MarketFamily.HIGH_TEMP)))
+        except ValueError:
+            continue
+    return families
+
+
+def _event_slug_from_market_slug(slug: str) -> str:
+    event_slug = re.sub(r"-(?:-?\d+(?:\.\d+)?corbelow|-?\d+(?:\.\d+)?corhigher|-?\d+(?:\.\d+)?c)$", "", slug)
+    if event_slug == slug:
+        raise ValueError(f"Could not derive LOW_TEMP event slug from market slug: {slug}")
+    return event_slug
+
+
+def _gamma_yes_won(outcome_prices: object) -> bool | None:
+    prices = _parse_gamma_list(outcome_prices)
+    if len(prices) < 2:
+        return None
+    try:
+        yes_price = Decimal(str(prices[0]))
+        no_price = Decimal(str(prices[1]))
+    except Exception:
+        return None
+    if yes_price == Decimal("1") and no_price == Decimal("0"):
+        return True
+    if yes_price == Decimal("0") and no_price == Decimal("1"):
+        return False
+    return None
+
+
+def _parse_gamma_list(value: object) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def _representative_bucket_value(lower: object, upper: object) -> float:
+    lower_float = _float_or_none(lower)
+    upper_float = _float_or_none(upper)
+    if lower_float is None and upper_float is not None:
+        return upper_float
+    if lower_float is not None and upper_float is None:
+        return lower_float
+    if lower_float is not None and upper_float is not None:
+        return lower_float
+    raise ValueError(f"Winning bucket has no numeric bounds: lower={lower!r}, upper={upper!r}")
+
+
+def _retryable_request_error(exc: requests.RequestException) -> bool:
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return True
+    response = getattr(exc, "response", None)
+    if response is None:
+        return False
+    return response.status_code == 429 or 500 <= response.status_code < 600
 
 
 def _is_international_station(station_id: str) -> bool:

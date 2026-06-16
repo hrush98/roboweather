@@ -22,6 +22,7 @@ from weather_trader.execution.grouping import GroupMarketContext, GroupSelection
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import CelsiusWeatherFeatureService, StationWeatherState
 from weather_trader.research import collector as collector_module
+from weather_trader.research import resolver as resolver_module
 from weather_trader.research.collector import ResearchCollector, ResearchConfig, build_prediction_snapshot, due_delay_buckets
 from weather_trader.research.resolver import ResearchResolver, score_snapshot
 
@@ -203,6 +204,63 @@ def test_global_resolver_falls_back_to_metar_when_hko_daily_missing(tmp_path) ->
     assert outcome.station == "VHHH"
     assert outcome.final_high_tmpf == 21.0
     assert outcome.final_low_tmpf == 21.0
+    assert outcome.source == "IEM_ASOS_METAR_C"
+
+
+def test_global_low_resolver_uses_polymarket_settlement_for_asian_stations(monkeypatch, tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+    for value in (20, 21, 22):
+        store.upsert_market(
+            _market(
+                market_date=date(2026, 5, 6),
+                market_family=MarketFamily.LOW_TEMP,
+                market_id=f"tokyo-{value}",
+                station="RJTT",
+                city="Tokyo",
+                lower_f=value,
+                upper_f=value,
+                slug=f"lowest-temperature-in-tokyo-on-may-6-2026-{value}c",
+            )
+        )
+
+    monkeypatch.setattr(
+        resolver_module.requests,
+        "get",
+        lambda url, timeout: _GammaResponse(
+            {
+                "slug": "lowest-temperature-in-tokyo-on-may-6-2026",
+                "resolutionSource": "https://www.wunderground.com/history/daily/jp/tokyo/RJTT",
+                "markets": [
+                    {"id": "tokyo-20", "closed": True, "outcomePrices": '["0", "1"]'},
+                    {"id": "tokyo-21", "closed": True, "outcomePrices": '["1", "0"]'},
+                    {"id": "tokyo-22", "closed": True, "outcomePrices": '["0", "1"]'},
+                ],
+            }
+        ),
+    )
+    resolver = ResearchResolver(store=store, obs_client=_InternationalObservationsClient())
+
+    outcome = resolver._resolve_station_date("RJTT", date(2026, 5, 6), market_families={MarketFamily.LOW_TEMP})
+
+    assert outcome.station == "RJTT"
+    assert outcome.final_high_tmpf == 21.0
+    assert outcome.final_low_tmpf == 21.0
+    assert outcome.source == "POLYMARKET_GAMMA_LOW_TEMP:IEM_ASOS_METAR_C"
+
+
+def test_global_high_resolver_does_not_require_polymarket_settlement(monkeypatch, tmp_path) -> None:
+    store = ExecutionStore(tmp_path / "research.sqlite")
+    monkeypatch.setattr(
+        resolver_module.requests,
+        "get",
+        lambda url, timeout: (_ for _ in ()).throw(AssertionError("unexpected Gamma request")),
+    )
+    resolver = ResearchResolver(store=store, obs_client=_InternationalObservationsClient())
+
+    outcome = resolver._resolve_station_date("RJTT", date(2026, 5, 6), market_families={MarketFamily.HIGH_TEMP})
+
+    assert outcome.final_high_tmpf == 21.0
+    assert outcome.final_low_tmpf == 20.0
     assert outcome.source == "IEM_ASOS_METAR_C"
 
 
@@ -423,6 +481,17 @@ class _EmptyBookClient:
         return {}
 
 
+class _GammaResponse:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self.payload
+
+
 class _StaticWeatherService:
     def get_state(self, station_id: str, as_of_utc: datetime) -> StationWeatherState:
         return _weather(as_of_utc.isoformat())
@@ -553,17 +622,26 @@ def _context(market_family: MarketFamily = MarketFamily.HIGH_TEMP) -> GroupMarke
     )
 
 
-def _market(market_date: date = date(2026, 5, 6), market_family: MarketFamily = MarketFamily.HIGH_TEMP) -> MarketSnapshot:
+def _market(
+    market_date: date = date(2026, 5, 6),
+    market_family: MarketFamily = MarketFamily.HIGH_TEMP,
+    market_id: str = "m1",
+    station: str = "KATL",
+    city: str = "Atlanta",
+    lower_f: float | None = 75,
+    upper_f: float | None = 76,
+    slug: str = "slug",
+) -> MarketSnapshot:
     return MarketSnapshot(
-        market_id="m1",
+        market_id=market_id,
         condition_id=None,
         question="Will Atlanta hit 75-76F?",
-        slug="slug",
-        city="Atlanta",
-        station="KATL",
+        slug=slug,
+        city=city,
+        station=station,
         market_date=market_date,
-        lower_f=75,
-        upper_f=76,
+        lower_f=lower_f,
+        upper_f=upper_f,
         yes_token_id="yes",
         no_token_id="no",
         end_date="2026-05-06",
