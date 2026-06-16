@@ -3,6 +3,7 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+*.csv
 
 # Runtime/cache files.
 data/cache/*.sqlite-shm
