@@ -34,6 +34,9 @@ MVP_HRRR_V2_MODEL = "mvp_hrrr_v2_obs_2022_2025"
 HIGH_REGRESSION_HRRR_V2_MODEL = "high_regression_hrrr_v2_obs_2022_2025"
 NGBOOST_HRRR_V2_MODEL = "ngboost_normal_hrrr_v2_obs_2022_2025"
 
+HRRR_RICH_DYNAMIC_TUNED_MODEL = "dynamic_bucket_tuned_hrrr_rich_pm_active_us12_obs_2022_2025"
+METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL = "dynamic_bucket_tuned_metar_hrrr_rich_pm_active_us12_obs_2022_2025"
+
 BROAD_STRATEGY_BUCKETS: tuple[StrategyBucket, ...] = (
     StrategyBucket.HIGH_CONVICTION,
     StrategyBucket.TAIL,
@@ -139,6 +142,8 @@ class ResearchPolicySpec:
     local_decision_start: str | None = None
     local_decision_end: str | None = None
     uniqueness_key_mode: str = "station_date"
+    hrrr_disagreement_min: float | None = None
+    obs_edge_max: float | None = None
 
 
 def _strategy_slug(strategy_bucket: StrategyBucket) -> str:
@@ -418,6 +423,9 @@ class ResearchPolicyEvaluator:
             if not _passes_policy_filters(policy, item):
                 continue
             rows.append(item)
+        if policy.hrrr_disagreement_min is not None:
+            obs_lookup = self._build_hrrr_obs_lookup(consensus)
+            rows = [item for item in rows if _passes_hrrr_disagreement(item, policy, obs_lookup)]
         return sorted(rows, key=lambda item: (str(item.get("timestamp")), int(item.get("id", 0))))
 
     def _first_by_scope(self, policy: ResearchPolicySpec, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -430,6 +438,25 @@ class ResearchPolicyEvaluator:
             seen.add(key)
             selected.append(item)
         return selected
+
+    def _build_hrrr_obs_lookup(self, consensus: list[dict[str, Any]]) -> dict[tuple[object, ...], dict[str, Any]]:
+        lookup: dict[tuple[object, ...], dict[str, Any]] = {}
+        for item in consensus:
+            raw_policy = item.get("raw_policy") or {}
+            if raw_policy.get("model_group") != "obs_bucket_consensus":
+                continue
+            key = (
+                item.get("market_family") or "HIGH_TEMP",
+                item.get("station"),
+                item.get("market_date"),
+                item.get("obs_delay_bucket"),
+                item.get("strategy_bucket"),
+                item.get("selected_side"),
+                item.get("selected_market_id"),
+                item.get("selected_bucket"),
+            )
+            lookup[key] = item
+        return lookup
 
     def _position_from_candidate(
         self,
@@ -542,6 +569,42 @@ def _passes_policy_filters(policy: ResearchPolicySpec, item: dict[str, Any]) -> 
             return False
 
     return True
+
+
+def _passes_hrrr_disagreement(
+    item: dict[str, Any],
+    policy: ResearchPolicySpec,
+    obs_lookup: dict[tuple[object, ...], dict[str, Any]],
+) -> bool:
+    entry = _entry_price(item)
+    fair = _float_or_none(item.get("selected_fair"))
+    if fair is None:
+        fair = _selected_fair(item)
+    if entry is None or fair is None:
+        return False
+    obs_key = (
+        item.get("market_family") or "HIGH_TEMP",
+        item.get("station"),
+        item.get("market_date"),
+        item.get("obs_delay_bucket"),
+        item.get("strategy_bucket"),
+        item.get("selected_side"),
+        item.get("selected_market_id"),
+        item.get("selected_bucket"),
+    )
+    obs = obs_lookup.get(obs_key)
+    if obs is None:
+        disagreement = float(fair) - float(entry)
+        return disagreement >= float(policy.hrrr_disagreement_min or 0.0)
+    obs_edge = _float_or_none(obs.get("selected_edge"))
+    if policy.obs_edge_max is not None and obs_edge is not None and obs_edge >= policy.obs_edge_max:
+        return False
+    obs_fair = _float_or_none(obs.get("selected_fair"))
+    if obs_fair is None:
+        obs_fair = _selected_fair(obs)
+    if obs_fair is None:
+        return True
+    return float(fair) - float(obs_fair) >= float(policy.hrrr_disagreement_min or 0.0)
 
 
 def _in_range(value: float | None, minimum: float | None, maximum: float | None) -> bool:

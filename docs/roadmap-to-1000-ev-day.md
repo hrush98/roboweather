@@ -93,7 +93,35 @@ weak NGBoost and 15m-overlay promotions. It is not sufficient by itself for live
 sizing until the whole-chain truth report also confirms live selection,
 execution, and settlement.
 
-### 3. Add Calibration And Regime Sizing
+### 3. Run Controlled Execution Experiments
+
+Replay can identify candidate edge, but it cannot prove that the edge can be
+captured in thin live order books. Shadow mode can confirm that the live scanner
+would have selected the same rows, but it does not answer the harder questions:
+whether those rows fill, whether filled rows are adversely selected, or whether
+small fills translate to useful capacity.
+
+Treat every scalable sleeve as a combined object:
+
+```text
+tradable sleeve = signal policy + execution policy + sizing policy
+```
+
+Execution promotion requirements:
+
+- test execution tactics separately, such as FAK-only at `entry + 1c`, passive resting, and split FAK-plus-resting paths;
+- use meaningful but capped live size, because `$5` fills do not prove `$100` tradability;
+- start in the cleanest domain first, currently US high-temperature consensus or tightly scoped inland late HRRR/METAR+HRRR candidates, not unresolved global-low semantics;
+- keep one pick per station/date and strict daily loss caps during tests;
+- compare filled candidates against missed candidates to detect adverse fill selection;
+- require actual fill prices to remain close to scored entry, not just below a broad sweep cap;
+- evaluate Polymarket-settled PnL, not only weather-outcome replay.
+
+This is the bridge between research edge and scale. A policy that wins in replay
+but loses when filled is not ready for size; the system should either improve
+the execution contract or keep the policy research-only.
+
+### 4. Add Calibration And Regime Sizing
 
 The current replay history shows repeated overconfidence by station, side, entry band, and model family. Scaling without calibration will mostly scale the worst mistakes.
 
@@ -118,7 +146,7 @@ overrides weather-outcome replay. Treat `BLOCK` buckets as no-trade,
 `CANARY` buckets as tiny size, and `WATCH` buckets as normal only when the
 whole-chain report is positive.
 
-### 4. Build HRRR/Regime Specialist Overlays
+### 5. Build HRRR/Regime Specialist Overlays
 
 HRRR should not be blanket-promoted. It should be a second-opinion overlay that trades only where HRRR adds orthogonal information to the observation-only core.
 

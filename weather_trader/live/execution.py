@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 import json
 import math
 from datetime import datetime, timezone
@@ -44,8 +44,8 @@ from weather_trader.stations.metadata import get_station
 from weather_trader.research.policies import (
     CATBOOST_MODEL,
     DYNAMIC_TUNED_MODEL,
-    GLOBAL_LOW_DYNAMIC_MODEL,
-    GLOBAL_LOW_MVP_MODEL,
+    HRRR_RICH_DYNAMIC_TUNED_MODEL,
+    METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL,
     NGBOOST_MODEL,
     ResearchPolicyEvaluator,
     ResearchPolicySpec,
@@ -55,12 +55,9 @@ from weather_trader.research.policies import (
 LIVE_POLICY_NAME = "pm_us12_bucket_consensus_hc_late_no_tiny_by_bucket_side_delay_first"
 EDGE_CORE_POLICY_NAME = "pm_us12_bucket_consensus_hc_15m_late_entry_00_50_by_bucket_side_delay_first"
 MOONSHOT_POLICY_NAME = "pm_us12_dynamic_tuned_hc_late_entry_05_10_buy_no_by_bucket_side_delay_first"
-NGBOOST_BEST_BUY_YES_POLICY_NAME = "pm_us12_ngboost_best_bucket_late_buy_yes_medium_by_bucket_side_delay_first"
-GLOBAL_LOW_CANARY_POLICY_NAME = "global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first"
-GLOBAL_LOW_TINY_TAIL_POLICY_NAME = "global_low_dynamic_mvp_tail_buy_no_entry_00_05_by_bucket_side_delay_first"
-GLOBAL_LOW_MVP_BUY_NO_POLICY_NAME = "global_low_mvp_high_conviction_buy_no_entry_05_50_by_bucket_side_delay_first"
+HRRR_INLAND_DISAGREEMENT_POLICY_NAME = "hrrr_dynamic_tuned_inland_late_disagreement_entry_00_50_by_bucket_side_delay_first"
+METAR_HRRR_INLAND_DISAGREEMENT_POLICY_NAME = "metar_hrrr_dynamic_tuned_inland_late_disagreement_entry_00_50_by_bucket_side_delay_first"
 LIVE_MODEL_GROUP = "obs_bucket_consensus"
-GLOBAL_LOW_MODEL_GROUP = "global_low_dynamic_mvp"
 DEFAULT_LIVE_ENTRY_PRICE_MAX = 0.50
 LIVE_ENTRY_PRICE_MAX = DEFAULT_LIVE_ENTRY_PRICE_MAX
 EDGE_CORE_OBS_DELAY_BUCKET = "15m"
@@ -68,21 +65,17 @@ CONSENSUS_NOTIONAL_USD = 100.0
 EDGE_CORE_NOTIONAL_USD = 50.0
 MOONSHOT_MIN_EDGE = 0.90
 MOONSHOT_NOTIONAL_USD = 2.0
+NGBOOST_BEST_BUY_YES_POLICY_NAME = "pm_us12_ngboost_best_bucket_late_buy_yes_medium_by_bucket_side_delay_first"
 NGBOOST_BEST_BUY_YES_NOTIONAL_USD = 10.0
-GLOBAL_LOW_NOTIONAL_USD = 100.0
-GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD = 5.0
-GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD = 50.0
-GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN = 0.05
-GLOBAL_LOW_ENTRY_PRICE_MAX = 0.75
-GLOBAL_LOW_TINY_TAIL_ENTRY_PRICE_MAX = 0.05
-GLOBAL_LOW_MVP_BUY_NO_ENTRY_PRICE_MAX = 0.50
-GLOBAL_LOW_LOCAL_DECISION_START = "00:30"
-GLOBAL_LOW_LOCAL_DECISION_END = "05:00"
+HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD = 25.0
+HRRR_INLAND_DISAGREEMENT_EDGE_MIN = 0.25
+HRRR_INLAND_DISAGREEMENT_MIN = 0.15
+HRRR_INLAND_OBS_EDGE_MAX = 0.10
 LIVE_MODEL_PATHS = (
     MODELS_DIR / f"{DYNAMIC_TUNED_MODEL}.joblib",
     MODELS_DIR / f"{CATBOOST_MODEL}.joblib",
-    MODELS_DIR / f"{GLOBAL_LOW_DYNAMIC_MODEL}.joblib",
-    MODELS_DIR / f"{GLOBAL_LOW_MVP_MODEL}.joblib",
+    MODELS_DIR / f"{HRRR_RICH_DYNAMIC_TUNED_MODEL}.joblib",
+    MODELS_DIR / f"{METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL}.joblib",
 )
 PM_ACTIVE_US12_STATIONS = frozenset(
     {
@@ -100,21 +93,31 @@ PM_ACTIVE_US12_STATIONS = frozenset(
         "KHOU",
     }
 )
-GLOBAL_LOW_STATIONS = frozenset({"EGLC", "LFPB", "RJTT", "RKSI", "VHHH", "ZSPD"})
+HRRR_INLAND_STATIONS = frozenset({"KATL", "KDAL", "KORD"})
 CALIBRATION_FAMILY_MAP = {
     LIVE_POLICY_NAME: "obs",
     EDGE_CORE_POLICY_NAME: "obs",
     MOONSHOT_POLICY_NAME: "obs",
-    GLOBAL_LOW_CANARY_POLICY_NAME: "global_low",
-    GLOBAL_LOW_MVP_BUY_NO_POLICY_NAME: "global_low",
-    GLOBAL_LOW_TINY_TAIL_POLICY_NAME: "global_low",
+    HRRR_INLAND_DISAGREEMENT_POLICY_NAME: "hrrr_rich",
+    METAR_HRRR_INLAND_DISAGREEMENT_POLICY_NAME: "metar_hrrr_rich",
 }
+CALIBRATION_HRRR_EXECUTION_EXPERIMENT_POLICIES = frozenset(
+    {
+        HRRR_INLAND_DISAGREEMENT_POLICY_NAME,
+        METAR_HRRR_INLAND_DISAGREEMENT_POLICY_NAME,
+    }
+)
+CALIBRATION_MODE_TRADE_BLOCKER = "trade_blocker"
+CALIBRATION_MODE_HRRR_EXECUTION_EXPERIMENT = "hrrr_execution_experiment"
 CALIBRATION_COUNTER_KEYS = (
     "BLOCK",
     "CANARY",
     "WATCH",
     "TRADE",
     "INSUFFICIENT_DATA",
+    "UNMAPPED",
+    "EXPERIMENT_ALLOW",
+    "TRADE_ALLOW",
     "bucket_missing",
     "family_unmapped",
     "disabled",
@@ -132,12 +135,8 @@ class LiveExecutionConfig:
     max_book_age_seconds: float = 10.0
     max_notional_usd: float = CONSENSUS_NOTIONAL_USD
     consensus_notional_usd: float = CONSENSUS_NOTIONAL_USD
-    edge_core_notional_usd: float = EDGE_CORE_NOTIONAL_USD
-    global_low_notional_usd: float = GLOBAL_LOW_NOTIONAL_USD
-    global_low_mvp_buy_no_notional_usd: float = GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD
     min_entry_price: float = 0.05
     max_entry_price: float | None = DEFAULT_LIVE_ENTRY_PRICE_MAX
-    global_low_entry_price_max: float = GLOBAL_LOW_ENTRY_PRICE_MAX
     require_allowance_check: bool = True
     retry_wait_seconds: float = 5.0
     enable_resting_fallback: bool = True
@@ -338,89 +337,61 @@ def ngboost_best_buy_yes_live_strategy() -> LiveStrategy:
     )
 
 
-def global_low_canary_live_strategy(max_notional_usd: float = GLOBAL_LOW_NOTIONAL_USD) -> LiveStrategy:
+def hrrr_inland_disagreement_live_strategy() -> LiveStrategy:
     return LiveStrategy(
-        name=GLOBAL_LOW_CANARY_POLICY_NAME,
-        active=True,
-        source="consensus",
-        model_group=GLOBAL_LOW_MODEL_GROUP,
-        model_names=[GLOBAL_LOW_DYNAMIC_MODEL, GLOBAL_LOW_MVP_MODEL],
-        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
-        market_family=MarketFamily.LOW_TEMP,
-        local_decision_start=GLOBAL_LOW_LOCAL_DECISION_START,
-        local_decision_end=GLOBAL_LOW_LOCAL_DECISION_END,
-        entry_price_min=GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
-        uniqueness_key_mode="station_date_bucket_side_obs_delay",
-        max_notional_usd=max_notional_usd,
-        raw_payload={
-            "report": {
-                "role": "live_canary",
-                "target_notional_usd": max_notional_usd,
-                "entry_price_min": GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
-                "entry_price_max": GLOBAL_LOW_ENTRY_PRICE_MAX,
-                "local_decision_start": GLOBAL_LOW_LOCAL_DECISION_START,
-                "local_decision_end": GLOBAL_LOW_LOCAL_DECISION_END,
-                "selected_side": str(TradeAction.BUY_NO),
-            }
-        },
-    )
-
-
-def global_low_tiny_tail_live_strategy(max_notional_usd: float = GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD) -> LiveStrategy:
-    return LiveStrategy(
-        name=GLOBAL_LOW_TINY_TAIL_POLICY_NAME,
-        active=True,
-        source="consensus",
-        model_group=GLOBAL_LOW_MODEL_GROUP,
-        model_names=[GLOBAL_LOW_DYNAMIC_MODEL, GLOBAL_LOW_MVP_MODEL],
-        strategy_bucket=StrategyBucket.TAIL,
-        market_family=MarketFamily.LOW_TEMP,
-        local_decision_start=GLOBAL_LOW_LOCAL_DECISION_START,
-        local_decision_end=GLOBAL_LOW_LOCAL_DECISION_END,
-        entry_price_min=0.0,
-        uniqueness_key_mode="station_date_bucket_side_obs_delay",
-        max_notional_usd=max_notional_usd,
-        raw_payload={
-            "report": {
-                "role": "live_tiny_tail",
-                "target_notional_usd": max_notional_usd,
-                "entry_price_max": GLOBAL_LOW_TINY_TAIL_ENTRY_PRICE_MAX,
-                "local_decision_start": GLOBAL_LOW_LOCAL_DECISION_START,
-                "local_decision_end": GLOBAL_LOW_LOCAL_DECISION_END,
-                "selected_side": str(TradeAction.BUY_NO),
-            }
-        },
-    )
-
-
-def global_low_mvp_buy_no_live_strategy(max_notional_usd: float = GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD) -> LiveStrategy:
-    return LiveStrategy(
-        name=GLOBAL_LOW_MVP_BUY_NO_POLICY_NAME,
+        name=HRRR_INLAND_DISAGREEMENT_POLICY_NAME,
         active=True,
         source="model",
-        model_group=GLOBAL_LOW_MVP_MODEL,
-        model_names=[GLOBAL_LOW_MVP_MODEL],
+        model_group=HRRR_RICH_DYNAMIC_TUNED_MODEL,
+        model_names=[HRRR_RICH_DYNAMIC_TUNED_MODEL],
         strategy_bucket=StrategyBucket.HIGH_CONVICTION,
-        market_family=MarketFamily.LOW_TEMP,
-        local_decision_start="00:00",
-        local_decision_end="23:59",
-        entry_price_min=GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
+        market_family=MarketFamily.HIGH_TEMP,
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+        entry_price_min=0.0,
         uniqueness_key_mode="station_date_bucket_side_obs_delay",
-        max_notional_usd=max_notional_usd,
+        max_notional_usd=HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD,
         raw_payload={
             "report": {
-                "role": "live_additive_canary",
-                "target_notional_usd": max_notional_usd,
-                "entry_price_min": GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
-                "entry_price_max": GLOBAL_LOW_MVP_BUY_NO_ENTRY_PRICE_MAX,
-                "selected_side": str(TradeAction.BUY_NO),
-                "live_style_replay": {
-                    "entries": 41,
-                    "risk_usd": 523.5,
-                    "pnl_usd": 1187.55,
-                    "roi": 2.268,
-                    "note": "Incremental after current live stack with same caps/depth/order replay.",
-                },
+                "role": "execution_experiment",
+                "target_notional_usd": HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD,
+                "entry_price_max": DEFAULT_LIVE_ENTRY_PRICE_MAX,
+                "edge_min": HRRR_INLAND_DISAGREEMENT_EDGE_MIN,
+                "hrrr_disagreement_min": HRRR_INLAND_DISAGREEMENT_MIN,
+                "obs_edge_max": HRRR_INLAND_OBS_EDGE_MAX,
+                "local_decision_start": "12:00",
+                "local_decision_end": "15:00",
+                "stations": sorted(HRRR_INLAND_STATIONS),
+            }
+        },
+    )
+
+
+def metar_hrrr_inland_disagreement_live_strategy() -> LiveStrategy:
+    return LiveStrategy(
+        name=METAR_HRRR_INLAND_DISAGREEMENT_POLICY_NAME,
+        active=True,
+        source="model",
+        model_group=METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL,
+        model_names=[METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL],
+        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        market_family=MarketFamily.HIGH_TEMP,
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+        entry_price_min=0.0,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+        max_notional_usd=HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD,
+        raw_payload={
+            "report": {
+                "role": "execution_experiment",
+                "target_notional_usd": HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD,
+                "entry_price_max": DEFAULT_LIVE_ENTRY_PRICE_MAX,
+                "edge_min": HRRR_INLAND_DISAGREEMENT_EDGE_MIN,
+                "hrrr_disagreement_min": HRRR_INLAND_DISAGREEMENT_MIN,
+                "obs_edge_max": HRRR_INLAND_OBS_EDGE_MAX,
+                "local_decision_start": "12:00",
+                "local_decision_end": "15:00",
+                "stations": sorted(HRRR_INLAND_STATIONS),
             }
         },
     )
@@ -503,49 +474,39 @@ def ngboost_best_buy_yes_policy_spec(config: LiveExecutionConfig) -> ResearchPol
     )
 
 
-def global_low_canary_policy_spec(config: LiveExecutionConfig) -> ResearchPolicySpec:
+def hrrr_inland_disagreement_policy_spec() -> ResearchPolicySpec:
     return ResearchPolicySpec(
-        GLOBAL_LOW_CANARY_POLICY_NAME,
-        "consensus",
-        StrategyBucket.HIGH_CONVICTION,
-        model_group=GLOBAL_LOW_MODEL_GROUP,
-        selected_side=TradeAction.BUY_NO,
-        station_allow_set=GLOBAL_LOW_STATIONS,
-        entry_price_min=GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
-        entry_price_max=config.global_low_entry_price_max,
-        local_decision_start=GLOBAL_LOW_LOCAL_DECISION_START,
-        local_decision_end=GLOBAL_LOW_LOCAL_DECISION_END,
-        uniqueness_key_mode="station_date_bucket_side_obs_delay",
-    )
-
-
-def global_low_tiny_tail_policy_spec() -> ResearchPolicySpec:
-    return ResearchPolicySpec(
-        GLOBAL_LOW_TINY_TAIL_POLICY_NAME,
-        "consensus",
-        StrategyBucket.TAIL,
-        model_group=GLOBAL_LOW_MODEL_GROUP,
-        selected_side=TradeAction.BUY_NO,
-        station_allow_set=GLOBAL_LOW_STATIONS,
-        entry_price_min=0.0,
-        entry_price_max=GLOBAL_LOW_TINY_TAIL_ENTRY_PRICE_MAX,
-        local_decision_start=GLOBAL_LOW_LOCAL_DECISION_START,
-        local_decision_end=GLOBAL_LOW_LOCAL_DECISION_END,
-        uniqueness_key_mode="station_date_bucket_side_obs_delay",
-    )
-
-
-def global_low_mvp_buy_no_policy_spec() -> ResearchPolicySpec:
-    return ResearchPolicySpec(
-        GLOBAL_LOW_MVP_BUY_NO_POLICY_NAME,
+        HRRR_INLAND_DISAGREEMENT_POLICY_NAME,
         "model",
         StrategyBucket.HIGH_CONVICTION,
-        model_name=GLOBAL_LOW_MVP_MODEL,
-        selected_side=TradeAction.BUY_NO,
-        station_allow_set=GLOBAL_LOW_STATIONS,
-        entry_price_min=GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
-        entry_price_max=GLOBAL_LOW_MVP_BUY_NO_ENTRY_PRICE_MAX,
+        model_name=HRRR_RICH_DYNAMIC_TUNED_MODEL,
+        station_allow_set=HRRR_INLAND_STATIONS,
+        entry_price_min=0.0,
+        entry_price_max=DEFAULT_LIVE_ENTRY_PRICE_MAX,
+        edge_min=HRRR_INLAND_DISAGREEMENT_EDGE_MIN,
+        local_decision_start="12:00",
+        local_decision_end="15:00",
         uniqueness_key_mode="station_date_bucket_side_obs_delay",
+        hrrr_disagreement_min=HRRR_INLAND_DISAGREEMENT_MIN,
+        obs_edge_max=HRRR_INLAND_OBS_EDGE_MAX,
+    )
+
+
+def metar_hrrr_inland_disagreement_policy_spec() -> ResearchPolicySpec:
+    return ResearchPolicySpec(
+        METAR_HRRR_INLAND_DISAGREEMENT_POLICY_NAME,
+        "model",
+        StrategyBucket.HIGH_CONVICTION,
+        model_name=METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL,
+        station_allow_set=HRRR_INLAND_STATIONS,
+        entry_price_min=0.0,
+        entry_price_max=DEFAULT_LIVE_ENTRY_PRICE_MAX,
+        edge_min=HRRR_INLAND_DISAGREEMENT_EDGE_MIN,
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+        hrrr_disagreement_min=HRRR_INLAND_DISAGREEMENT_MIN,
+        obs_edge_max=HRRR_INLAND_OBS_EDGE_MAX,
     )
 
 
@@ -565,25 +526,16 @@ def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, 
             config.min_entry_price,
         ),
         LiveStrategyPlan(
-            global_low_tiny_tail_live_strategy(),
-            (global_low_tiny_tail_policy_spec(),),
-            GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD,
-            TradeAction.BUY_NO,
-            0.0,
+            hrrr_inland_disagreement_live_strategy(),
+            (hrrr_inland_disagreement_policy_spec(),),
+            HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD,
+            min_entry_price=0.0,
         ),
         LiveStrategyPlan(
-            global_low_canary_live_strategy(config.global_low_notional_usd),
-            (global_low_canary_policy_spec(config),),
-            config.global_low_notional_usd,
-            TradeAction.BUY_NO,
-            GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
-        ),
-        LiveStrategyPlan(
-            global_low_mvp_buy_no_live_strategy(config.global_low_mvp_buy_no_notional_usd),
-            (global_low_mvp_buy_no_policy_spec(),),
-            config.global_low_mvp_buy_no_notional_usd,
-            TradeAction.BUY_NO,
-            GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
+            metar_hrrr_inland_disagreement_live_strategy(),
+            (metar_hrrr_inland_disagreement_policy_spec(),),
+            HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD,
+            min_entry_price=0.0,
         ),
     )
 
@@ -644,8 +596,6 @@ class LiveExecutionEngine:
             "max_book_age_seconds": self.config.max_book_age_seconds,
             "min_entry_price": self.config.min_entry_price,
             "max_entry_price": self.config.max_entry_price,
-            "global_low_notional_usd": self.config.global_low_notional_usd,
-            "global_low_entry_price_max": self.config.global_low_entry_price_max,
             "models": [str(path) for path in self.config.model_paths],
             "calibration_enabled": self.config.calibration_path is not None,
             "calibration_path": str(self.config.calibration_path) if self.config.calibration_path else None,
@@ -969,26 +919,40 @@ class LiveExecutionEngine:
         counts = debug.setdefault("calibration", self._empty_calibration_counts())
         reason = str(metadata.get("reason") or "")
         decision = str(metadata.get("decision") or "")
-        key = reason if reason in {"disabled", "family_unmapped", "bucket_missing"} else decision
-        if key in counts:
-            counts[key] += 1
+        effect = str(metadata.get("calibration_effect") or "")
+        seen: set[str] = set()
+        for key in (reason if reason in {"disabled", "family_unmapped", "bucket_missing"} else None, decision, effect):
+            if key in counts and key not in seen:
+                counts[key] += 1
+                seen.add(key)
 
     def _apply_calibration(self, candidate: LiveCandidate) -> CalibrationDecision:
         metadata = self._calibration_metadata(candidate)
         decision = metadata.get("decision")
-        if decision == "BLOCK":
-            return CalibrationDecision(candidate, "CALIBRATION_BLOCK", metadata)
-        if decision == "CANARY":
-            capped_notional = min(
-                float(candidate.plan.target_notional_usd),
-                float(self.config.calibration_canary_notional_usd),
-            )
-            metadata = dict(metadata)
-            metadata["calibration_target_notional_before"] = candidate.plan.target_notional_usd
-            metadata["calibration_target_notional_after"] = capped_notional
-            plan = replace(candidate.plan, target_notional_usd=capped_notional)
-            return CalibrationDecision(replace(candidate, plan=plan), None, metadata)
-        return CalibrationDecision(candidate, None, metadata)
+        if metadata.get("enabled") is False:
+            return CalibrationDecision(candidate, None, metadata)
+
+        mode = self._calibration_mode(candidate)
+        metadata = dict(metadata)
+        metadata["calibration_mode"] = mode
+        if mode == CALIBRATION_MODE_HRRR_EXECUTION_EXPERIMENT:
+            if decision == "BLOCK":
+                metadata["calibration_effect"] = "BLOCK"
+                return CalibrationDecision(candidate, "CALIBRATION_BLOCK", metadata)
+            metadata["calibration_effect"] = "EXPERIMENT_ALLOW"
+            return CalibrationDecision(candidate, None, metadata)
+
+        if decision == "TRADE":
+            metadata["calibration_effect"] = "TRADE_ALLOW"
+            return CalibrationDecision(candidate, None, metadata)
+
+        metadata["calibration_effect"] = "BLOCK"
+        return CalibrationDecision(candidate, "CALIBRATION_BLOCK", metadata)
+
+    def _calibration_mode(self, candidate: LiveCandidate) -> str:
+        if candidate.plan.strategy.name in CALIBRATION_HRRR_EXECUTION_EXPERIMENT_POLICIES:
+            return CALIBRATION_MODE_HRRR_EXECUTION_EXPERIMENT
+        return CALIBRATION_MODE_TRADE_BLOCKER
 
     def _calibration_metadata(self, candidate: LiveCandidate) -> dict[str, Any]:
         if self.config.calibration_path is None:

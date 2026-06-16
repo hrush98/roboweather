@@ -31,20 +31,6 @@ from weather_trader.live.execution import (
     EDGE_CORE_OBS_DELAY_BUCKET,
     EDGE_CORE_NOTIONAL_USD,
     EDGE_CORE_POLICY_NAME,
-    GLOBAL_LOW_CANARY_POLICY_NAME,
-    GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
-    GLOBAL_LOW_ENTRY_PRICE_MAX,
-    GLOBAL_LOW_LOCAL_DECISION_END,
-    GLOBAL_LOW_LOCAL_DECISION_START,
-    GLOBAL_LOW_MODEL_GROUP,
-    GLOBAL_LOW_MVP_BUY_NO_ENTRY_PRICE_MAX,
-    GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD,
-    GLOBAL_LOW_MVP_BUY_NO_POLICY_NAME,
-    GLOBAL_LOW_NOTIONAL_USD,
-    GLOBAL_LOW_TINY_TAIL_ENTRY_PRICE_MAX,
-    GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD,
-    GLOBAL_LOW_TINY_TAIL_POLICY_NAME,
-    GLOBAL_LOW_STATIONS,
     LIVE_MODEL_GROUP,
     DEFAULT_LIVE_ENTRY_PRICE_MAX,
     LIVE_POLICY_NAME,
@@ -55,16 +41,15 @@ from weather_trader.live.execution import (
     LiveWeatherFeatureService,
     edge_core_policy_spec,
     default_live_strategy,
-    global_low_canary_policy_spec,
-    global_low_mvp_buy_no_policy_spec,
-    global_low_tiny_tail_policy_spec,
+    hrrr_inland_disagreement_policy_spec,
+    metar_hrrr_inland_disagreement_policy_spec,
     live_policy_spec,
     live_strategy_plans,
     moonshot_edge_policy_spec,
     moonshot_policy_spec,
     ngboost_best_buy_yes_policy_spec,
 )
-from weather_trader.research.policies import GLOBAL_LOW_DYNAMIC_MODEL, GLOBAL_LOW_MVP_MODEL, NGBOOST_MODEL, ResearchPolicyEvaluator
+from weather_trader.research.policies import NGBOOST_MODEL, ResearchPolicyEvaluator
 
 
 def test_live_strategy_is_registered_in_separate_store(tmp_path: Path) -> None:
@@ -154,15 +139,14 @@ def test_live_execution_config_defaults_to_fifty_cent_entry_cap() -> None:
     assert LiveExecutionConfig().resting_fallback_ttl_seconds == pytest.approx(420.0)
 
 
-def test_live_strategy_plans_include_moonshot_and_global_low_canary_tail() -> None:
+def test_live_strategy_plans_include_moonshot_and_hrrr_disagreement() -> None:
     plans = live_strategy_plans(LiveExecutionConfig(max_entry_price=0.40))
 
     assert [plan.strategy.name for plan in plans] == [
         LIVE_POLICY_NAME,
         MOONSHOT_POLICY_NAME,
-        GLOBAL_LOW_TINY_TAIL_POLICY_NAME,
-        GLOBAL_LOW_CANARY_POLICY_NAME,
-        GLOBAL_LOW_MVP_BUY_NO_POLICY_NAME,
+        live_execution.HRRR_INLAND_DISAGREEMENT_POLICY_NAME,
+        live_execution.METAR_HRRR_INLAND_DISAGREEMENT_POLICY_NAME,
     ]
     consensus = plans[0]
     assert consensus.target_notional_usd == pytest.approx(CONSENSUS_NOTIONAL_USD)
@@ -184,59 +168,38 @@ def test_live_strategy_plans_include_moonshot_and_global_low_canary_tail() -> No
     assert moonshot.selected_side == TradeAction.BUY_NO
     assert moonshot.min_entry_price == pytest.approx(0.05)
 
-    tiny_tail = plans[2]
-    assert tiny_tail.target_notional_usd == pytest.approx(GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD)
-    assert tiny_tail.strategy.max_notional_usd == pytest.approx(GLOBAL_LOW_TINY_TAIL_NOTIONAL_USD)
-    assert tiny_tail.strategy.market_family == MarketFamily.LOW_TEMP
-    assert tiny_tail.strategy.strategy_bucket == StrategyBucket.TAIL
-    assert tiny_tail.strategy.model_group == GLOBAL_LOW_MODEL_GROUP
-    assert len(tiny_tail.policies) == 1
-    assert tiny_tail.policies[0].model_group == GLOBAL_LOW_MODEL_GROUP
-    assert tiny_tail.policies[0].strategy_bucket == StrategyBucket.TAIL
-    assert tiny_tail.policies[0].selected_side == TradeAction.BUY_NO
-    assert tiny_tail.policies[0].station_allow_set == GLOBAL_LOW_STATIONS
-    assert tiny_tail.policies[0].entry_price_min == pytest.approx(0.0)
-    assert tiny_tail.policies[0].entry_price_max == pytest.approx(GLOBAL_LOW_TINY_TAIL_ENTRY_PRICE_MAX)
-    assert tiny_tail.policies[0].local_decision_start == GLOBAL_LOW_LOCAL_DECISION_START
-    assert tiny_tail.policies[0].local_decision_end == GLOBAL_LOW_LOCAL_DECISION_END
-    assert tiny_tail.selected_side == TradeAction.BUY_NO
-    assert tiny_tail.min_entry_price == pytest.approx(0.0)
+    hrrr = plans[2]
+    assert hrrr.target_notional_usd == pytest.approx(live_execution.HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD)
+    assert hrrr.strategy.max_notional_usd == pytest.approx(live_execution.HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD)
+    assert hrrr.strategy.market_family == MarketFamily.HIGH_TEMP
+    assert hrrr.strategy.source == "model"
+    assert hrrr.strategy.local_decision_start == "12:00"
+    assert hrrr.strategy.local_decision_end == "15:00"
+    assert len(hrrr.policies) == 1
+    assert hrrr.policies[0].model_name == live_execution.HRRR_RICH_DYNAMIC_TUNED_MODEL
+    assert hrrr.policies[0].station_allow_set == live_execution.HRRR_INLAND_STATIONS
+    assert hrrr.policies[0].entry_price_min == pytest.approx(0.0)
+    assert hrrr.policies[0].entry_price_max == pytest.approx(live_execution.DEFAULT_LIVE_ENTRY_PRICE_MAX)
+    assert hrrr.policies[0].edge_min == pytest.approx(live_execution.HRRR_INLAND_DISAGREEMENT_EDGE_MIN)
+    assert hrrr.policies[0].hrrr_disagreement_min == pytest.approx(live_execution.HRRR_INLAND_DISAGREEMENT_MIN)
+    assert hrrr.policies[0].obs_edge_max == pytest.approx(live_execution.HRRR_INLAND_OBS_EDGE_MAX)
+    assert hrrr.min_entry_price == pytest.approx(0.0)
 
-    global_low = plans[3]
-    assert global_low.target_notional_usd == pytest.approx(GLOBAL_LOW_NOTIONAL_USD)
-    assert global_low.strategy.max_notional_usd == pytest.approx(GLOBAL_LOW_NOTIONAL_USD)
-    assert global_low.strategy.market_family == MarketFamily.LOW_TEMP
-    assert global_low.strategy.model_group == GLOBAL_LOW_MODEL_GROUP
-    assert len(global_low.policies) == 1
-    assert global_low.policies[0].model_group == GLOBAL_LOW_MODEL_GROUP
-    assert global_low.policies[0].selected_side == TradeAction.BUY_NO
-    assert global_low.policies[0].station_allow_set == GLOBAL_LOW_STATIONS
-    assert global_low.policies[0].entry_price_min == pytest.approx(GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN)
-    assert global_low.policies[0].entry_price_max == pytest.approx(GLOBAL_LOW_ENTRY_PRICE_MAX)
-    assert global_low.strategy.local_decision_start == GLOBAL_LOW_LOCAL_DECISION_START
-    assert global_low.strategy.local_decision_end == GLOBAL_LOW_LOCAL_DECISION_END
-    assert global_low.policies[0].local_decision_start == GLOBAL_LOW_LOCAL_DECISION_START
-    assert global_low.policies[0].local_decision_end == GLOBAL_LOW_LOCAL_DECISION_END
-    assert global_low.selected_side == TradeAction.BUY_NO
-    assert global_low.min_entry_price == pytest.approx(GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN)
+    metar = plans[3]
+    assert metar.target_notional_usd == pytest.approx(live_execution.HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD)
+    assert metar.strategy.max_notional_usd == pytest.approx(live_execution.HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD)
+    assert metar.strategy.market_family == MarketFamily.HIGH_TEMP
+    assert metar.strategy.source == "model"
+    assert metar.strategy.local_decision_start == "12:00"
+    assert metar.strategy.local_decision_end == "15:00"
+    assert len(metar.policies) == 1
+    assert metar.policies[0].model_name == live_execution.METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL
+    assert metar.policies[0].station_allow_set == live_execution.HRRR_INLAND_STATIONS
+    assert metar.policies[0].hrrr_disagreement_min == pytest.approx(live_execution.HRRR_INLAND_DISAGREEMENT_MIN)
+    assert metar.min_entry_price == pytest.approx(0.0)
 
 
-    global_low_mvp = plans[4]
-    assert global_low_mvp.target_notional_usd == pytest.approx(GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD)
-    assert global_low_mvp.strategy.max_notional_usd == pytest.approx(GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD)
-    assert global_low_mvp.strategy.market_family == MarketFamily.LOW_TEMP
-    assert global_low_mvp.strategy.source == "model"
-    assert global_low_mvp.strategy.model_group == GLOBAL_LOW_MVP_MODEL
-    assert global_low_mvp.strategy.model_names == [GLOBAL_LOW_MVP_MODEL]
-    assert len(global_low_mvp.policies) == 1
-    assert global_low_mvp.policies[0].model_name == GLOBAL_LOW_MVP_MODEL
-    assert global_low_mvp.policies[0].model_group is None
-    assert global_low_mvp.policies[0].selected_side == TradeAction.BUY_NO
-    assert global_low_mvp.policies[0].station_allow_set == GLOBAL_LOW_STATIONS
-    assert global_low_mvp.policies[0].entry_price_min == pytest.approx(GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN)
-    assert global_low_mvp.policies[0].entry_price_max == pytest.approx(GLOBAL_LOW_MVP_BUY_NO_ENTRY_PRICE_MAX)
-    assert global_low_mvp.selected_side == TradeAction.BUY_NO
-    assert global_low_mvp.min_entry_price == pytest.approx(GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN)
+
 
 
 def test_consensus_requires_same_side_market_bucket_and_delay(tmp_path: Path) -> None:
@@ -331,531 +294,206 @@ def test_moonshot_edge_policy_spec_filters_late_high_edge_entries(tmp_path: Path
     assert [item["selected_bucket"] for item in selected] == ["76-77F", "78-79F"]
 
 
-def test_global_low_canary_policy_spec_filters_buy_no_cap_window_and_bucket_side_delay(tmp_path: Path) -> None:
-    store = ExecutionStore(tmp_path / "live.sqlite")
-    spec = global_low_canary_policy_spec(LiveExecutionConfig(global_low_entry_price_max=0.75))
-    evaluator = ResearchPolicyEvaluator(store, (spec,))
-    consensus = evaluator._build_consensus(
-        [
-            _snapshot(
-                GLOBAL_LOW_DYNAMIC_MODEL,
-                id=1,
-                station="EGLC",
-                market_family="LOW_TEMP",
-                selected_no_ask=0.75,
-                selected_bucket="10-11C",
-                decision_time_local="2026-06-05T00:30:00+01:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_MVP_MODEL,
-                id=2,
-                station="EGLC",
-                market_family="LOW_TEMP",
-                selected_no_ask=0.75,
-                selected_bucket="10-11C",
-                decision_time_local="2026-06-05T00:30:00+01:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_DYNAMIC_MODEL,
-                id=3,
-                station="EGLC",
-                market_family="LOW_TEMP",
-                selected_side="BUY_YES",
-                selected_yes_ask=0.25,
-                selected_bucket="12-13C",
-                decision_time_local="2026-06-05T01:30:00+01:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_MVP_MODEL,
-                id=4,
-                station="EGLC",
-                market_family="LOW_TEMP",
-                selected_side="BUY_YES",
-                selected_yes_ask=0.25,
-                selected_bucket="12-13C",
-                decision_time_local="2026-06-05T01:30:00+01:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_DYNAMIC_MODEL,
-                id=5,
-                station="EGLC",
-                market_family="LOW_TEMP",
-                selected_no_ask=0.76,
-                selected_bucket="14-15C",
-                decision_time_local="2026-06-05T01:30:00+01:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_MVP_MODEL,
-                id=6,
-                station="EGLC",
-                market_family="LOW_TEMP",
-                selected_no_ask=0.76,
-                selected_bucket="14-15C",
-                decision_time_local="2026-06-05T01:30:00+01:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_DYNAMIC_MODEL,
-                id=9,
-                station="EGLC",
-                market_family="LOW_TEMP",
-                selected_no_ask=0.40,
-                selected_bucket="18-19C",
-                decision_time_local="2026-06-05T00:29:00+01:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_MVP_MODEL,
-                id=10,
-                station="EGLC",
-                market_family="LOW_TEMP",
-                selected_no_ask=0.40,
-                selected_bucket="18-19C",
-                decision_time_local="2026-06-05T00:29:00+01:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_DYNAMIC_MODEL,
-                id=11,
-                station="EGLC",
-                market_family="LOW_TEMP",
-                selected_no_ask=0.40,
-                selected_bucket="20-21C",
-                decision_time_local="2026-06-05T05:00:00+01:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_MVP_MODEL,
-                id=12,
-                station="EGLC",
-                market_family="LOW_TEMP",
-                selected_no_ask=0.40,
-                selected_bucket="20-21C",
-                decision_time_local="2026-06-05T05:00:00+01:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_DYNAMIC_MODEL,
-                id=7,
-                station="WSSS",
-                market_family="LOW_TEMP",
-                selected_no_ask=0.50,
-                selected_bucket="16-17C",
-                decision_time_local="2026-06-05T01:30:00+08:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_MVP_MODEL,
-                id=8,
-                station="WSSS",
-                market_family="LOW_TEMP",
-                selected_no_ask=0.50,
-                selected_bucket="16-17C",
-                decision_time_local="2026-06-05T01:30:00+08:00",
-            ),
-        ]
-    )
 
-    filtered = evaluator._candidates_for_policy(spec, [], consensus)
+def test_hrrr_inland_disagreement_policy_spec_filters_inland_stations_and_disagreement(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    from weather_trader.research.policies import HRRR_RICH_DYNAMIC_TUNED_MODEL
+
+    spec = hrrr_inland_disagreement_policy_spec()
+    evaluator = ResearchPolicyEvaluator(store, (spec,))
+
+    # Build obs consensus for HRRR disagreement lookup
+    obs_consensus = evaluator._build_consensus([
+        _snapshot(
+            live_execution.DYNAMIC_TUNED_MODEL,
+            id=1, station="KATL",
+            selected_no_ask=0.20, selected_edge=0.70,
+            selected_bucket="90-91F", selected_market_id="m1",
+            decision_time_local="2026-06-10T12:30:00-04:00",
+        ),
+        _snapshot(
+            live_execution.CATBOOST_MODEL,
+            id=2, station="KATL",
+            selected_no_ask=0.20, selected_edge=0.70,
+            selected_bucket="90-91F", selected_market_id="m1",
+            decision_time_local="2026-06-10T12:30:00-04:00",
+        ),
+    ])
+
+    # Build HRRR snapshots manually to control fair values for disagreement testing
+    hr_rows = [
+        {
+            **_snapshot(HRRR_RICH_DYNAMIC_TUNED_MODEL, id=10, station="KATL",
+                       selected_no_ask=0.30, selected_edge=0.20,
+                       selected_bucket="92-93F", selected_market_id="m2",
+                       decision_time_local="2026-06-10T12:30:00-04:00"),
+        },
+        {
+            **_snapshot(HRRR_RICH_DYNAMIC_TUNED_MODEL, id=11, station="KATL",
+                       selected_no_ask=0.10, selected_edge=0.30,
+                       selected_bucket="94-95F", selected_market_id="m3",
+                       decision_time_local="2026-06-10T12:30:00-04:00"),
+        },
+        {
+            **_snapshot(HRRR_RICH_DYNAMIC_TUNED_MODEL, id=12, station="KDAL",
+                       selected_no_ask=0.15, selected_edge=0.35,
+                       selected_bucket="96-97F", selected_market_id="m4",
+                       decision_time_local="2026-06-10T12:30:00-05:00"),
+        },
+        {
+            **_snapshot(HRRR_RICH_DYNAMIC_TUNED_MODEL, id=13, station="KBOS",
+                       selected_no_ask=0.10, selected_edge=0.40,
+                       selected_bucket="80-81F", selected_market_id="m5",
+                       decision_time_local="2026-06-10T12:30:00-04:00"),
+        },
+        {
+            **_snapshot(HRRR_RICH_DYNAMIC_TUNED_MODEL, id=14, station="KORD",
+                       selected_no_ask=0.25, selected_edge=0.30,
+                       selected_bucket="88-89F", selected_market_id="m6",
+                       decision_time_local="2026-06-10T11:59:00-05:00"),
+        },
+        {
+            **_snapshot(HRRR_RICH_DYNAMIC_TUNED_MODEL, id=15, station="KORD",
+                       selected_no_ask=0.51, selected_edge=0.29,
+                       selected_bucket="90-91F", selected_market_id="m7",
+                       decision_time_local="2026-06-10T12:30:00-05:00"),
+        },
+    ]
+
+    filtered = evaluator._candidates_for_policy(spec, hr_rows, obs_consensus)
     selected = evaluator._first_by_scope(spec, filtered)
 
-    assert len(selected) == 1
-    assert selected[0]["station"] == "EGLC"
-    assert selected[0]["market_family"] == "LOW_TEMP"
-    assert selected[0]["selected_side"] == "BUY_NO"
-    assert selected[0]["selected_bucket"] == "10-11C"
-    assert selected[0]["selected_no_ask"] == pytest.approx(0.75)
+    # id=10: edge 0.20 < 0.25 -> filtered
+    # id=11: KATL inland, edge 0.30 >= 0.25, entry 0.10 in [0,0.50], time ok,
+    #        no obs baseline for 94-95F -> uses HRRR edge (fair - entry) >= 0.15 -> passes
+    # id=12: KDAL inland, edge 0.35 >= 0.25 -> passes (no obs baseline)
+    # id=13: KBOS NOT inland -> filtered by station_allow_set
+    # id=14: KORD inland, edge 0.30 >= 0.25, but time 11:59 < 12:00 -> filtered
+    # id=15: KORD inland, entry 0.51 > 0.50 -> filtered
+    assert len(selected) == 2
+    stations = {item["station"] for item in selected}
+    assert stations == {"KATL", "KDAL"}
 
 
-def test_global_low_mvp_buy_no_policy_spec_filters_buy_no_cap_and_bucket_side_delay(tmp_path: Path) -> None:
+def test_metar_hrrr_inland_disagreement_policy_spec_filters_metar_model(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
-    spec = global_low_mvp_buy_no_policy_spec()
+    from weather_trader.research.policies import METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL
+
+    spec = metar_hrrr_inland_disagreement_policy_spec()
     evaluator = ResearchPolicyEvaluator(store, (spec,))
+
     rows = [
         _snapshot(
-            GLOBAL_LOW_MVP_MODEL,
-            id=1,
-            station="EGLC",
-            market_family="LOW_TEMP",
-            selected_no_ask=0.50,
-            selected_bucket="10-11C",
+            METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL,
+            id=1, station="KATL",
+            selected_no_ask=0.20, selected_edge=0.30,
+            selected_bucket="90-91F", selected_market_id="m1",
+            decision_time_local="2026-06-10T12:30:00-04:00",
         ),
         _snapshot(
-            GLOBAL_LOW_MVP_MODEL,
-            id=2,
-            station="KLGA",
-            market_family="LOW_TEMP",
-            selected_no_ask=0.49,
-            selected_bucket="12-13C",
-        ),
-        _snapshot(
-            GLOBAL_LOW_DYNAMIC_MODEL,
-            id=3,
-            station="EGLC",
-            market_family="LOW_TEMP",
-            selected_no_ask=0.40,
-            selected_bucket="14-15C",
-        ),
-        _snapshot(
-            GLOBAL_LOW_MVP_MODEL,
-            id=4,
-            station="EGLC",
-            market_family="LOW_TEMP",
-            selected_side="BUY_YES",
-            selected_yes_ask=0.20,
-            selected_bucket="16-17C",
-        ),
-        _snapshot(
-            GLOBAL_LOW_MVP_MODEL,
-            id=5,
-            station="EGLC",
-            market_family="LOW_TEMP",
-            selected_no_ask=0.51,
-            selected_bucket="18-19C",
-        ),
-        _snapshot(
-            GLOBAL_LOW_MVP_MODEL,
-            id=6,
-            station="EGLC",
-            market_family="LOW_TEMP",
-            selected_no_ask=0.04,
-            selected_bucket="20-21C",
+            live_execution.HRRR_RICH_DYNAMIC_TUNED_MODEL,
+            id=2, station="KATL",
+            selected_no_ask=0.20, selected_edge=0.30,
+            selected_bucket="90-91F", selected_market_id="m1",
+            decision_time_local="2026-06-10T12:30:00-04:00",
         ),
     ]
 
     filtered = evaluator._candidates_for_policy(spec, rows, [])
     selected = evaluator._first_by_scope(spec, filtered)
 
-    assert [item["selected_bucket"] for item in selected] == ["10-11C"]
-    assert {item["station"] for item in selected} == {"EGLC"}
-    assert all(item["model_name"] == GLOBAL_LOW_MVP_MODEL for item in selected)
-    assert all(item["selected_side"] == "BUY_NO" for item in selected)
-
-
-def test_global_low_tiny_tail_policy_spec_filters_buy_no_tiny_tail_window(tmp_path: Path) -> None:
-    store = ExecutionStore(tmp_path / "live.sqlite")
-    spec = global_low_tiny_tail_policy_spec()
-    evaluator = ResearchPolicyEvaluator(store, (spec,))
-    consensus = evaluator._build_consensus(
-        [
-            _snapshot(
-                GLOBAL_LOW_DYNAMIC_MODEL,
-                id=1,
-                station="EGLC",
-                market_family="LOW_TEMP",
-                strategy_bucket=str(StrategyBucket.TAIL),
-                selected_no_ask=0.05,
-                selected_bucket="10-11C",
-                decision_time_local="2026-06-05T00:30:00+01:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_MVP_MODEL,
-                id=2,
-                station="EGLC",
-                market_family="LOW_TEMP",
-                strategy_bucket=str(StrategyBucket.TAIL),
-                selected_no_ask=0.05,
-                selected_bucket="10-11C",
-                decision_time_local="2026-06-05T00:30:00+01:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_DYNAMIC_MODEL,
-                id=3,
-                station="EGLC",
-                market_family="LOW_TEMP",
-                strategy_bucket=str(StrategyBucket.TAIL),
-                selected_no_ask=0.06,
-                selected_bucket="12-13C",
-                decision_time_local="2026-06-05T01:30:00+01:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_MVP_MODEL,
-                id=4,
-                station="EGLC",
-                market_family="LOW_TEMP",
-                strategy_bucket=str(StrategyBucket.TAIL),
-                selected_no_ask=0.06,
-                selected_bucket="12-13C",
-                decision_time_local="2026-06-05T01:30:00+01:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_DYNAMIC_MODEL,
-                id=5,
-                station="EGLC",
-                market_family="LOW_TEMP",
-                strategy_bucket=str(StrategyBucket.TAIL),
-                selected_side="BUY_YES",
-                selected_yes_ask=0.04,
-                selected_bucket="14-15C",
-                decision_time_local="2026-06-05T01:30:00+01:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_MVP_MODEL,
-                id=6,
-                station="EGLC",
-                market_family="LOW_TEMP",
-                strategy_bucket=str(StrategyBucket.TAIL),
-                selected_side="BUY_YES",
-                selected_yes_ask=0.04,
-                selected_bucket="14-15C",
-                decision_time_local="2026-06-05T01:30:00+01:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_DYNAMIC_MODEL,
-                id=7,
-                station="WSSS",
-                market_family="LOW_TEMP",
-                strategy_bucket=str(StrategyBucket.TAIL),
-                selected_no_ask=0.04,
-                selected_bucket="16-17C",
-                decision_time_local="2026-06-05T01:30:00+08:00",
-            ),
-            _snapshot(
-                GLOBAL_LOW_MVP_MODEL,
-                id=8,
-                station="WSSS",
-                market_family="LOW_TEMP",
-                strategy_bucket=str(StrategyBucket.TAIL),
-                selected_no_ask=0.04,
-                selected_bucket="16-17C",
-                decision_time_local="2026-06-05T01:30:00+08:00",
-            ),
-        ]
-    )
-
-    filtered = evaluator._candidates_for_policy(spec, [], consensus)
-    selected = evaluator._first_by_scope(spec, filtered)
-
     assert len(selected) == 1
-    assert selected[0]["station"] == "EGLC"
-    assert selected[0]["market_family"] == "LOW_TEMP"
-    assert selected[0]["strategy_bucket"] == str(StrategyBucket.TAIL)
-    assert selected[0]["selected_side"] == "BUY_NO"
-    assert selected[0]["selected_bucket"] == "10-11C"
-    assert selected[0]["selected_no_ask"] == pytest.approx(0.05)
-
-def test_live_market_admission_follows_active_strategy_plans() -> None:
-    plans = live_strategy_plans(LiveExecutionConfig())
-    us_high = _candidate_market("us-high", 72, 73, "yes-us", "no-us")
-    global_low = _candidate_market(
-        "global-low",
-        10,
-        11,
-        "yes-low",
-        "no-low",
-        station="EGLC",
-        city="London",
-        market_family=MarketFamily.LOW_TEMP,
-    )
-    global_high = _candidate_market(
-        "global-high",
-        20,
-        21,
-        "yes-gh",
-        "no-gh",
-        station="EGLC",
-        city="London",
-        market_family=MarketFamily.HIGH_TEMP,
-    )
-    unrelated_low = _candidate_market(
-        "unrelated-low",
-        24,
-        25,
-        "yes-ul",
-        "no-ul",
-        station="WSSS",
-        city="Singapore",
-        market_family=MarketFamily.LOW_TEMP,
-    )
-
-    assert live_execution._market_admitted_by_strategy_plans(us_high, plans) is True
-    assert live_execution._market_admitted_by_strategy_plans(global_low, plans) is True
-    assert live_execution._market_admitted_by_strategy_plans(global_high, plans) is False
-    assert live_execution._market_admitted_by_strategy_plans(unrelated_low, plans) is False
+    assert selected[0]["model_name"] == METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL
 
 
-def test_ngboost_best_buy_yes_policy_spec_filters_late_medium_entries(tmp_path: Path) -> None:
+def test_hrrr_disagreement_rejects_when_obs_has_strong_edge(tmp_path: Path) -> None:
+    """When obs consensus has edge >= obs_edge_max (0.10), HRRR candidate is rejected."""
     store = ExecutionStore(tmp_path / "live.sqlite")
-    spec = ngboost_best_buy_yes_policy_spec(LiveExecutionConfig())
+    from weather_trader.research.policies import HRRR_RICH_DYNAMIC_TUNED_MODEL
+
+    spec = hrrr_inland_disagreement_policy_spec()
     evaluator = ResearchPolicyEvaluator(store, (spec,))
-    rows = [
+
+    # Build obs consensus with a strong edge on the same opportunity
+    obs_consensus = evaluator._build_consensus([
         _snapshot(
-            NGBOOST_MODEL,
-            id=1,
-            strategy_bucket=str(StrategyBucket.BEST_BUCKET),
-            selected_side="BUY_YES",
-            selected_yes_ask=0.05,
-            decision_time_local="2026-05-20T12:30:00-04:00",
+            live_execution.DYNAMIC_TUNED_MODEL,
+            id=1, station="KATL",
+            selected_no_ask=0.50, selected_edge=0.35,
+            selected_bucket="90-91F", selected_market_id="m1",
+            decision_time_local="2026-06-10T12:30:00-04:00",
         ),
         _snapshot(
-            NGBOOST_MODEL,
-            id=2,
-            strategy_bucket=str(StrategyBucket.BEST_BUCKET),
-            selected_bucket="74-75F",
-            selected_side="BUY_YES",
-            selected_yes_ask=0.04,
-            decision_time_local="2026-05-20T12:31:00-04:00",
+            live_execution.CATBOOST_MODEL,
+            id=2, station="KATL",
+            selected_no_ask=0.50, selected_edge=0.35,
+            selected_bucket="90-91F", selected_market_id="m1",
+            decision_time_local="2026-06-10T12:30:00-04:00",
         ),
-        _snapshot(
-            NGBOOST_MODEL,
-            id=3,
-            strategy_bucket=str(StrategyBucket.BEST_BUCKET),
-            selected_bucket="76-77F",
-            selected_side="BUY_YES",
-            selected_yes_ask=0.08,
-            decision_time_local="2026-05-20T11:59:00-04:00",
-        ),
-        _snapshot(
-            NGBOOST_MODEL,
-            id=4,
-            strategy_bucket=str(StrategyBucket.HIGH_CONVICTION),
-            selected_bucket="78-79F",
-            selected_side="BUY_YES",
-            selected_yes_ask=0.08,
-            decision_time_local="2026-05-20T12:33:00-04:00",
-        ),
-        _snapshot(
-            DYNAMIC_TUNED_MODEL,
-            id=5,
-            strategy_bucket=str(StrategyBucket.BEST_BUCKET),
-            selected_bucket="80-81F",
-            selected_side="BUY_YES",
-            selected_yes_ask=0.08,
-            decision_time_local="2026-05-20T12:34:00-04:00",
-        ),
-        _snapshot(
-            NGBOOST_MODEL,
-            id=6,
-            strategy_bucket=str(StrategyBucket.BEST_BUCKET),
-            selected_bucket="82-83F",
-            selected_side="BUY_YES",
-            selected_yes_ask=0.51,
-            decision_time_local="2026-05-20T12:35:00-04:00",
-        ),
+    ])
+
+    hr_rows = [
+        {
+            **_snapshot(HRRR_RICH_DYNAMIC_TUNED_MODEL, id=10, station="KATL",
+                       selected_no_ask=0.40, selected_edge=0.50,
+                       selected_bucket="90-91F", selected_market_id="m1",
+                       decision_time_local="2026-06-10T12:30:00-04:00"),
+        },
     ]
 
-    filtered = evaluator._candidates_for_policy(spec, rows, [])
-    filtered = [item for item in filtered if item["selected_side"] == str(TradeAction.BUY_YES)]
+    filtered = evaluator._candidates_for_policy(spec, hr_rows, obs_consensus)
+    assert len(filtered) == 0
+
+
+def test_hrrr_disagreement_accepts_when_obs_is_absent_or_weak(tmp_path: Path) -> None:
+    """No obs baseline: uses HRRR edge. Weak obs edge: checks fair disagreement."""
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    from weather_trader.research.policies import HRRR_RICH_DYNAMIC_TUNED_MODEL
+
+    spec = hrrr_inland_disagreement_policy_spec()
+    evaluator = ResearchPolicyEvaluator(store, (spec,))
+
+    # obs consensus with weak edge on this bucket
+    obs_consensus = evaluator._build_consensus([
+        _snapshot(
+            live_execution.DYNAMIC_TUNED_MODEL,
+            id=1, station="KDAL",
+            selected_no_ask=0.45, selected_edge=0.05,
+            selected_bucket="92-93F", selected_market_id="m1",
+            decision_time_local="2026-06-10T12:30:00-05:00",
+        ),
+        _snapshot(
+            live_execution.CATBOOST_MODEL,
+            id=2, station="KDAL",
+            selected_no_ask=0.45, selected_edge=0.05,
+            selected_bucket="92-93F", selected_market_id="m1",
+            decision_time_local="2026-06-10T12:30:00-05:00",
+        ),
+    ])
+
+    hr_rows = [
+        {
+            **_snapshot(HRRR_RICH_DYNAMIC_TUNED_MODEL, id=10, station="KDAL",
+                       selected_no_ask=0.40, selected_edge=0.32,
+                       selected_bucket="92-93F", selected_market_id="m1",
+                       decision_time_local="2026-06-10T12:30:00-05:00"),
+            "selected_fair_no": 0.72,
+        },
+        {
+            **_snapshot(HRRR_RICH_DYNAMIC_TUNED_MODEL, id=11, station="KDAL",
+                       selected_no_ask=0.40, selected_edge=0.30,
+                       selected_bucket="94-95F", selected_market_id="m2",
+                       decision_time_local="2026-06-10T12:30:00-05:00"),
+        },
+    ]
+
+    filtered = evaluator._candidates_for_policy(spec, hr_rows, obs_consensus)
     selected = evaluator._first_by_scope(spec, filtered)
 
-    assert [item["selected_bucket"] for item in selected] == ["72-73F"]
-
-
-def test_live_build_signal_preserves_low_temp_fields(tmp_path: Path) -> None:
-    store = ExecutionStore(tmp_path / "live.sqlite")
-    engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=()))
-    market = _candidate_market(
-        "low-market",
-        10,
-        11,
-        "yes-low",
-        "no-low",
-        station="EGLC",
-        city="London",
-        market_family=MarketFamily.LOW_TEMP,
-    )
-    weather = StationWeatherState(
-        station="EGLC",
-        local_date=date(2026, 5, 20),
-        latest_obs_time="2026-05-20T16:15:00+00:00",
-        latest_obs_age_minutes=15.0,
-        current_temp=53.0,
-        high_so_far=58.0,
-        low_so_far=49.0,
-        hour_local=17,
-        day_of_year=140,
-        temp_change_1h=-1.0,
-        temp_change_3h=-2.0,
-        dewpoint=45.0,
-        wind_speed=4.0,
-        wind_dir_sin=0.0,
-        wind_dir_cos=1.0,
-        cloud_cover_code=1.0,
-        hrrr_current_temp=None,
-        hrrr_remaining_max=59.0,
-        hrrr_remaining_min=48.0,
-        stale=False,
-    )
-    books = {"yes-low": _book("yes-low", ask=0.35), "no-low": _book("no-low", ask=0.55)}
-    fair = FairValueResult(0.30, 0.70, ["MODEL_PROBABILITY"], "low-model", "hash")
-
-    signal = engine._build_signal(market, books, weather, fair)
-
-    assert signal.market_family == MarketFamily.LOW_TEMP
-    assert signal.low_so_far == pytest.approx(49.0)
-    assert signal.hrrr_remaining_min == pytest.approx(48.0)
-    assert signal.high_so_far == pytest.approx(58.0)
-    assert signal.hrrr_remaining_max == pytest.approx(59.0)
-
-
-def test_live_build_candidates_includes_global_low_tiny_tail_consensus(tmp_path: Path) -> None:
-    store = ExecutionStore(tmp_path / "live.sqlite")
-    engine = LiveExecutionEngine(
-        store,
-        LiveExecutionConfig(live_db_path=tmp_path / "live.sqlite", model_paths=(), mode="live"),
-    )
-    engine.fair_value_engines = [
-        StaticFairValueEngine(GLOBAL_LOW_DYNAMIC_MODEL),
-        StaticFairValueEngine(GLOBAL_LOW_MVP_MODEL),
-    ]
-    as_of_utc = datetime(2026, 5, 20, 0, 30, tzinfo=timezone.utc)
-    weather = StationWeatherState(
-        station="EGLC",
-        local_date=date(2026, 5, 20),
-        latest_obs_time="2026-05-20T00:15:00+00:00",
-        latest_obs_age_minutes=15.0,
-        current_temp=11.0,
-        high_so_far=14.0,
-        low_so_far=10.5,
-        hour_local=1,
-        day_of_year=140,
-        temp_change_1h=-1.0,
-        temp_change_3h=-2.0,
-        dewpoint=8.0,
-        wind_speed=4.0,
-        wind_dir_sin=0.0,
-        wind_dir_cos=1.0,
-        cloud_cover_code=1.0,
-        hrrr_current_temp=None,
-        hrrr_remaining_max=None,
-        hrrr_remaining_min=None,
-        stale=False,
-    )
-    markets = [
-        _candidate_market(
-            "low-market-1",
-            10,
-            11,
-            "yes-low-1",
-            "no-low-1",
-            station="EGLC",
-            city="London",
-            market_family=MarketFamily.LOW_TEMP,
-        ),
-        _candidate_market(
-            "low-market-2",
-            12,
-            13,
-            "yes-low-2",
-            "no-low-2",
-            station="EGLC",
-            city="London",
-            market_family=MarketFamily.LOW_TEMP,
-        ),
-    ]
-    books = {
-        "yes-low-1": _book("yes-low-1", ask=0.96),
-        "no-low-1": _book("no-low-1", ask=0.04),
-        "yes-low-2": _book("yes-low-2", ask=0.90),
-        "no-low-2": _book("no-low-2", ask=0.10),
-    }
-
-    candidates = engine._build_candidates(markets, books, {"EGLC": weather}, as_of_utc, errors=[])
-
-    tail = [candidate for candidate in candidates if candidate.plan.strategy.name == GLOBAL_LOW_TINY_TAIL_POLICY_NAME]
-    assert len(tail) == 1
-    position = tail[0].position
-    assert position.model_group == GLOBAL_LOW_MODEL_GROUP
-    assert position.strategy_bucket == StrategyBucket.TAIL
-    assert position.selected_side == TradeAction.BUY_NO
-    assert position.selected_market_id == "low-market-1"
-    assert position.selected_bucket == "10-11F"
-    assert position.entry_price == pytest.approx(0.04)
-    assert position.entry_edge == pytest.approx(0.08)
+    # id=10: obs edge 0.05 < 0.10 -> not blocked; hrrr fair_no 0.72 - obs fair_no 0.9 = -0.18 < 0.15 -> rejected
+    # id=11: no obs baseline for 94-95F; uses HRRR edge = fair - entry = 0.9 - 0.40 = 0.50 >= 0.15 -> passes
+    assert len(selected) == 1
+    assert selected[0]["selected_bucket"] == "94-95F"
 
 def test_live_position_insert_is_idempotent_by_scope(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
@@ -2098,15 +1736,23 @@ class ResponseFillSubmitter(FakeSubmitter):
         )
 
 
-def _write_calibration_file(tmp_path: Path, *, decision: str = "BLOCK", station: str = "KATL", side: str = "BUY_NO", band: str = "0.35-0.45") -> Path:
-    path = tmp_path / "calibration.json"
+def _write_calibration_file(
+    tmp_path: Path,
+    *,
+    decision: str = "BLOCK",
+    station: str = "KATL",
+    side: str = "BUY_NO",
+    band: str = "0.35-0.45",
+    family: str = "obs",
+) -> Path:
+    path = tmp_path / f"calibration-{family}-{decision}-{station}.json"
     path.write_text(
         json.dumps(
             {
                 "version": 1,
                 "generated_at": "2026-06-15T12:00:00Z",
                 "families": {
-                    "obs": {
+                    family: {
                         "label": "Obs",
                         "market_dates": 2,
                         "buckets": {
@@ -2224,13 +1870,16 @@ def test_calibration_block_records_rejected_position_and_attempt_metadata(tmp_pa
     raw = json.loads(row["raw_json"])
     assert raw["calibration"]["decision"] == "BLOCK"
     assert raw["calibration"]["reason"] == "bucket_match"
+    assert raw["calibration"]["calibration_mode"] == "trade_blocker"
+    assert raw["calibration"]["calibration_effect"] == "BLOCK"
     attempt = store.connection.execute("select final_reason, raw_payload from live_order_attempts").fetchone()
     assert attempt["final_reason"] == "CALIBRATION_BLOCK"
     assert json.loads(attempt["raw_payload"])["raw_payload"]["calibration"]["decision"] == "BLOCK"
 
 
-def test_calibration_canary_caps_target_before_sizing(tmp_path: Path) -> None:
-    path = _write_calibration_file(tmp_path, decision="CANARY")
+@pytest.mark.parametrize("decision", ["CANARY", "WATCH", "INSUFFICIENT_DATA"])
+def test_trade_blocker_rejects_non_trade_decisions_without_resizing(tmp_path: Path, decision: str) -> None:
+    path = _write_calibration_file(tmp_path, decision=decision)
     store = ExecutionStore(tmp_path / "live.sqlite")
     engine = LiveExecutionEngine(
         store,
@@ -2244,37 +1893,133 @@ def test_calibration_canary_caps_target_before_sizing(tmp_path: Path) -> None:
     candidate = _calibration_candidate(target=50.0)
 
     decision = engine._apply_calibration(candidate)
-    sizing = engine._size_candidate(decision.candidate, datetime(2026, 6, 15, 18, 0, tzinfo=timezone.utc))
 
-    assert decision.reject_reason is None
-    assert decision.candidate.plan.target_notional_usd == pytest.approx(4.0)
-    assert sizing.target_notional_usd == pytest.approx(4.0)
-    assert decision.metadata["calibration_target_notional_before"] == pytest.approx(50.0)
-    assert decision.metadata["calibration_target_notional_after"] == pytest.approx(4.0)
+    assert decision.reject_reason == "CALIBRATION_BLOCK"
+    assert decision.candidate.plan.target_notional_usd == pytest.approx(50.0)
+    assert "calibration_target_notional_before" not in decision.metadata
+    assert "calibration_target_notional_after" not in decision.metadata
+    assert decision.metadata["calibration_mode"] == "trade_blocker"
+    assert decision.metadata["calibration_effect"] == "BLOCK"
 
 
-def test_calibration_watch_trade_missing_and_unmapped_metadata(tmp_path: Path) -> None:
+def test_trade_blocker_allows_trade_decision(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
-    watch_engine = LiveExecutionEngine(
-        store,
-        LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=_write_calibration_file(tmp_path, decision="WATCH")),
-    )
-    watch = watch_engine._apply_calibration(_calibration_candidate())
-    assert watch.reject_reason is None
-    assert watch.metadata["decision"] == "WATCH"
-    assert watch.metadata["reason"] == "bucket_match"
-
     trade_path = _write_calibration_file(tmp_path, decision="TRADE", station="KLAX")
     trade_engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=trade_path))
     trade = trade_engine._apply_calibration(_calibration_candidate(station="KLAX"))
+
     assert trade.reject_reason is None
     assert trade.metadata["decision"] == "TRADE"
+    assert trade.metadata["calibration_mode"] == "trade_blocker"
+    assert trade.metadata["calibration_effect"] == "TRADE_ALLOW"
 
+
+def test_trade_blocker_rejects_missing_bucket_and_unmapped_policy(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    trade_path = _write_calibration_file(tmp_path, decision="TRADE", station="KLAX")
+    trade_engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=trade_path))
     missing = trade_engine._apply_calibration(_calibration_candidate(station="KSEA"))
-    assert missing.reject_reason is None
+    assert missing.reject_reason == "CALIBRATION_BLOCK"
     assert missing.metadata["reason"] == "bucket_missing"
     assert missing.metadata["decision"] == "INSUFFICIENT_DATA"
+    assert missing.metadata["calibration_mode"] == "trade_blocker"
+    assert missing.metadata["calibration_effect"] == "BLOCK"
 
     unmapped = trade_engine._apply_calibration(_calibration_candidate(strategy_name="unmapped_strategy"))
-    assert unmapped.reject_reason is None
+    assert unmapped.reject_reason == "CALIBRATION_BLOCK"
     assert unmapped.metadata["reason"] == "family_unmapped"
+    assert unmapped.metadata["decision"] == "UNMAPPED"
+    assert unmapped.metadata["calibration_mode"] == "trade_blocker"
+    assert unmapped.metadata["calibration_effect"] == "BLOCK"
+
+
+@pytest.mark.parametrize(
+    ("strategy_name", "family"),
+    [
+        (live_execution.HRRR_INLAND_DISAGREEMENT_POLICY_NAME, "hrrr_rich"),
+        (live_execution.METAR_HRRR_INLAND_DISAGREEMENT_POLICY_NAME, "metar_hrrr_rich"),
+    ],
+)
+def test_hrrr_execution_experiment_rejects_only_block(tmp_path: Path, strategy_name: str, family: str) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(
+            live_db_path=store.path,
+            model_paths=(),
+            calibration_path=_write_calibration_file(tmp_path, decision="BLOCK", family=family),
+        ),
+    )
+
+    decision = engine._apply_calibration(_calibration_candidate(strategy_name=strategy_name))
+
+    assert decision.reject_reason == "CALIBRATION_BLOCK"
+    assert decision.metadata["decision"] == "BLOCK"
+    assert decision.metadata["calibration_mode"] == "hrrr_execution_experiment"
+    assert decision.metadata["calibration_effect"] == "BLOCK"
+
+
+@pytest.mark.parametrize("decision_label", ["CANARY", "WATCH", "TRADE", "INSUFFICIENT_DATA"])
+def test_hrrr_execution_experiment_allows_non_block_decisions(tmp_path: Path, decision_label: str) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(
+            live_db_path=store.path,
+            model_paths=(),
+            calibration_path=_write_calibration_file(tmp_path, decision=decision_label, family="hrrr_rich"),
+            calibration_canary_notional_usd=4.0,
+        ),
+    )
+
+    decision = engine._apply_calibration(
+        _calibration_candidate(
+            strategy_name=live_execution.HRRR_INLAND_DISAGREEMENT_POLICY_NAME,
+            target=50.0,
+        )
+    )
+
+    assert decision.reject_reason is None
+    assert decision.candidate.plan.target_notional_usd == pytest.approx(50.0)
+    assert decision.metadata["decision"] == decision_label
+    assert decision.metadata["calibration_mode"] == "hrrr_execution_experiment"
+    assert decision.metadata["calibration_effect"] == "EXPERIMENT_ALLOW"
+
+
+def test_hrrr_execution_experiment_allows_missing_bucket(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(
+            live_db_path=store.path,
+            model_paths=(),
+            calibration_path=_write_calibration_file(tmp_path, decision="BLOCK", family="hrrr_rich", station="KLAX"),
+        ),
+    )
+
+    decision = engine._apply_calibration(_calibration_candidate(strategy_name=live_execution.HRRR_INLAND_DISAGREEMENT_POLICY_NAME))
+
+    assert decision.reject_reason is None
+    assert decision.metadata["reason"] == "bucket_missing"
+    assert decision.metadata["decision"] == "INSUFFICIENT_DATA"
+    assert decision.metadata["calibration_mode"] == "hrrr_execution_experiment"
+    assert decision.metadata["calibration_effect"] == "EXPERIMENT_ALLOW"
+
+
+def test_calibration_debug_counts_effects_and_decisions(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(
+            live_db_path=store.path,
+            model_paths=(),
+            calibration_path=_write_calibration_file(tmp_path, decision="CANARY", family="hrrr_rich"),
+        ),
+    )
+    debug = {"calibration": engine._empty_calibration_counts()}
+    decision = engine._apply_calibration(_calibration_candidate(strategy_name=live_execution.HRRR_INLAND_DISAGREEMENT_POLICY_NAME))
+
+    engine._increment_calibration_debug(debug, decision.metadata)
+
+    assert debug["calibration"]["CANARY"] == 1
+    assert debug["calibration"]["EXPERIMENT_ALLOW"] == 1

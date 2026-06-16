@@ -1,8 +1,17 @@
 # Layer 1 Calibration: Design & Implementation Plan
 
 **Date:** 2026-06-15
-**Status:** Design approved, implementation pending
+**Status:** Implemented 2026-06-15; live behavior superseded 2026-06-16
 **References:** `docs/deep-dive-pnl-root-cause-2026-06-15.md`, `scripts/calibration_table.py`
+
+**Supersession note (2026-06-16):** Live execution now uses calibration gate
+mode. Normal mapped live policies execute only when calibration says `TRADE`;
+`BLOCK`, `WATCH`, `CANARY`, `INSUFFICIENT_DATA`, missing buckets, and unmapped
+states reject with `CALIBRATION_BLOCK`. The HRRR-rich and METAR+HRRR-rich inland
+late disagreement execution experiments are the only exception: they execute
+unless calibration explicitly says `BLOCK`. The `calibration_canary_notional_usd`
+config/CLI field remains for backward compatibility but no longer changes live
+target size.
 
 ---
 

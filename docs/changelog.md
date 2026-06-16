@@ -2,8 +2,20 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-06-16
+
+- Changed global low-temperature research resolution for `RJTT`, `RKSI`, `VHHH`, and `ZSPD` to use Polymarket Gamma's settled winning low-temperature bucket when scoring `LOW_TEMP` snapshots, aligning replay labels with Polymarket settlement for Tokyo, Seoul, Hong Kong, and Shanghai. High-temperature fields still come from the existing weather source because `station_date_outcomes` stores one station/date row. Backfilled the active research DB for 68 existing closed affected station/date outcomes and rewrote the corresponding low-temp prediction results.
+- Replaced live calibration CANARY sizing with gate mode. Normal mapped live policies now execute only on `TRADE`; `BLOCK`, `WATCH`, `CANARY`, `INSUFFICIENT_DATA`, missing, and unmapped states reject with `CALIBRATION_BLOCK`. The two HRRR inland late disagreement execution experiments are tagged `hrrr_execution_experiment` and execute unless calibration explicitly says `BLOCK`.
+- Defaulted `scripts/run_research.sh live-loop` to use `~/.local/state/roboweather/calibration.json` when present, passing it as `--calibration-path` with the configured canary notional so TUI-started live loops enable the Layer 1 calibration gate without custom arguments.
+- Documented the execution-experiment doctrine in the live trading journal and `$1000/day` EV roadmap: replay and shadow selection are signal evidence only, while live scaling requires controlled tests of the combined signal, execution, and sizing policy with filled-versus-missed diagnostics, slippage checks, and Polymarket-settled PnL.
+- Retired the three global low-temperature live strategies (canary $100, MVP add-on $50, tiny tail $5). Global low research collection continues; only the live execution sleeves are deactivated.
+- Added two HRRR inland late disagreement execution experiments at $25 each: HRRR-rich and METAR+HRRR-rich dynamic-tuned models, inland-only stations (KATL, KDAL, KORD), edge >= 0.25, HRRR-versus-obs dispute >= 0.15, obs edge < 0.10, entry $0.00-$0.50, local 12:00-15:00.
+- Extended `ResearchPolicySpec` with `hrrr_disagreement_min` and `obs_edge_max` fields so live execution can gate HRRR model candidates against the obs bucket consensus. The filter is applied in `ResearchPolicyEvaluator._candidates_for_policy` via `_passes_hrrr_disagreement`, mirroring the research replay disagreement logic from `portfolio_promotion_report.py`.
+- Updated `LIVE_MODEL_PATHS` to load HRRR-rich and METAR+HRRR-rich dynamic-tuned `.joblib` artifacts alongside existing obs models; removed global low model paths from live loading.
+
 ## 2026-06-15
 
+- Added `scripts/whole_chain_truth_report.py`, a generated sleeve-by-sleeve reconciliation of raw snapshot replay, live-selected candidate replay, filled replay at entry and actual fill prices, actual settled/mark PnL, fill-selection bias, slippage, settlement mismatches, lost capacity, and Layer 1 calibration allow/canary/block outcomes.
 - Implemented Layer 1 live calibration as an optional defensive gate: generated calibration JSON can now block known bad station/side/entry-band/model-family buckets or cap them to canary notional, with per-candidate metadata and cycle-debug counters. Added `--calibration-path` and `--calibration-canary-notional-usd` to live commands.
 - Extended `scripts/calibration_table.py` with `--out` JSON output and `--family all` while preserving the existing human-readable table output.
 - Hardened `docs/calibration-layer-1-design-2026-06-15.md` so Layer 1 calibration is explicitly a defensive gate, with copy-based live candidate handling, required raw metadata, unknown-bucket behavior, tests, and non-goals.

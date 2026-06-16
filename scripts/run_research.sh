@@ -38,6 +38,8 @@ Environment overrides:
   CONSENSUS_NOTIONAL_USD=30
   CORE_NOTIONAL_USD=25
   MAX_ENTRY_PRICE=0.50
+  CALIBRATION_PATH=$HOME/.local/state/roboweather/calibration.json
+  CALIBRATION_CANARY_NOTIONAL_USD=5
   SKIP_ALLOWANCE_CHECK=0
   PYTHON=.venv/bin/python # auto-detected if unset
 
@@ -116,6 +118,8 @@ LOW_SNAPSHOT_END_LOCAL="${LOW_SNAPSHOT_END_LOCAL:-23:59}"
 EVALUATE_POLICIES="${EVALUATE_POLICIES:-0}"
 RESOLVER_INTERVAL_SECONDS="${RESOLVER_INTERVAL_SECONDS:-3600}"
 RESOLVE_AFTER_LOCAL_HOUR="${RESOLVE_AFTER_LOCAL_HOUR:-6}"
+CALIBRATION_PATH="${CALIBRATION_PATH:-$HOME/.local/state/roboweather/calibration.json}"
+CALIBRATION_CANARY_NOTIONAL_USD="${CALIBRATION_CANARY_NOTIONAL_USD:-5}"
 
 if [[ ! -f "${MODEL}" && "${mode}" == "loop" ]]; then
   echo "Model not found: ${MODEL}" >&2
@@ -230,6 +234,7 @@ echo "live_db=${LIVE_DB}"
 echo "log=${log_path}"
 if [[ "${mode}" == "live-loop" ]]; then
   echo "live_debug_log=${live_debug_log_path}"
+  echo "calibration_path=${CALIBRATION_PATH}"
 fi
 
 case "${mode}" in
@@ -298,6 +303,14 @@ case "${mode}" in
     fi
     if [[ -n "${MAX_ENTRY_PRICE:-}" ]]; then
       command+=(--max-entry-price "${MAX_ENTRY_PRICE}")
+    fi
+    if [[ -n "${CALIBRATION_PATH}" ]]; then
+      if [[ -f "${CALIBRATION_PATH}" ]]; then
+        command+=(--calibration-path "${CALIBRATION_PATH}")
+        command+=(--calibration-canary-notional-usd "${CALIBRATION_CANARY_NOTIONAL_USD}")
+      else
+        echo "Calibration file not found; live calibration disabled: ${CALIBRATION_PATH}" >&2
+      fi
     fi
     command+=(--debug-log "${live_debug_log_path}")
     if [[ "${LIVE_MODE:-dry-run}" != "dry-run" ]]; then

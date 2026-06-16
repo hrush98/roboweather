@@ -4,6 +4,7 @@ import sys
 
 from weather_trader import cli
 from weather_trader.execution.contracts import EngineState, utc_now_iso
+from weather_trader.live.execution import LiveCycleResult
 from weather_trader.research import collector as research_collector
 from weather_trader.research.collector import ResearchCycleResult
 
@@ -215,16 +216,10 @@ def test_live_cycle_accepts_execution_options(monkeypatch) -> None:
             "25",
             "--core-notional-usd",
             "20",
-            "--global-low-notional-usd",
-            "15",
-            "--global-low-mvp-notional-usd",
-            "12",
             "--market-scope",
             "all",
             "--max-entry-price",
             "0.5",
-            "--global-low-max-entry-price",
-            "0.7",
             "--skip-allowance-check",
             "--retry-wait-seconds",
             "5",
@@ -238,16 +233,13 @@ def test_live_cycle_accepts_execution_options(monkeypatch) -> None:
     assert captured["max_notional_usd"] is None
     assert captured["consensus_notional_usd"] == 25.0
     assert captured["edge_core_notional_usd"] == 20.0
-    assert captured["global_low_notional_usd"] == 15.0
-    assert captured["global_low_mvp_buy_no_notional_usd"] == 12.0
     assert captured["market_scope"] == "all"
     assert captured["max_entry_price"] == 0.5
-    assert captured["global_low_entry_price_max"] == 0.7
     assert captured["require_allowance_check"] is False
     assert captured["retry_wait_seconds"] == 5.0
 
 
-def test_live_loop_accepts_global_low_options(monkeypatch) -> None:
+def test_live_loop_accepts_cli_options(monkeypatch) -> None:
     captured = {}
 
     def fake_live_loop_command(**kwargs):
@@ -265,12 +257,6 @@ def test_live_loop_accepts_global_low_options(monkeypatch) -> None:
             "/tmp/live.sqlite",
             "--market-scope",
             "all",
-            "--global-low-notional-usd",
-            "25",
-            "--global-low-mvp-notional-usd",
-            "30",
-            "--global-low-max-entry-price",
-            "0.75",
             "--max-cycles",
             "1",
         ],
@@ -280,10 +266,55 @@ def test_live_loop_accepts_global_low_options(monkeypatch) -> None:
 
     assert captured["live_db_path"] == "/tmp/live.sqlite"
     assert captured["market_scope"] == "all"
-    assert captured["global_low_notional_usd"] == 25.0
-    assert captured["global_low_mvp_buy_no_notional_usd"] == 30.0
-    assert captured["global_low_entry_price_max"] == 0.75
     assert captured["max_cycles"] == 1
+
+
+def test_live_commands_construct_current_execution_config(monkeypatch, tmp_path) -> None:
+    captured_modes = []
+
+    class FakeEngine:
+        def __init__(self, store, config):
+            captured_modes.append(config.mode)
+
+        def run_once(self):
+            return LiveCycleResult(0, 0, 0, 0, 0, [], {"ok": True})
+
+    monkeypatch.setattr(cli, "LiveExecutionEngine", FakeEngine)
+
+    cli.live_cycle_command(
+        live_db_path=str(tmp_path / "cycle.sqlite"),
+        mode="dry-run",
+        market_limit=0,
+        max_obs_age_minutes=30,
+        market_scope="all",
+        max_book_age_seconds=10.0,
+        max_notional_usd=None,
+        consensus_notional_usd=25.0,
+        edge_core_notional_usd=20.0,
+        max_entry_price=0.5,
+        model_paths=[],
+        require_allowance_check=False,
+        retry_wait_seconds=5.0,
+    )
+    cli.live_loop_command(
+        live_db_path=str(tmp_path / "loop.sqlite"),
+        mode="dry-run",
+        market_limit=0,
+        interval_seconds=1,
+        max_cycles=1,
+        max_obs_age_minutes=30,
+        market_scope="all",
+        max_book_age_seconds=10.0,
+        max_notional_usd=None,
+        consensus_notional_usd=25.0,
+        edge_core_notional_usd=20.0,
+        max_entry_price=0.5,
+        model_paths=[],
+        require_allowance_check=False,
+        retry_wait_seconds=5.0,
+    )
+
+    assert captured_modes == ["dry-run", "dry-run"]
 
 
 def test_research_loop_hook_runs_paper_promotion_after_policy_evaluation(monkeypatch) -> None:
