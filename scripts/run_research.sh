@@ -38,7 +38,9 @@ Environment overrides:
   CONSENSUS_NOTIONAL_USD=30
   CORE_NOTIONAL_USD=25
   MAX_ENTRY_PRICE=0.50
-  CALIBRATION_PATH=$HOME/.local/state/roboweather/calibration.json
+  BUCKET_CALIBRATION_PATH=$HOME/.local/state/roboweather/bucket_calibration_pm_us12_high_temp.json
+  BUCKET_CALIBRATION_MODE=apply      # apply|off
+  CALIBRATION_PATH=                  # legacy Layer 1 gate; ignored when bucket calibration mode is apply
   CALIBRATION_CANARY_NOTIONAL_USD=5
   SKIP_ALLOWANCE_CHECK=0
   PYTHON=.venv/bin/python # auto-detected if unset
@@ -118,7 +120,9 @@ LOW_SNAPSHOT_END_LOCAL="${LOW_SNAPSHOT_END_LOCAL:-23:59}"
 EVALUATE_POLICIES="${EVALUATE_POLICIES:-0}"
 RESOLVER_INTERVAL_SECONDS="${RESOLVER_INTERVAL_SECONDS:-3600}"
 RESOLVE_AFTER_LOCAL_HOUR="${RESOLVE_AFTER_LOCAL_HOUR:-6}"
-CALIBRATION_PATH="${CALIBRATION_PATH:-$HOME/.local/state/roboweather/calibration.json}"
+BUCKET_CALIBRATION_PATH="${BUCKET_CALIBRATION_PATH:-$HOME/.local/state/roboweather/bucket_calibration_pm_us12_high_temp.json}"
+BUCKET_CALIBRATION_MODE="${BUCKET_CALIBRATION_MODE:-apply}"
+CALIBRATION_PATH="${CALIBRATION_PATH:-}"
 CALIBRATION_CANARY_NOTIONAL_USD="${CALIBRATION_CANARY_NOTIONAL_USD:-5}"
 
 if [[ ! -f "${MODEL}" && "${mode}" == "loop" ]]; then
@@ -234,7 +238,11 @@ echo "live_db=${LIVE_DB}"
 echo "log=${log_path}"
 if [[ "${mode}" == "live-loop" ]]; then
   echo "live_debug_log=${live_debug_log_path}"
-  echo "calibration_path=${CALIBRATION_PATH}"
+  echo "bucket_calibration_mode=${BUCKET_CALIBRATION_MODE}"
+  echo "bucket_calibration_path=${BUCKET_CALIBRATION_PATH}"
+  if [[ -n "${CALIBRATION_PATH}" ]]; then
+    echo "legacy_calibration_path=${CALIBRATION_PATH}"
+  fi
 fi
 
 case "${mode}" in
@@ -257,7 +265,11 @@ case "${mode}" in
       --low-snapshot-end-local "${LOW_SNAPSHOT_END_LOCAL}"
       --resolver-interval-seconds "${RESOLVER_INTERVAL_SECONDS}"
       --resolve-after-local-hour "${RESOLVE_AFTER_LOCAL_HOUR}"
+      --bucket-calibration-mode "${BUCKET_CALIBRATION_MODE}"
     )
+    if [[ "${BUCKET_CALIBRATION_MODE}" == "apply" && -f "${BUCKET_CALIBRATION_PATH}" ]]; then
+      command+=(--bucket-calibration-path "${BUCKET_CALIBRATION_PATH}")
+    fi
     for extra_model_path in "${extra_model_paths[@]}"; do
       command+=(--extra-model "${extra_model_path}")
     done
@@ -304,12 +316,25 @@ case "${mode}" in
     if [[ -n "${MAX_ENTRY_PRICE:-}" ]]; then
       command+=(--max-entry-price "${MAX_ENTRY_PRICE}")
     fi
-    if [[ -n "${CALIBRATION_PATH}" ]]; then
+    if [[ "${BUCKET_CALIBRATION_MODE}" == "off" ]]; then
+      command+=(--bucket-calibration-mode off)
+    elif [[ "${BUCKET_CALIBRATION_MODE}" == "apply" ]]; then
+      command+=(--bucket-calibration-mode apply)
+      if [[ -f "${BUCKET_CALIBRATION_PATH}" ]]; then
+        command+=(--bucket-calibration-path "${BUCKET_CALIBRATION_PATH}")
+      else
+        echo "Bucket calibration file not found; bucket probability calibration disabled: ${BUCKET_CALIBRATION_PATH}" >&2
+      fi
+    else
+      echo "Invalid BUCKET_CALIBRATION_MODE=${BUCKET_CALIBRATION_MODE}; expected apply or off." >&2
+      exit 2
+    fi
+    if [[ "${BUCKET_CALIBRATION_MODE}" == "off" && -n "${CALIBRATION_PATH}" ]]; then
       if [[ -f "${CALIBRATION_PATH}" ]]; then
         command+=(--calibration-path "${CALIBRATION_PATH}")
         command+=(--calibration-canary-notional-usd "${CALIBRATION_CANARY_NOTIONAL_USD}")
       else
-        echo "Calibration file not found; live calibration disabled: ${CALIBRATION_PATH}" >&2
+        echo "Legacy calibration file not found; live Layer 1 calibration disabled: ${CALIBRATION_PATH}" >&2
       fi
     fi
     command+=(--debug-log "${live_debug_log_path}")

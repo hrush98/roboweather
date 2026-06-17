@@ -285,6 +285,9 @@ class PaperTradingEngine:
             reason_codes=reason_codes,
             model_name=fair.model_name,
             model_features_hash=fair.model_features_hash,
+            raw_fair_yes=fair.raw_fair_yes,
+            raw_fair_no=fair.raw_fair_no,
+            bucket_calibration=fair.bucket_calibration,
         )
 
 

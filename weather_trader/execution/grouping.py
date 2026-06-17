@@ -273,6 +273,9 @@ def _distribution_row(market: MarketSnapshot, signal: Signal) -> dict[str, objec
         "no_ask": signal.no_ask,
         "edge_yes": signal.edge_yes,
         "edge_no": signal.edge_no,
+        "raw_fair_yes": signal.raw_fair_yes,
+        "raw_fair_no": signal.raw_fair_no,
+        "bucket_calibration": signal.bucket_calibration,
     }
 
 
@@ -297,6 +300,9 @@ def _candidate_row(
         "no_ask": signal.no_ask,
         "edge_yes": row_edge_yes,
         "edge_no": signal.edge_no,
+        "raw_fair_yes": signal.raw_fair_yes,
+        "raw_fair_no": signal.raw_fair_no,
+        "bucket_calibration": signal.bucket_calibration,
         "expected_value": decision.expected_value,
         "target_usd": decision.target_usd,
         "max_price": decision.max_price,

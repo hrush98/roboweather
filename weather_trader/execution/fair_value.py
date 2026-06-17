@@ -3,12 +3,18 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from weather_trader.calibration.bucket_probability import (
+    DEFAULT_BUCKET_CALIBRATION_PATH,
+    disabled_metadata,
+    load_bucket_probability_calibrator,
+)
 from weather_trader.execution.contracts import MarketFamily, MarketSnapshot
 from weather_trader.execution.weather import StationWeatherState
 from weather_trader.models.train_classifier import load_artifacts
@@ -21,10 +27,19 @@ class FairValueResult:
     reason_codes: list[str]
     model_name: str
     model_features_hash: str
+    raw_fair_yes: float | None = None
+    raw_fair_no: float | None = None
+    bucket_calibration: dict[str, Any] = field(default_factory=dict)
 
 
 class FairValueEngine:
-    def __init__(self, model_path: Path) -> None:
+    def __init__(
+        self,
+        model_path: Path,
+        *,
+        bucket_calibration_path: Path | None = DEFAULT_BUCKET_CALIBRATION_PATH,
+        bucket_calibration_mode: str = "off",
+    ) -> None:
         bundle = load_artifacts(model_path)
         self.model = bundle["model"]
         self.feature_columns = list(bundle["feature_columns"])
@@ -34,9 +49,16 @@ class FairValueEngine:
         self.model_name = model_path.stem
         self.market_family = _artifact_market_family(bundle, self.model_name)
         self.model_features_hash = hashlib.sha256(json.dumps(self.feature_columns, sort_keys=True).encode()).hexdigest()[:16]
+        self.bucket_calibration_mode = bucket_calibration_mode
+        self.bucket_calibration_path = bucket_calibration_path
+        self.bucket_calibrator = load_bucket_probability_calibrator(path=bucket_calibration_path, mode=bucket_calibration_mode)
 
     def supports_market_family(self, market_family: str | MarketFamily) -> bool:
         return str(self.market_family) == str(market_family)
+
+    @property
+    def bucket_calibration_active(self) -> bool:
+        return self.bucket_calibration_mode == "apply" and self.bucket_calibrator is not None
 
     def price_market(self, market: MarketSnapshot, weather: StationWeatherState) -> FairValueResult:
         reason_codes = ["MODEL_PROBABILITY"]
@@ -83,16 +105,26 @@ class FairValueEngine:
         else:
             probabilities = np.full(len(markets), 1.0 / len(markets)) if markets else np.array([])
 
-        return {
-            market.market_id: FairValueResult(
-                fair_yes=float(probability),
-                fair_no=1.0 - float(probability),
+        results: dict[str, FairValueResult] = {}
+        for market, probability in zip(markets, probabilities):
+            raw_yes = float(probability)
+            fair_yes, calibration = self._calibrated_bucket_probability(
+                market=market,
+                weather=weather,
+                raw_fair_yes=raw_yes,
+                reason_codes=reason_codes_by_market[market.market_id],
+            )
+            results[market.market_id] = FairValueResult(
+                fair_yes=fair_yes,
+                fair_no=1.0 - fair_yes,
                 reason_codes=reason_codes_by_market[market.market_id],
                 model_name=self.model_name,
                 model_features_hash=self.model_features_hash,
+                raw_fair_yes=raw_yes,
+                raw_fair_no=1.0 - raw_yes,
+                bucket_calibration=calibration,
             )
-            for market, probability in zip(markets, probabilities)
-        }
+        return results
 
     def _base_reason_codes(self, market: MarketSnapshot, weather: StationWeatherState) -> list[str]:
         reason_codes = ["MODEL_PROBABILITY"]
@@ -310,6 +342,36 @@ class FairValueEngine:
             reason_codes.append("HIGH_SO_FAR_ABOVE_BUCKET")
             return 0.0
         return probability
+
+    def _calibrated_bucket_probability(
+        self,
+        *,
+        market: MarketSnapshot,
+        weather: StationWeatherState,
+        raw_fair_yes: float,
+        reason_codes: list[str],
+    ) -> tuple[float, dict[str, Any]]:
+        if self.bucket_calibration_mode == "off":
+            return raw_fair_yes, disabled_metadata(path=self.bucket_calibration_path, mode="off", reason="mode_off")
+        if market.market_family != MarketFamily.HIGH_TEMP:
+            return raw_fair_yes, disabled_metadata(
+                path=self.bucket_calibration_path,
+                mode=self.bucket_calibration_mode,
+                reason="market_family_not_supported",
+            )
+        if self.bucket_calibrator is None:
+            return raw_fair_yes, disabled_metadata(
+                path=self.bucket_calibration_path,
+                mode=self.bucket_calibration_mode,
+                reason="artifact_missing",
+            )
+        result = self.bucket_calibrator.calibrate(model_name=self.model_name, station=weather.station, raw_fair_yes=raw_fair_yes)
+        reason_codes.append("BUCKET_CALIBRATION_APPLIED" if result.applied else "BUCKET_CALIBRATION_MISSING_FIT")
+        if result.fit_scope == "model_station":
+            reason_codes.append("BUCKET_CALIBRATION_MODEL_STATION")
+        elif result.fit_scope == "model_global":
+            reason_codes.append("BUCKET_CALIBRATION_MODEL_GLOBAL")
+        return result.calibrated_fair_yes, result.metadata
 
     def _price_distribution_markets(self, markets: list[MarketSnapshot], weather: StationWeatherState) -> dict[str, FairValueResult]:
         if not markets:

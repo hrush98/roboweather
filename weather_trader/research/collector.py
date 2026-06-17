@@ -21,6 +21,7 @@ from weather_trader.execution.contracts import (
 )
 from weather_trader.execution.decision import DecisionEngine
 from weather_trader.execution.discovery import MarketDiscoveryService, same_day_markets
+from weather_trader.calibration.bucket_probability import DEFAULT_BUCKET_CALIBRATION_PATH
 from weather_trader.execution.fair_value import FairValueEngine
 from weather_trader.execution.grouping import GroupMarketContext, StationDateDecisionEngine, group_key
 from weather_trader.execution.liquidity import selected_side_execution_modes, selected_side_liquidity
@@ -43,6 +44,8 @@ class ResearchConfig:
     bankroll_usd: float = 1000.0
     market_limit: int = 50000
     market_scope: str = "us"
+    bucket_calibration_path: Path | None = DEFAULT_BUCKET_CALIBRATION_PATH
+    bucket_calibration_mode: str = "apply"
 
 
 @dataclass(frozen=True)
@@ -76,7 +79,14 @@ class ResearchCollector:
             self.weather_service = WeatherFeatureService(max_obs_age_minutes=self.config.max_obs_age_minutes)
         self.decision_engine = decision_engine or DecisionEngine()
         self.station_date_decision_engine = StationDateDecisionEngine(self.decision_engine)
-        self.fair_value_engines = [FairValueEngine(path) for path in model_paths]
+        self.fair_value_engines = [
+            FairValueEngine(
+                path,
+                bucket_calibration_path=self.config.bucket_calibration_path,
+                bucket_calibration_mode=self.config.bucket_calibration_mode,
+            )
+            for path in model_paths
+        ]
 
     def run_once(self, as_of_utc: datetime | None = None) -> ResearchCycleResult:
         now = as_of_utc or datetime.now(timezone.utc)
@@ -264,6 +274,9 @@ class ResearchCollector:
             market_family=market.market_family,
             low_so_far=weather.low_so_far,
             hrrr_remaining_min=weather.hrrr_remaining_min,
+            raw_fair_yes=fair.raw_fair_yes,
+            raw_fair_no=fair.raw_fair_no,
+            bucket_calibration=fair.bucket_calibration,
         )
 
 

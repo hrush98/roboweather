@@ -392,6 +392,10 @@ class ResearchPolicyEvaluator:
                         "model_names": list(required_models),
                         "model_snapshot_ids": {str(item.get("model_name")): int(item["id"]) for item in agreed},
                         "model_edges": {str(item.get("model_name")): item.get("selected_edge") for item in agreed},
+                        "model_bucket_calibration": {
+                            str(item.get("model_name")): _selected_bucket_calibration(item)
+                            for item in agreed
+                        },
                     },
                 }
             )
@@ -701,6 +705,19 @@ def _selected_fair(item: dict[str, Any]) -> float | None:
         return _float_or_none(item.get("selected_fair_yes"))
     if selected_side == str(TradeAction.BUY_NO):
         return _float_or_none(item.get("selected_fair_no"))
+    return None
+
+
+def _selected_bucket_calibration(item: dict[str, Any]) -> dict[str, Any] | None:
+    selected_market_id = item.get("selected_market_id")
+    candidates = item.get("candidate_distribution")
+    if not isinstance(candidates, list):
+        return None
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or candidate.get("market_id") != selected_market_id:
+            continue
+        metadata = candidate.get("bucket_calibration")
+        return metadata if isinstance(metadata, dict) else None
     return None
 
 

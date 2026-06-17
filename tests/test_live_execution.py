@@ -1826,13 +1826,24 @@ def _calibration_candidate(*, entry_price: float = 0.40, station: str = "KATL", 
     return live_execution.LiveCandidate(plan, source)
 
 
-def test_bad_calibration_json_fails_engine_startup(tmp_path: Path) -> None:
+def test_bad_legacy_calibration_json_is_ignored_when_bucket_calibration_applies(tmp_path: Path) -> None:
+    path = tmp_path / "bad-calibration.json"
+    path.write_text(json.dumps({"version": 1}), encoding="utf-8")
+    store = ExecutionStore(tmp_path / "live.sqlite")
+
+    LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=path, bucket_calibration_mode="apply"))
+
+
+def test_bad_legacy_calibration_json_fails_engine_startup_when_bucket_calibration_off(tmp_path: Path) -> None:
     path = tmp_path / "bad-calibration.json"
     path.write_text(json.dumps({"version": 1}), encoding="utf-8")
     store = ExecutionStore(tmp_path / "live.sqlite")
 
     with pytest.raises(ValueError):
-        LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=path))
+        LiveExecutionEngine(
+            store,
+            LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=path, bucket_calibration_mode="off"),
+        )
 
 
 def test_no_calibration_path_leaves_candidate_unchanged(tmp_path: Path) -> None:
@@ -1844,13 +1855,58 @@ def test_no_calibration_path_leaves_candidate_unchanged(tmp_path: Path) -> None:
 
     assert decision.reject_reason is None
     assert decision.candidate.plan.target_notional_usd == pytest.approx(50.0)
-    assert decision.metadata == {"enabled": False, "reason": "disabled", "decision": "DISABLED"}
+    assert decision.metadata["enabled"] is False
+    assert decision.metadata["reason"] == "disabled_by_bucket_calibration"
+    assert decision.metadata["decision"] == "DISABLED"
+    assert decision.metadata["calibration_effect"] == "DISABLED_BY_BUCKET_CALIBRATION"
+
+
+def test_bucket_calibration_apply_disables_legacy_blocker(tmp_path: Path) -> None:
+    path = _write_calibration_file(tmp_path, decision="BLOCK")
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=path))
+
+    decision = engine._apply_calibration(_calibration_candidate())
+
+    assert decision.reject_reason is None
+    assert decision.metadata["reason"] == "disabled_by_bucket_calibration"
+    assert decision.metadata["legacy_calibration_path_ignored"] == str(path)
+
+
+def test_live_position_payload_preserves_candidate_bucket_calibration_metadata(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=()))
+    candidate = _calibration_candidate()
+    source = candidate.position.__class__(
+        **{
+            **candidate.position.__dict__,
+            "raw_policy": {
+                "model_bucket_calibration": {
+                    DYNAMIC_TUNED_MODEL: {"fit_scope": "model_station", "fit_n": 500},
+                    CATBOOST_MODEL: {"fit_scope": "model_global", "fit_n": 1000},
+                }
+            },
+        }
+    )
+    candidate = live_execution.LiveCandidate(candidate.plan, source)
+    sizing = engine._size_candidate(candidate, datetime(2026, 6, 15, 18, 0, tzinfo=timezone.utc))
+
+    position = engine._live_position(
+        candidate,
+        _candidate_market("market-1", 72, 73, "yes-token", "no-token"),
+        reject_reason=None,
+        sizing=sizing,
+        calibration={"enabled": False, "reason": "disabled_by_bucket_calibration"},
+    )
+
+    raw_policy = position.raw_json["candidate"]["raw_policy"]
+    assert raw_policy["model_bucket_calibration"][DYNAMIC_TUNED_MODEL]["fit_scope"] == "model_station"
 
 
 def test_calibration_block_records_rejected_position_and_attempt_metadata(tmp_path: Path) -> None:
     path = _write_calibration_file(tmp_path, decision="BLOCK")
     store = ExecutionStore(tmp_path / "live.sqlite")
-    engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=path))
+    engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=path, bucket_calibration_mode="off"))
     candidate = _calibration_candidate()
 
     decision = engine._apply_calibration(candidate)
@@ -1888,6 +1944,7 @@ def test_trade_blocker_rejects_non_trade_decisions_without_resizing(tmp_path: Pa
             model_paths=(),
             calibration_path=path,
             calibration_canary_notional_usd=4.0,
+            bucket_calibration_mode="off",
         ),
     )
     candidate = _calibration_candidate(target=50.0)
@@ -1905,7 +1962,7 @@ def test_trade_blocker_rejects_non_trade_decisions_without_resizing(tmp_path: Pa
 def test_trade_blocker_allows_trade_decision(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
     trade_path = _write_calibration_file(tmp_path, decision="TRADE", station="KLAX")
-    trade_engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=trade_path))
+    trade_engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=trade_path, bucket_calibration_mode="off"))
     trade = trade_engine._apply_calibration(_calibration_candidate(station="KLAX"))
 
     assert trade.reject_reason is None
@@ -1917,7 +1974,7 @@ def test_trade_blocker_allows_trade_decision(tmp_path: Path) -> None:
 def test_trade_blocker_rejects_missing_bucket_and_unmapped_policy(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
     trade_path = _write_calibration_file(tmp_path, decision="TRADE", station="KLAX")
-    trade_engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=trade_path))
+    trade_engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), calibration_path=trade_path, bucket_calibration_mode="off"))
     missing = trade_engine._apply_calibration(_calibration_candidate(station="KSEA"))
     assert missing.reject_reason == "CALIBRATION_BLOCK"
     assert missing.metadata["reason"] == "bucket_missing"
@@ -1948,6 +2005,7 @@ def test_hrrr_execution_experiment_rejects_only_block(tmp_path: Path, strategy_n
             live_db_path=store.path,
             model_paths=(),
             calibration_path=_write_calibration_file(tmp_path, decision="BLOCK", family=family),
+            bucket_calibration_mode="off",
         ),
     )
 
@@ -1969,6 +2027,7 @@ def test_hrrr_execution_experiment_allows_non_block_decisions(tmp_path: Path, de
             model_paths=(),
             calibration_path=_write_calibration_file(tmp_path, decision=decision_label, family="hrrr_rich"),
             calibration_canary_notional_usd=4.0,
+            bucket_calibration_mode="off",
         ),
     )
 
@@ -1994,6 +2053,7 @@ def test_hrrr_execution_experiment_allows_missing_bucket(tmp_path: Path) -> None
             live_db_path=store.path,
             model_paths=(),
             calibration_path=_write_calibration_file(tmp_path, decision="BLOCK", family="hrrr_rich", station="KLAX"),
+            bucket_calibration_mode="off",
         ),
     )
 
@@ -2014,6 +2074,7 @@ def test_calibration_debug_counts_effects_and_decisions(tmp_path: Path) -> None:
             live_db_path=store.path,
             model_paths=(),
             calibration_path=_write_calibration_file(tmp_path, decision="CANARY", family="hrrr_rich"),
+            bucket_calibration_mode="off",
         ),
     )
     debug = {"calibration": engine._empty_calibration_counts()}

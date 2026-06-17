@@ -267,6 +267,8 @@ def test_live_loop_accepts_cli_options(monkeypatch) -> None:
     assert captured["live_db_path"] == "/tmp/live.sqlite"
     assert captured["market_scope"] == "all"
     assert captured["max_cycles"] == 1
+    assert captured["bucket_calibration_mode"] == "apply"
+    assert captured["bucket_calibration_path"].endswith("bucket_calibration_pm_us12_high_temp.json")
 
 
 def test_live_commands_construct_current_execution_config(monkeypatch, tmp_path) -> None:

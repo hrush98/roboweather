@@ -11,6 +11,7 @@ import requests
 import time
 
 from weather_trader.config import DEFAULT_LIVE_DB, MODELS_DIR
+from weather_trader.calibration.bucket_probability import DEFAULT_BUCKET_CALIBRATION_PATH
 from weather_trader.execution.books import RestBookClient
 from weather_trader.execution.clob_executor import CancelSubmission, ClobExecutor, OrderSubmission
 from weather_trader.execution.contracts import (
@@ -118,9 +119,11 @@ CALIBRATION_COUNTER_KEYS = (
     "UNMAPPED",
     "EXPERIMENT_ALLOW",
     "TRADE_ALLOW",
+    "DISABLED_BY_BUCKET_CALIBRATION",
     "bucket_missing",
     "family_unmapped",
     "disabled",
+    "disabled_by_bucket_calibration",
 )
 
 
@@ -152,6 +155,8 @@ class LiveExecutionConfig:
     calibration_path: Path | None = None
     calibration_canary_notional_usd: float = 5.0
     calibration_unknown_behavior: str = "allow"
+    bucket_calibration_path: Path | None = DEFAULT_BUCKET_CALIBRATION_PATH
+    bucket_calibration_mode: str = "apply"
 
 
 @dataclass(frozen=True)
@@ -575,14 +580,22 @@ class LiveExecutionEngine:
         self.book_client = book_client or RestBookClient()
         self.weather_service = weather_service or LiveWeatherFeatureService(max_obs_age_minutes=self.config.max_obs_age_minutes)
         self.decision_engine = StationDateDecisionEngine()
-        self.fair_value_engines = [FairValueEngine(path) for path in self.config.model_paths]
+        self.fair_value_engines = [
+            FairValueEngine(
+                path,
+                bucket_calibration_path=self.config.bucket_calibration_path,
+                bucket_calibration_mode=self.config.bucket_calibration_mode,
+            )
+            for path in self.config.model_paths
+        ]
         self.strategy_plans = live_strategy_plans(self.config)
         self.policy_evaluator = ResearchPolicyEvaluator(store, tuple(policy for plan in self.strategy_plans for policy in plan.policies))
         self.settings = settings or load_live_settings()
         self.sizing_model = LiveSizingModel(self.settings)
         self.submitter = submitter
         self._default_submitter_instance: LiveSubmitter | None = None
-        self.calibration = self._load_calibration(self.config.calibration_path)
+        legacy_calibration_path = self.config.calibration_path if self.config.bucket_calibration_mode == "off" else None
+        self.calibration = self._load_calibration(legacy_calibration_path)
 
     def run_once(self, as_of_utc: datetime | None = None) -> LiveCycleResult:
         now = as_of_utc or datetime.now(timezone.utc)
@@ -597,9 +610,12 @@ class LiveExecutionEngine:
             "min_entry_price": self.config.min_entry_price,
             "max_entry_price": self.config.max_entry_price,
             "models": [str(path) for path in self.config.model_paths],
-            "calibration_enabled": self.config.calibration_path is not None,
-            "calibration_path": str(self.config.calibration_path) if self.config.calibration_path else None,
+            "calibration_enabled": self.config.calibration_path is not None and self.config.bucket_calibration_mode == "off",
+            "calibration_path": str(self.config.calibration_path) if self.config.calibration_path and self.config.bucket_calibration_mode == "off" else None,
             "calibration": self._empty_calibration_counts(),
+            "bucket_calibration_mode": self.config.bucket_calibration_mode,
+            "bucket_calibration_path": str(self.config.bucket_calibration_path) if self.config.bucket_calibration_path else None,
+            "bucket_calibration_active": any(engine.bucket_calibration_active for engine in self.fair_value_engines),
         }
         for plan in self.strategy_plans:
             self.store.upsert_live_strategy(plan.strategy)
@@ -892,6 +908,9 @@ class LiveExecutionEngine:
             market_family=market.market_family,
             low_so_far=weather.low_so_far,
             hrrr_remaining_min=weather.hrrr_remaining_min,
+            raw_fair_yes=fair.raw_fair_yes,
+            raw_fair_no=fair.raw_fair_no,
+            bucket_calibration=fair.bucket_calibration,
         )
 
     def _candidate_reject_reason(self, candidate: LiveCandidate, book: BookSnapshot | None) -> str | None:
@@ -921,12 +940,24 @@ class LiveExecutionEngine:
         decision = str(metadata.get("decision") or "")
         effect = str(metadata.get("calibration_effect") or "")
         seen: set[str] = set()
-        for key in (reason if reason in {"disabled", "family_unmapped", "bucket_missing"} else None, decision, effect):
+        reason_key = reason if reason in {"disabled", "family_unmapped", "bucket_missing", "disabled_by_bucket_calibration"} else None
+        for key in (reason_key, decision, effect):
             if key in counts and key not in seen:
                 counts[key] += 1
                 seen.add(key)
 
     def _apply_calibration(self, candidate: LiveCandidate) -> CalibrationDecision:
+        if self.config.bucket_calibration_mode == "apply":
+            metadata = {
+                "enabled": False,
+                "reason": "disabled_by_bucket_calibration",
+                "decision": "DISABLED",
+                "bucket_calibration_mode": self.config.bucket_calibration_mode,
+                "bucket_calibration_path": str(self.config.bucket_calibration_path) if self.config.bucket_calibration_path else None,
+                "legacy_calibration_path_ignored": str(self.config.calibration_path) if self.config.calibration_path else None,
+                "calibration_effect": "DISABLED_BY_BUCKET_CALIBRATION",
+            }
+            return CalibrationDecision(candidate, None, metadata)
         metadata = self._calibration_metadata(candidate)
         decision = metadata.get("decision")
         if metadata.get("enabled") is False:

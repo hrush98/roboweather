@@ -189,6 +189,9 @@ class Signal:
     market_family: MarketFamily = MarketFamily.HIGH_TEMP
     low_so_far: float | None = None
     hrrr_remaining_min: float | None = None
+    raw_fair_yes: float | None = None
+    raw_fair_no: float | None = None
+    bucket_calibration: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

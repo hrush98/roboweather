@@ -13,6 +13,7 @@ import pandas as pd
 
 from weather_trader.config import CACHE_DIR, DEFAULT_LIVE_DB, PROCESSED_DIR, RAW_DIR, ensure_directories
 from weather_trader.config import PAPER_DIR
+from weather_trader.calibration.bucket_probability import DEFAULT_BUCKET_CALIBRATION_PATH
 from weather_trader.execution.engine import PaperTradingEngine
 from weather_trader.execution.fair_value import FairValueEngine
 from weather_trader.execution.paper_policy import (
@@ -286,6 +287,8 @@ def main() -> None:
     live_cycle.add_argument("--retry-wait-seconds", type=float, default=5.0)
     live_cycle.add_argument("--calibration-path", default=None, help="Layer 1 calibration JSON path")
     live_cycle.add_argument("--calibration-canary-notional-usd", type=float, default=5.0, help="Deprecated compatibility flag; live calibration no longer resizes CANARY buckets")
+    live_cycle.add_argument("--bucket-calibration-path", default=str(DEFAULT_BUCKET_CALIBRATION_PATH), help="Bucket YES Platt calibration JSON path")
+    live_cycle.add_argument("--bucket-calibration-mode", choices=["off", "apply"], default="apply")
     live_cycle.add_argument("--debug-log", default=None, help="Append live-cycle debug JSONL to this path")
 
     live_loop = subparsers.add_parser("live-loop", help="Run repeated live execution cycles")
@@ -306,6 +309,8 @@ def main() -> None:
     live_loop.add_argument("--retry-wait-seconds", type=float, default=5.0)
     live_loop.add_argument("--calibration-path", default=None, help="Layer 1 calibration JSON path")
     live_loop.add_argument("--calibration-canary-notional-usd", type=float, default=5.0, help="Deprecated compatibility flag; live calibration no longer resizes CANARY buckets")
+    live_loop.add_argument("--bucket-calibration-path", default=str(DEFAULT_BUCKET_CALIBRATION_PATH), help="Bucket YES Platt calibration JSON path")
+    live_loop.add_argument("--bucket-calibration-mode", choices=["off", "apply"], default="apply")
     live_loop.add_argument("--debug-log", default=None, help="Append live-loop debug JSONL to this path")
 
     resolve_live = subparsers.add_parser("resolve-live", help="Resolve settled live positions from official Polymarket outcomes")
@@ -335,6 +340,8 @@ def main() -> None:
     research_loop.add_argument("--resolver-interval-seconds", type=int, default=3600)
     research_loop.add_argument("--resolve-after-local-hour", type=int, default=6)
     research_loop.add_argument("--enable-paper-policy-promotion", action="store_true")
+    research_loop.add_argument("--bucket-calibration-path", default=str(DEFAULT_BUCKET_CALIBRATION_PATH), help="Bucket YES Platt calibration JSON path")
+    research_loop.add_argument("--bucket-calibration-mode", choices=["off", "apply"], default="apply")
 
     resolve_research = subparsers.add_parser("resolve-research", help="Resolve and score due research snapshots")
     resolve_research.add_argument("--db", default=str(PAPER_DIR / "roboweather.sqlite"))
@@ -517,6 +524,8 @@ def main() -> None:
             retry_wait_seconds=args.retry_wait_seconds,
             calibration_path=args.calibration_path,
             calibration_canary_notional_usd=args.calibration_canary_notional_usd,
+            bucket_calibration_path=args.bucket_calibration_path,
+            bucket_calibration_mode=args.bucket_calibration_mode,
             debug_log_path=args.debug_log,
         )
         return
@@ -539,6 +548,8 @@ def main() -> None:
             retry_wait_seconds=args.retry_wait_seconds,
             calibration_path=args.calibration_path,
             calibration_canary_notional_usd=args.calibration_canary_notional_usd,
+            bucket_calibration_path=args.bucket_calibration_path,
+            bucket_calibration_mode=args.bucket_calibration_mode,
             debug_log_path=args.debug_log,
         )
         return
@@ -572,6 +583,8 @@ def main() -> None:
             resolver_interval_seconds=args.resolver_interval_seconds,
             resolve_after_local_hour=args.resolve_after_local_hour,
             enable_paper_policy_promotion=args.enable_paper_policy_promotion,
+            bucket_calibration_path=args.bucket_calibration_path,
+            bucket_calibration_mode=args.bucket_calibration_mode,
         )
         return
     if args.command == "resolve-research":
@@ -1585,6 +1598,8 @@ def live_cycle_command(
     retry_wait_seconds: float,
     calibration_path: str | None = None,
     calibration_canary_notional_usd: float = 5.0,
+    bucket_calibration_path: str | None = str(DEFAULT_BUCKET_CALIBRATION_PATH),
+    bucket_calibration_mode: str = "apply",
     debug_log_path: str | None = None,
 ) -> None:
     if max_notional_usd is not None:
@@ -1607,6 +1622,8 @@ def live_cycle_command(
             retry_wait_seconds=retry_wait_seconds,
             calibration_path=Path(calibration_path) if calibration_path else None,
             calibration_canary_notional_usd=calibration_canary_notional_usd,
+            bucket_calibration_path=Path(bucket_calibration_path).expanduser() if bucket_calibration_path else None,
+            bucket_calibration_mode=bucket_calibration_mode,
         )
         result = LiveExecutionEngine(store, config).run_once()
         _append_live_debug_log(debug_log_path, result.debug)
@@ -1621,6 +1638,8 @@ def live_cycle_command(
                     "core_notional_usd": edge_core_notional_usd,
                     "calibration_path": calibration_path,
                     "calibration_canary_notional_usd": calibration_canary_notional_usd,
+                    "bucket_calibration_path": bucket_calibration_path,
+                    "bucket_calibration_mode": bucket_calibration_mode,
                     "candidates": result.candidates,
                     "reserved": result.reserved,
                     "submitted": result.submitted,
@@ -1658,6 +1677,8 @@ def live_loop_command(
     retry_wait_seconds: float,
     calibration_path: str | None = None,
     calibration_canary_notional_usd: float = 5.0,
+    bucket_calibration_path: str | None = str(DEFAULT_BUCKET_CALIBRATION_PATH),
+    bucket_calibration_mode: str = "apply",
     debug_log_path: str | None = None,
 ) -> None:
     if max_notional_usd is not None:
@@ -1680,6 +1701,8 @@ def live_loop_command(
             retry_wait_seconds=retry_wait_seconds,
             calibration_path=Path(calibration_path) if calibration_path else None,
             calibration_canary_notional_usd=calibration_canary_notional_usd,
+            bucket_calibration_path=Path(bucket_calibration_path).expanduser() if bucket_calibration_path else None,
+            bucket_calibration_mode=bucket_calibration_mode,
         )
         engine = LiveExecutionEngine(store, config)
         cycle = 0
@@ -1714,6 +1737,8 @@ def live_loop_command(
                             "core_notional_usd": edge_core_notional_usd,
                             "calibration_path": calibration_path,
                             "calibration_canary_notional_usd": calibration_canary_notional_usd,
+                            "bucket_calibration_path": bucket_calibration_path,
+                            "bucket_calibration_mode": bucket_calibration_mode,
                             "candidates": 0,
                             "reserved": 0,
                             "submitted": 0,
@@ -1742,6 +1767,8 @@ def live_loop_command(
                             "core_notional_usd": edge_core_notional_usd,
                             "calibration_path": calibration_path,
                             "calibration_canary_notional_usd": calibration_canary_notional_usd,
+                            "bucket_calibration_path": bucket_calibration_path,
+                            "bucket_calibration_mode": bucket_calibration_mode,
                             "candidates": result.candidates,
                             "reserved": result.reserved,
                             "submitted": result.submitted,
@@ -1805,6 +1832,8 @@ def research_loop_command(
     resolver_interval_seconds: int,
     resolve_after_local_hour: int,
     enable_paper_policy_promotion: bool = False,
+    bucket_calibration_path: str | None = str(DEFAULT_BUCKET_CALIBRATION_PATH),
+    bucket_calibration_mode: str = "apply",
 ) -> None:
     store = ExecutionStore(Path(db_path))
     try:
@@ -1819,6 +1848,8 @@ def research_loop_command(
             bankroll_usd=bankroll,
             market_limit=market_limit,
             market_scope=market_scope,
+            bucket_calibration_path=Path(bucket_calibration_path).expanduser() if bucket_calibration_path else None,
+            bucket_calibration_mode=bucket_calibration_mode,
         )
         resolver = ResearchResolver(
             store=store,
