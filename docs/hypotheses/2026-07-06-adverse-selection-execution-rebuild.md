@@ -156,6 +156,40 @@ P(adverse book move before fill | candidate, book event state, tactic)
 
 The target is not "best weather forecast"; it is "best fill-conditioned trade."
 
+### ML Setup Implication
+
+This phase does not require replacing the core weather-model training stack. Continue using the existing regression, tree-based, HRRR/METAR-enriched, bucket, CatBoost, and consensus model families as the forecast layer.
+
+What changes is the product of the ML system. The forecast layer should feed a pricing layer, not directly authorize ask-taking:
+
+```text
+existing forecast models
+-> calibrated outcome distribution
+-> market-aware shrinkage
+-> uncertainty estimate
+-> quoteable fair price
+-> adverse-selection haircut
+-> max bid / size / cancel rules
+```
+
+The practical additions are post-model:
+
+- Calibrate model probabilities by station, side, market family, time window, and model family.
+- Treat Polymarket price as a strong prior or reference point, not merely an after-the-fact comparison.
+- Penalize extreme model confidence unless recent calibration supports it.
+- Estimate uncertainty from model disagreement, station sample size, weather-data freshness, time-to-resolution, spread, depth, and recent calibration error.
+- Convert fair value into a conservative quote price with explicit haircuts and required margin.
+
+Evaluation should split forecast quality from tradability:
+
+| Layer | Main question | Metrics |
+| --- | --- | --- |
+| Forecast model | Did we predict the weather distribution well? | Brier, log loss, reliability curves, station/side calibration |
+| Pricing layer | Did the quoteable fair value preserve edge after haircuts? | quoted-price EV, calibration by fair band, edge monotonicity |
+| Quote policy | Did fills at our prices make money? | filled-subset R/R, filled vs missed replay, toxicity after fill, settlement PnL |
+
+The existing models can remain the backbone. Promotion should change: a model family is not live-ready because it has good selected replay; it is live-ready only when its calibrated quote prices lead to profitable filled-subset quote PnL.
+
 ## Rebuild Plan
 
 ### Phase 0: Instrumentation And Data Integrity

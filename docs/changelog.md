@@ -4,6 +4,7 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-07-06
 
+- Clarified the ML framing in `docs/hypotheses/2026-07-06-adverse-selection-execution-rebuild.md`: keep the existing regression/tree/HRRR/METAR forecast stack, but route outputs through calibration, market-aware shrinkage, uncertainty haircuts, quoteable fair prices, and filled-subset quote-PnL evaluation.
 - Refined `docs/hypotheses/2026-07-06-adverse-selection-execution-rebuild.md` so the primary next-phase build is a conservative price-maker / post-only quoting engine with calibrated quote prices, cancellation rules, shadow quote replay, and tiny funded quote canaries rather than a broad taker/resting execution-variant search.
 - Implemented Phase 0 adverse-selection instrumentation: live runs now persist pre-policy model candidates and policy candidates with stable `live_candidate_id` values, durable prediction snapshot IDs, candidate-to-position/order/event links, CLOB feed event storage, feed/local timestamps, and decision-time quote lifecycle feature payloads.
 - Added `weather_trader/execution/clob_feed.py` to normalize Polymarket market/user WebSocket messages into `clob_feed_events` rows, including `price_change`, `best_bid_ask`, `last_trade_price`, `tick_size_change`, and generic user-channel order/trade events.
