@@ -387,6 +387,11 @@ class ResearchPolicyEvaluator:
                     "selected_edge": _mean_present(edge_values),
                     "selected_fair": _mean_present(fair_values),
                     "source_prediction_snapshot_ids": [int(item["id"]) for item in agreed],
+                    "source_live_candidate_ids": [
+                        str(item["live_candidate_id"])
+                        for item in agreed
+                        if item.get("live_candidate_id")
+                    ],
                     "raw_policy": {
                         "model_group": group_name,
                         "model_names": list(required_models),

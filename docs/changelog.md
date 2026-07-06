@@ -4,6 +4,8 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-07-06
 
+- Implemented Phase 0 adverse-selection instrumentation: live runs now persist pre-policy model candidates and policy candidates with stable `live_candidate_id` values, durable prediction snapshot IDs, candidate-to-position/order/event links, CLOB feed event storage, feed/local timestamps, and decision-time quote lifecycle feature payloads.
+- Added `weather_trader/execution/clob_feed.py` to normalize Polymarket market/user WebSocket messages into `clob_feed_events` rows, including `price_change`, `best_bid_ask`, `last_trade_price`, `tick_size_change`, and generic user-channel order/trade events.
 - Added `docs/hypotheses/2026-07-06-adverse-selection-execution-rebuild.md`, a deep-dive execution rebuild report covering adverse selection, market microstructure lessons, local whole-chain evidence, and the recommended WebSocket/fill-conditioned execution roadmap.
 - Documented the execution-first phase in `docs/hypotheses/2026-07-06-execution-first-phase.md` after whole-chain analysis showed persistent replay-to-live divergence, adverse fill selection, and recent global low MVP signal degradation.
 - Updated `docs/live-trading-journal.md` to pause funded live trading pending fill-conditioned gates and to require actual filled R/R, filled-at-entry replay, filled-vs-unfilled selected comparison, settlement alignment, and recent-window checks before future promotion or sizing.

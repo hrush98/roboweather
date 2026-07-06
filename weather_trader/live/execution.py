@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import hashlib
 import json
 import math
 from datetime import datetime, timezone
@@ -223,6 +224,7 @@ class LiveAttemptResult:
 class LiveCandidate:
     plan: LiveStrategyPlan
     position: Any
+    live_candidate_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -885,9 +887,18 @@ class LiveExecutionEngine:
                 skipped += 1
                 reject_reasons["DUPLICATE_POSITION"] = reject_reasons.get("DUPLICATE_POSITION", 0) + 1
                 continue
+            self.store.link_live_candidate_position(candidate.live_candidate_id, position_id)
             reserved += 1
             self.store.insert_live_trade_event(
-                LiveTradeEvent(utc_now_iso(), position_id, position.strategy_name, LiveTradeEventType.ENTRY_RESERVED, "entry reserved", position.raw_json)
+                LiveTradeEvent(
+                    utc_now_iso(),
+                    position_id,
+                    position.strategy_name,
+                    LiveTradeEventType.ENTRY_RESERVED,
+                    "entry reserved",
+                    position.raw_json,
+                    live_candidate_id=position.live_candidate_id,
+                )
             )
             if reject_reason is not None:
                 rejected += 1
@@ -943,10 +954,12 @@ class LiveExecutionEngine:
         debug: dict[str, Any] | None = None,
     ) -> list[Any]:
         snapshots: list[dict[str, Any]] = []
-        snapshot_id = 1
         grouped: dict[tuple[str, Any, str], list[MarketSnapshot]] = {}
         for market in markets:
             grouped.setdefault(group_key(market), []).append(market)
+        cycle_timestamp = as_of_utc.isoformat()
+        market_by_id = {market.market_id: market for market in markets}
+        book_by_market_side = _book_by_market_side(markets, books)
         research_config = ResearchConfig(max_obs_age_minutes=self.config.max_obs_age_minutes, bankroll_usd=1000.0, market_limit=self.config.market_limit)
         debug_groups: list[dict[str, Any]] = []
         model_snapshot_counts: dict[str, int] = {}
@@ -987,9 +1000,17 @@ class LiveExecutionEngine:
                         selection = self.decision_engine.select_strategy(contexts, 1000.0, strategy_bucket)
                         for bucket in due_buckets:
                             snapshot = build_prediction_snapshot(selection, contexts, weather, market_date, as_of_utc, bucket, engine.model_name)
+                            persisted_snapshot_id = self.store.insert_or_get_prediction_snapshot(snapshot)
                             item = dataclass_to_jsonable(snapshot)
-                            item["id"] = snapshot_id
-                            snapshot_id += 1
+                            item["id"] = persisted_snapshot_id
+                            item["live_candidate_id"] = self._record_model_candidate(
+                                item,
+                                prediction_snapshot_id=persisted_snapshot_id,
+                                cycle_timestamp=cycle_timestamp,
+                                as_of_utc=as_of_utc,
+                                market_by_id=market_by_id,
+                                book_by_market_side=book_by_market_side,
+                            )
                             snapshots.append(item)
                             model_snapshot_counts[engine.model_name] = model_snapshot_counts.get(engine.model_name, 0) + 1
                             if len(debug_groups) < 100:
@@ -1029,11 +1050,28 @@ class LiveExecutionEngine:
                     position = self.policy_evaluator._position_from_candidate(policy, candidate)
                     if position is None:
                         continue
+                    live_candidate_id = self._record_policy_candidate(
+                        plan,
+                        policy,
+                        position,
+                        cycle_timestamp=cycle_timestamp,
+                        as_of_utc=as_of_utc,
+                        market_by_id=market_by_id,
+                        book_by_market_side=book_by_market_side,
+                    )
+                    position = replace(
+                        position,
+                        raw_policy={
+                            **dict(position.raw_policy or {}),
+                            "live_candidate_id": live_candidate_id,
+                            "source_live_candidate_ids": self._source_live_candidate_ids(candidate),
+                        },
+                    )
                     position_count += 1
                     key = (position.station, position.market_date, position.market_family, position.scope_key)
                     existing = plan_candidates.get(key)
                     if existing is None or position.timestamp < existing.position.timestamp:
-                        plan_candidates[key] = LiveCandidate(plan, position)
+                        plan_candidates[key] = LiveCandidate(plan, position, live_candidate_id)
                 policy_debug.append(
                     {
                         "policy": policy.name,
@@ -1070,6 +1108,194 @@ class LiveExecutionEngine:
                 "plans": plan_debug,
             }
         return candidates
+
+    def _record_model_candidate(
+        self,
+        item: dict[str, Any],
+        *,
+        prediction_snapshot_id: int,
+        cycle_timestamp: str,
+        as_of_utc: datetime,
+        market_by_id: dict[str, MarketSnapshot],
+        book_by_market_side: dict[tuple[str, str], BookSnapshot],
+    ) -> str:
+        selected_side = _optional_text(item.get("selected_side"))
+        selected_market_id = _optional_text(item.get("selected_market_id"))
+        selected_token_id = self._selected_token_id(selected_market_id, selected_side, market_by_id)
+        selected_book = book_by_market_side.get((selected_market_id or "", selected_side or ""))
+        candidate_id = self._stable_live_candidate_id(
+            "model",
+            cycle_timestamp,
+            prediction_snapshot_id,
+            item.get("station"),
+            item.get("market_date"),
+            item.get("market_family"),
+            item.get("obs_delay_bucket"),
+            item.get("strategy_bucket"),
+            item.get("model_name"),
+            selected_market_id,
+            selected_side,
+            item.get("selected_bucket"),
+        )
+        self.store.insert_live_candidate_snapshot(
+            candidate_id=candidate_id,
+            cycle_timestamp=cycle_timestamp,
+            local_receipt_timestamp=utc_now_iso(),
+            source_stage="MODEL_SNAPSHOT",
+            station=str(item.get("station") or ""),
+            market_date=item.get("market_date"),
+            market_family=str(item.get("market_family") or "HIGH_TEMP"),
+            obs_delay_bucket=_optional_text(item.get("obs_delay_bucket")),
+            strategy_bucket=_optional_text(item.get("strategy_bucket")),
+            model_name=_optional_text(item.get("model_name")),
+            prediction_snapshot_id=prediction_snapshot_id,
+            source_prediction_snapshot_ids=[prediction_snapshot_id],
+            selected_market_id=selected_market_id,
+            selected_token_id=selected_token_id,
+            selected_side=selected_side,
+            selected_bucket=_optional_text(item.get("selected_bucket")),
+            entry_price=_entry_price_from_item(item),
+            entry_fair=_selected_fair_from_item(item),
+            entry_edge=_float_or_none(item.get("selected_edge")),
+            quote_features=self._quote_lifecycle_features(selected_token_id, selected_book, as_of_utc),
+            raw_payload=item,
+        )
+        return candidate_id
+
+    def _record_policy_candidate(
+        self,
+        plan: LiveStrategyPlan,
+        policy: ResearchPolicySpec,
+        position: Any,
+        *,
+        cycle_timestamp: str,
+        as_of_utc: datetime,
+        market_by_id: dict[str, MarketSnapshot],
+        book_by_market_side: dict[tuple[str, str], BookSnapshot],
+    ) -> str:
+        selected_side = str(position.selected_side)
+        selected_market_id = str(position.selected_market_id)
+        selected_token_id = self._selected_token_id(selected_market_id, selected_side, market_by_id)
+        selected_book = book_by_market_side.get((selected_market_id, selected_side))
+        source_ids = [int(value) for value in position.source_prediction_snapshot_ids]
+        candidate_id = self._stable_live_candidate_id(
+            "policy",
+            cycle_timestamp,
+            plan.strategy.name,
+            policy.name,
+            position.station,
+            position.market_date,
+            position.market_family,
+            position.scope_key,
+            *source_ids,
+        )
+        self.store.insert_live_candidate_snapshot(
+            candidate_id=candidate_id,
+            cycle_timestamp=cycle_timestamp,
+            local_receipt_timestamp=utc_now_iso(),
+            source_stage="POLICY_CANDIDATE",
+            strategy_name=plan.strategy.name,
+            policy_name=policy.name,
+            model_group=str(position.model_group),
+            station=str(position.station),
+            market_date=position.market_date,
+            market_family=str(position.market_family),
+            obs_delay_bucket=str(position.obs_delay_bucket),
+            strategy_bucket=str(position.strategy_bucket),
+            source_prediction_snapshot_ids=source_ids,
+            selected_market_id=selected_market_id,
+            selected_token_id=selected_token_id,
+            selected_side=selected_side,
+            selected_bucket=position.selected_bucket,
+            entry_price=position.entry_price,
+            entry_fair=position.entry_fair,
+            entry_edge=position.entry_edge,
+            quote_features=self._quote_lifecycle_features(selected_token_id, selected_book, as_of_utc),
+            raw_payload=dataclass_to_jsonable(position),
+        )
+        return candidate_id
+
+    def _quote_lifecycle_features(
+        self,
+        token_id: str | None,
+        book: BookSnapshot | None,
+        as_of_utc: datetime,
+    ) -> dict[str, Any]:
+        features: dict[str, Any] = {
+            "version": 1,
+            "source": "rest_book_plus_clob_feed_events",
+            "decision_time_utc": as_of_utc.isoformat(),
+            "token_id": token_id,
+            "top_book_age_seconds": None,
+            "top_level_add_count_5m": 0,
+            "top_level_cancel_count_5m": 0,
+            "spread_change_count_5m": 0,
+            "recent_trade_count_5m": 0,
+            "selected_ask_just_posted": None,
+            "selected_ask_just_depleted": None,
+        }
+        if book is not None:
+            features.update(
+                {
+                    "rest_book_timestamp": book.timestamp,
+                    "best_bid": book.best_bid,
+                    "best_ask": book.best_ask,
+                    "spread": book.spread,
+                    "top_bid_size": book.bids[0].size if book.bids else None,
+                    "top_ask_size": book.asks[0].size if book.asks else None,
+                    "ask_depth_at_top": book.ask_depth_usd(book.best_ask) if book.best_ask is not None else 0.0,
+                    "bid_depth_at_top": book.bid_depth_usd(book.best_bid) if book.best_bid is not None else 0.0,
+                }
+            )
+            features["top_book_age_seconds"] = _seconds_between(book.timestamp, as_of_utc)
+            bid_size = float(book.bids[0].size) if book.bids else 0.0
+            ask_size = float(book.asks[0].size) if book.asks else 0.0
+            total = bid_size + ask_size
+            features["top_of_book_imbalance"] = ((bid_size - ask_size) / total) if total > 0 else None
+        if token_id:
+            summary = self.store.clob_feed_summary(token_id, received_before=as_of_utc.isoformat(), lookback_seconds=300.0)
+            features["feed_event_summary_5m"] = summary
+            features["top_level_add_count_5m"] = summary["top_level_add_count"]
+            features["top_level_cancel_count_5m"] = summary["top_level_cancel_count"]
+            features["spread_change_count_5m"] = summary["event_counts"].get("best_bid_ask", 0)
+            features["recent_trade_count_5m"] = summary["event_counts"].get("last_trade_price", 0)
+            if summary["latest_event_received_at"] is not None:
+                features["latest_feed_event_received_at"] = summary["latest_event_received_at"]
+                features["selected_ask_just_posted"] = summary["top_level_add_count"] > 0
+                features["selected_ask_just_depleted"] = summary["top_level_cancel_count"] > 0
+        return features
+
+    def _source_live_candidate_ids(self, candidate: dict[str, Any]) -> list[str]:
+        result: list[str] = []
+        values = candidate.get("source_live_candidate_ids")
+        if isinstance(values, list):
+            result.extend(str(item) for item in values if item)
+        value = candidate.get("live_candidate_id")
+        if isinstance(value, str) and value and value not in result:
+            result.append(value)
+        return result
+
+    def _selected_token_id(
+        self,
+        selected_market_id: str | None,
+        selected_side: str | None,
+        market_by_id: dict[str, MarketSnapshot],
+    ) -> str | None:
+        if selected_market_id is None or selected_side is None:
+            return None
+        market = market_by_id.get(selected_market_id)
+        if market is None:
+            return None
+        if selected_side == str(TradeAction.BUY_YES):
+            return market.yes_token_id
+        if selected_side == str(TradeAction.BUY_NO):
+            return market.no_token_id
+        return None
+
+    def _stable_live_candidate_id(self, stage: str, *parts: Any) -> str:
+        payload = json.dumps([str(part) for part in parts], sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+        return f"{stage}_{digest}"
 
     def _build_signal(
         self,
@@ -1353,9 +1579,11 @@ class LiveExecutionEngine:
             target_shares=target_shares,
             state=LivePositionState.RESERVED,
             source_prediction_snapshot_ids=source.source_prediction_snapshot_ids,
+            live_candidate_id=candidate.live_candidate_id,
             raw_json={
                 "candidate": dataclass_to_jsonable(source),
                 "strategy": dataclass_to_jsonable(candidate.plan.strategy),
+                "live_candidate_id": candidate.live_candidate_id,
                 "limit_price": limit_price,
                 "reject_reason": reject_reason,
                 "sizing": sizing.raw_json,
@@ -1384,6 +1612,7 @@ class LiveExecutionEngine:
                 None,
                 0.0,
                 {"blocked": True, "reason": reason, "calibration": position.raw_json.get("calibration")},
+                live_candidate_id=position.live_candidate_id,
             )
         )
 
@@ -1502,6 +1731,7 @@ class LiveExecutionEngine:
                             LiveTradeEventType.ENTRY_CONFIRMED,
                             "first order filled during retry wait",
                             {"order_id": first_attempt.response.order_id, "state": str(refreshed_state), "raw": refreshed_raw},
+                            live_candidate_id=position.live_candidate_id,
                         )
                     )
                     if refreshed_state != LivePositionState.PARTIAL:
@@ -1514,6 +1744,7 @@ class LiveExecutionEngine:
                         LiveTradeEventType.ENTRY_SUBMIT,
                         "first order still open after retry wait",
                         {"order_id": first_attempt.response.order_id, "state": str(refreshed_state), "raw": refreshed_raw},
+                        live_candidate_id=position.live_candidate_id,
                     )
                 )
         else:
@@ -1530,6 +1761,7 @@ class LiveExecutionEngine:
                         "full_target_notional_usd": full_target_notional,
                         "remaining_after_initial_fak_usd": remaining_after_first,
                     },
+                    live_candidate_id=position.live_candidate_id,
                 )
             )
 
@@ -1549,6 +1781,7 @@ class LiveExecutionEngine:
                     LiveTradeEventType.ENTRY_SUBMIT,
                     f"retry skipped: {retry_reason or 'NO_TARGET'}",
                     {"retry_book_timestamp": retry_book.timestamp, "retry_reason": retry_reason},
+                    live_candidate_id=position.live_candidate_id,
                 )
             )
             if not first_order_open:
@@ -1699,6 +1932,7 @@ class LiveExecutionEngine:
                     LiveTradeEventType.ENTRY_SUBMIT,
                     f"resting fallback skipped: {resting_reason or 'NO_TARGET'}",
                     {"source_reason": source_reason, "resting_book_timestamp": resting_book.timestamp, "resting_reason": resting_reason},
+                    live_candidate_id=position.live_candidate_id,
                 )
             )
             return None
@@ -2060,6 +2294,7 @@ class LiveExecutionEngine:
                 attempt.avg_price,
                 attempt.cost_usd,
                 attempt_payload,
+                live_candidate_id=position.live_candidate_id,
             )
         )
         if update_position:
@@ -2091,6 +2326,7 @@ class LiveExecutionEngine:
                 LiveTradeEventType.ENTRY_SUBMIT,
                 f"{attempt_label} {attempt.state}",
                 attempt.response.raw,
+                live_candidate_id=position.live_candidate_id,
             )
         )
 
@@ -2313,6 +2549,50 @@ def _book_by_market_side(markets: list[MarketSnapshot], books: dict[str, BookSna
         if market.no_token_id and market.no_token_id in books:
             result[(market.market_id, str(TradeAction.BUY_NO))] = books[market.no_token_id]
     return result
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if text else None
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _entry_price_from_item(item: dict[str, Any]) -> float | None:
+    side = str(item.get("selected_side") or "")
+    if side == str(TradeAction.BUY_YES):
+        return _float_or_none(item.get("selected_yes_ask"))
+    if side == str(TradeAction.BUY_NO):
+        return _float_or_none(item.get("selected_no_ask"))
+    return None
+
+
+def _selected_fair_from_item(item: dict[str, Any]) -> float | None:
+    side = str(item.get("selected_side") or "")
+    if side == str(TradeAction.BUY_YES):
+        return _float_or_none(item.get("selected_fair_yes"))
+    if side == str(TradeAction.BUY_NO):
+        return _float_or_none(item.get("selected_fair_no"))
+    return None
+
+
+def _seconds_between(timestamp: str, as_of_utc: datetime) -> float | None:
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, (as_of_utc - parsed.astimezone(timezone.utc)).total_seconds())
 
 
 def _state_from_response(response: OrderSubmission) -> LivePositionState:

@@ -351,21 +351,24 @@ class FairValueEngine:
         raw_fair_yes: float,
         reason_codes: list[str],
     ) -> tuple[float, dict[str, Any]]:
-        if self.bucket_calibration_mode == "off":
-            return raw_fair_yes, disabled_metadata(path=self.bucket_calibration_path, mode="off", reason="mode_off")
+        mode = getattr(self, "bucket_calibration_mode", "off")
+        path = getattr(self, "bucket_calibration_path", None)
+        calibrator = getattr(self, "bucket_calibrator", None)
+        if mode == "off":
+            return raw_fair_yes, disabled_metadata(path=path, mode="off", reason="mode_off")
         if market.market_family != MarketFamily.HIGH_TEMP:
             return raw_fair_yes, disabled_metadata(
-                path=self.bucket_calibration_path,
-                mode=self.bucket_calibration_mode,
+                path=path,
+                mode=mode,
                 reason="market_family_not_supported",
             )
-        if self.bucket_calibrator is None:
+        if calibrator is None:
             return raw_fair_yes, disabled_metadata(
-                path=self.bucket_calibration_path,
-                mode=self.bucket_calibration_mode,
+                path=path,
+                mode=mode,
                 reason="artifact_missing",
             )
-        result = self.bucket_calibrator.calibrate(model_name=self.model_name, station=weather.station, raw_fair_yes=raw_fair_yes)
+        result = calibrator.calibrate(model_name=self.model_name, station=weather.station, raw_fair_yes=raw_fair_yes)
         reason_codes.append("BUCKET_CALIBRATION_APPLIED" if result.applied else "BUCKET_CALIBRATION_MISSING_FIT")
         if result.fit_scope == "model_station":
             reason_codes.append("BUCKET_CALIBRATION_MODEL_STATION")

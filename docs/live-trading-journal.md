@@ -127,6 +127,7 @@ The 360-second TTL is a deliberate compromise: weather does not normally reprice
 
 ### 2026-07-06
 
+- Implemented Phase 0 instrumentation for the adverse-selection program. Live cycles now write the full pre-policy model candidate universe, policy candidate rows, stable `live_candidate_id` links to reserved positions/order attempts/trade events, normalized CLOB feed events, local receipt timestamps, and decision-time quote lifecycle features. Funded live trading remains paused; this is instrumentation, not a restart approval.
 - Phase change: funded live trading should remain paused while the system moves to an execution-first rebuild. Raw snapshot replay remains useful for hypothesis generation, but it is no longer sufficient evidence for live promotion or sizing.
 - Execution rebuild direction is documented in `docs/hypotheses/2026-07-06-adverse-selection-execution-rebuild.md`: the next phase should add event-driven book capture, full live candidate persistence, fill/toxicity modeling, tactic-specific execution routing, and tiny randomized live experiments before any normal funded restart.
 - Whole-chain review showed the repeated failure mode is structural: since 2026-06-20, live-selected rows replayed at +0.455 R/R on $3,878.50 intended risk, but actual filled rows lost -0.138 R/R on $578.22 filled. Filled-at-entry replay was already negative (-0.150 R/R), while unfilled selected replay was positive (+0.624 R/R).

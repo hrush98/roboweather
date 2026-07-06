@@ -154,6 +154,8 @@ The target is not "best weather forecast"; it is "best fill-conditioned trade."
 
 No funded restart until this exists.
 
+Implementation status, 2026-07-06: source support is in place for durable live candidate rows, stable `live_candidate_id` links, normalized CLOB feed event persistence, local receipt timestamps, and decision-time quote lifecycle feature payloads. Funded trading remains paused until a live recorder process is actually run against current candidates and the resulting timelines pass review.
+
 - Persist the full live candidate universe before policy filtering, with stable candidate IDs linked to selected positions, order attempts, fills, user-channel events, and final outcomes.
 - Add a WebSocket order-book recorder for traded and candidate token IDs: `book`, `price_change`, `best_bid_ask`, `last_trade_price`, `tick_size_change`.
 - Add user-channel order/trade recording so order lifecycle is not inferred only from REST polling.

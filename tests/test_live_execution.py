@@ -8,6 +8,7 @@ import pytest
 
 import weather_trader.live.execution as live_execution
 from weather_trader.execution.clob_executor import AllowanceCheck, CancelSubmission, OrderSubmission
+from weather_trader.execution.clob_feed import record_clob_message
 from weather_trader.execution.contracts import (
     BookLevel,
     BookSnapshot,
@@ -640,6 +641,50 @@ def test_live_dashboard_marks_no_bid_sub_cent_ask_as_zero(tmp_path: Path) -> Non
     assert rows[0]["unrealized_pnl"] == pytest.approx(-4.916)
 
 
+def test_clob_feed_recorder_persists_price_change_rows_and_summary(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+
+    ids = record_clob_message(
+        store,
+        channel="market",
+        received_at="2026-05-20T16:30:01+00:00",
+        message={
+            "event_type": "price_change",
+            "market": "condition-1",
+            "timestamp": "1757908892351",
+            "price_changes": [
+                {
+                    "asset_id": "no-token",
+                    "price": "0.40",
+                    "size": "100",
+                    "side": "SELL",
+                    "best_bid": "0.38",
+                    "best_ask": "0.40",
+                },
+                {
+                    "asset_id": "no-token",
+                    "price": "0.40",
+                    "size": "0",
+                    "side": "SELL",
+                    "best_bid": "0.37",
+                    "best_ask": "0.41",
+                },
+            ],
+        },
+        live_candidate_id="model_abc",
+    )
+
+    assert len(ids) == 2
+    row = store.connection.execute("select * from clob_feed_events where id = ?", (ids[0],)).fetchone()
+    assert row["event_type"] == "price_change"
+    assert row["token_id"] == "no-token"
+    assert row["live_candidate_id"] == "model_abc"
+    summary = store.clob_feed_summary("no-token", received_before="2026-05-20T16:31:00+00:00")
+    assert summary["event_count"] == 2
+    assert summary["top_level_add_count"] == 1
+    assert summary["top_level_cancel_count"] == 1
+
+
 def test_live_submit_uses_three_dollar_fak_buy(tmp_path: Path) -> None:
     store = ExecutionStore(tmp_path / "live.sqlite")
     engine = LiveExecutionEngine(
@@ -733,6 +778,85 @@ class StaticFairValueEngine:
             )
             for market in markets
         }
+
+
+def test_live_build_candidates_persists_prefilter_universe_and_links_position(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    as_of = datetime(2026, 5, 20, 16, 30, tzinfo=timezone.utc)
+    engine = LiveExecutionEngine(
+        store,
+        LiveExecutionConfig(live_db_path=store.path, model_paths=(), mode="dry-run", bucket_calibration_mode="off"),
+        submitter=FakeSubmitter(),
+    )
+    engine.fair_value_engines = [StaticFairValueEngine(DYNAMIC_TUNED_MODEL), StaticFairValueEngine(CATBOOST_MODEL)]
+
+    markets = [
+        _candidate_market("market-1", 72, 73, "yes-token-1", "no-token-1"),
+        _candidate_market("market-2", 74, 75, "yes-token-2", "no-token-2"),
+        _candidate_market("market-3", 76, 77, "yes-token-3", "no-token-3"),
+    ]
+    books = {
+        "yes-token-1": _book("yes-token-1", ask=0.80),
+        "no-token-1": _book("no-token-1", ask=0.40),
+        "yes-token-2": _book("yes-token-2", ask=0.80),
+        "no-token-2": _book("no-token-2", ask=0.50),
+        "yes-token-3": _book("yes-token-3", ask=0.80),
+        "no-token-3": _book("no-token-3", ask=0.60),
+    }
+    weather = StationWeatherState(
+        station="KATL",
+        local_date=date(2026, 5, 20),
+        latest_obs_time="2026-05-20T16:20:00+00:00",
+        latest_obs_age_minutes=10.0,
+        current_temp=72.0,
+        high_so_far=72.0,
+        low_so_far=68.0,
+        hour_local=12,
+        day_of_year=140,
+        temp_change_1h=0.0,
+        temp_change_3h=0.0,
+        dewpoint=60.0,
+        wind_speed=5.0,
+        wind_dir_sin=0.0,
+        wind_dir_cos=1.0,
+        cloud_cover_code=0.0,
+    )
+
+    candidates = engine._build_candidates(markets, books, {"KATL": weather}, as_of, [], {})
+
+    assert candidates
+    model_rows = store.connection.execute(
+        "select candidate_id, prediction_snapshot_id, quote_features_json from live_candidate_snapshots where source_stage = 'MODEL_SNAPSHOT'"
+    ).fetchall()
+    policy_rows = store.connection.execute(
+        "select candidate_id, source_prediction_snapshot_ids from live_candidate_snapshots where source_stage = 'POLICY_CANDIDATE'"
+    ).fetchall()
+    assert len(model_rows) >= 2
+    assert policy_rows
+    assert all(row["prediction_snapshot_id"] is not None for row in model_rows)
+    assert json.loads(model_rows[0]["quote_features_json"])["top_book_age_seconds"] == pytest.approx(0.0)
+
+    candidate = next(item for item in candidates if item.live_candidate_id == policy_rows[0]["candidate_id"])
+    sizing = engine._size_candidate(candidate, as_of)
+    market_by_id = {market.market_id: market for market in markets}
+    position = engine._live_position(candidate, market_by_id[candidate.position.selected_market_id], reject_reason=None, sizing=sizing)
+    position_id = store.insert_live_policy_position(position)
+    assert position_id is not None
+    store.link_live_candidate_position(candidate.live_candidate_id, position_id)
+    engine._record_rejected(position_id, position, "TEST_REJECT")
+
+    linked = store.connection.execute(
+        """
+        select lpp.live_candidate_id, loa.live_candidate_id, lcs.live_position_id
+        from live_policy_positions lpp
+        join live_order_attempts loa on loa.live_position_id = lpp.id
+        join live_candidate_snapshots lcs on lcs.candidate_id = lpp.live_candidate_id
+        where lpp.id = ?
+        """,
+        (position_id,),
+    ).fetchone()
+    assert linked["live_candidate_id"] == candidate.live_candidate_id
+    assert linked["live_position_id"] == position_id
 
 
 def _candidate_market(

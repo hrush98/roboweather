@@ -630,6 +630,7 @@ class LivePolicyPosition:
     target_shares: float
     state: LivePositionState
     source_prediction_snapshot_ids: list[int]
+    live_candidate_id: str | None = None
     resolved_at: str | None = None
     resolution_source: str | None = None
     winning_token_id: str | None = None
@@ -659,6 +660,7 @@ class LiveOrderAttempt:
     avg_price: float | None
     cost_usd: float
     raw_payload: dict[str, Any]
+    live_candidate_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -669,6 +671,7 @@ class LiveTradeEvent:
     event_type: LiveTradeEventType
     message: str
     raw_payload: dict[str, Any]
+    live_candidate_id: str | None = None
 
 
 @dataclass(frozen=True)

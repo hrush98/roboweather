@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import fields, is_dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +35,7 @@ from weather_trader.execution.contracts import (
     StationDateOutcome,
     StationDateDecisionTrace,
     dataclass_to_jsonable,
+    utc_now_iso,
 )
 
 
@@ -116,11 +117,37 @@ class ExecutionStore:
                 id integer primary key autoincrement,
                 token_id text not null,
                 timestamp text not null,
+                received_at text,
                 source text not null,
                 best_bid real,
                 best_ask real,
                 raw_json text not null
             );
+
+            create table if not exists clob_feed_events (
+                id integer primary key autoincrement,
+                channel text not null,
+                event_type text not null,
+                market_id text,
+                token_id text,
+                side text,
+                price real,
+                size real,
+                best_bid real,
+                best_ask real,
+                feed_timestamp text,
+                feed_timestamp_ms integer,
+                received_at text not null,
+                live_candidate_id text,
+                live_position_id integer,
+                external_order_id text,
+                raw_json text not null
+            );
+
+            create index if not exists idx_clob_feed_events_token_received
+                on clob_feed_events(token_id, received_at);
+            create index if not exists idx_clob_feed_events_candidate
+                on clob_feed_events(live_candidate_id);
 
             create table if not exists signals (
                 id integer primary key autoincrement,
@@ -511,6 +538,7 @@ class ExecutionStore:
             create table if not exists live_policy_positions (
                 id integer primary key autoincrement,
                 timestamp text not null,
+                live_candidate_id text,
                 strategy_name text not null,
                 station text not null,
                 market_date text not null,
@@ -547,6 +575,7 @@ class ExecutionStore:
             create table if not exists live_order_attempts (
                 id integer primary key autoincrement,
                 timestamp text not null,
+                live_candidate_id text,
                 live_position_id integer not null,
                 attempt_seq integer not null,
                 token_id text not null,
@@ -569,6 +598,7 @@ class ExecutionStore:
             create table if not exists live_trade_events (
                 id integer primary key autoincrement,
                 timestamp text not null,
+                live_candidate_id text,
                 live_position_id integer,
                 strategy_name text,
                 event_type text not null,
@@ -584,6 +614,40 @@ class ExecutionStore:
                 station_date_exposure_usd text not null,
                 raw_payload text not null
             );
+
+            create table if not exists live_candidate_snapshots (
+                id integer primary key autoincrement,
+                candidate_id text not null unique,
+                cycle_timestamp text not null,
+                local_receipt_timestamp text not null,
+                source_stage text not null,
+                strategy_name text,
+                policy_name text,
+                model_name text,
+                model_group text,
+                prediction_snapshot_id integer,
+                source_prediction_snapshot_ids text not null,
+                live_position_id integer,
+                station text not null,
+                market_date text,
+                market_family text not null,
+                obs_delay_bucket text,
+                strategy_bucket text,
+                selected_market_id text,
+                selected_token_id text,
+                selected_side text,
+                selected_bucket text,
+                entry_price real,
+                entry_fair real,
+                entry_edge real,
+                quote_features_json text not null,
+                raw_json text not null
+            );
+
+            create index if not exists idx_live_candidate_snapshots_position
+                on live_candidate_snapshots(live_position_id);
+            create index if not exists idx_live_candidate_snapshots_snapshot
+                on live_candidate_snapshots(prediction_snapshot_id);
 
             create table if not exists hermes_insights (
                 id integer primary key autoincrement,
@@ -671,9 +735,11 @@ class ExecutionStore:
             },
         )
         self._add_nullable_columns("markets", {"market_family": "text not null default 'HIGH_TEMP'"})
+        self._add_nullable_columns("book_snapshots", {"received_at": "text"})
         self._add_nullable_columns(
             "live_policy_positions",
             {
+                "live_candidate_id": "text",
                 "resolved_at": "text",
                 "resolution_source": "text",
                 "winning_token_id": "text",
@@ -683,6 +749,8 @@ class ExecutionStore:
                 "realized_rr": "real",
             },
         )
+        self._add_nullable_columns("live_order_attempts", {"live_candidate_id": "text"})
+        self._add_nullable_columns("live_trade_events", {"live_candidate_id": "text"})
         self._add_nullable_columns("station_date_outcomes", {"final_low_tmpf": "real"})
         self._add_nullable_columns("prediction_results", {"market_family": "text not null default 'HIGH_TEMP'", "final_low_tmpf": "real"})
         self.connection.commit()
@@ -846,14 +914,118 @@ class ExecutionStore:
 
     def insert_book_snapshot(self, book: BookSnapshot) -> None:
         data = dataclass_to_jsonable(book)
+        data.setdefault("received_at", utc_now_iso())
         self.connection.execute(
             """
-            insert into book_snapshots (token_id, timestamp, source, best_bid, best_ask, raw_json)
-            values (?, ?, ?, ?, ?, ?)
+            insert into book_snapshots (token_id, timestamp, received_at, source, best_bid, best_ask, raw_json)
+            values (?, ?, ?, ?, ?, ?, ?)
             """,
-            (book.token_id, book.timestamp, book.source, book.best_bid, book.best_ask, json.dumps(data, sort_keys=True)),
+            (book.token_id, book.timestamp, data["received_at"], book.source, book.best_bid, book.best_ask, json.dumps(data, sort_keys=True)),
         )
         self.connection.commit()
+
+    def insert_clob_feed_event(
+        self,
+        *,
+        channel: str,
+        event_type: str,
+        received_at: str,
+        raw_payload: dict[str, Any],
+        market_id: str | None = None,
+        token_id: str | None = None,
+        side: str | None = None,
+        price: float | None = None,
+        size: float | None = None,
+        best_bid: float | None = None,
+        best_ask: float | None = None,
+        feed_timestamp: str | None = None,
+        feed_timestamp_ms: int | None = None,
+        live_candidate_id: str | None = None,
+        live_position_id: int | None = None,
+        external_order_id: str | None = None,
+    ) -> int:
+        cursor = self.connection.execute(
+            """
+            insert into clob_feed_events (
+                channel, event_type, market_id, token_id, side, price, size,
+                best_bid, best_ask, feed_timestamp, feed_timestamp_ms, received_at,
+                live_candidate_id, live_position_id, external_order_id, raw_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                channel,
+                event_type,
+                market_id,
+                token_id,
+                side,
+                price,
+                size,
+                best_bid,
+                best_ask,
+                feed_timestamp,
+                feed_timestamp_ms,
+                received_at,
+                live_candidate_id,
+                live_position_id,
+                external_order_id,
+                json.dumps(raw_payload, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+        return int(cursor.lastrowid)
+
+    def clob_feed_summary(self, token_id: str, *, received_before: str, lookback_seconds: float = 300.0) -> dict[str, Any]:
+        try:
+            before_dt = datetime.fromisoformat(received_before.replace("Z", "+00:00"))
+            since_dt = before_dt.timestamp() - float(lookback_seconds)
+            since = datetime.fromtimestamp(since_dt, tz=before_dt.tzinfo or timezone.utc).isoformat()
+        except Exception:
+            since = ""
+        rows = self.connection.execute(
+            """
+            select event_type, side, size, best_bid, best_ask, received_at, feed_timestamp, feed_timestamp_ms
+            from clob_feed_events
+            where token_id = ?
+                and received_at <= ?
+                and (? = '' or received_at >= ?)
+            order by received_at desc, id desc
+            """,
+            (token_id, received_before, since, since),
+        ).fetchall()
+        counts: dict[str, int] = {}
+        add_count = cancel_count = 0
+        latest_best_bid = latest_best_ask = None
+        latest_event_received_at = latest_feed_timestamp = None
+        latest_feed_timestamp_ms = None
+        for row in rows:
+            event_type = str(row["event_type"])
+            counts[event_type] = counts.get(event_type, 0) + 1
+            if row["size"] is not None:
+                if float(row["size"]) <= 0.0:
+                    cancel_count += 1
+                else:
+                    add_count += 1
+            if latest_event_received_at is None:
+                latest_event_received_at = row["received_at"]
+                latest_feed_timestamp = row["feed_timestamp"]
+                latest_feed_timestamp_ms = row["feed_timestamp_ms"]
+            if latest_best_bid is None and row["best_bid"] is not None:
+                latest_best_bid = float(row["best_bid"])
+            if latest_best_ask is None and row["best_ask"] is not None:
+                latest_best_ask = float(row["best_ask"])
+        return {
+            "lookback_seconds": float(lookback_seconds),
+            "event_count": len(rows),
+            "event_counts": counts,
+            "top_level_add_count": add_count,
+            "top_level_cancel_count": cancel_count,
+            "latest_event_received_at": latest_event_received_at,
+            "latest_feed_timestamp": latest_feed_timestamp,
+            "latest_feed_timestamp_ms": latest_feed_timestamp_ms,
+            "latest_best_bid": latest_best_bid,
+            "latest_best_ask": latest_best_ask,
+        }
 
     def insert_signal(self, signal: Signal) -> int:
         data = dataclass_to_jsonable(signal)
@@ -1182,6 +1354,43 @@ class ExecutionStore:
         if cursor.rowcount == 0:
             return None
         return int(cursor.lastrowid)
+
+    def prediction_snapshot_id_for_snapshot(self, snapshot: PredictionSnapshot) -> int | None:
+        data = dataclass_to_jsonable(snapshot)
+        row = self.connection.execute(
+            """
+            select id
+            from prediction_snapshots
+            where station = ?
+                and market_date = ?
+                and market_family = ?
+                and latest_obs_time_utc = ?
+                and obs_delay_bucket = ?
+                and strategy_bucket = ?
+                and model_name = ?
+            order by id desc
+            limit 1
+            """,
+            (
+                snapshot.station,
+                data["market_date"],
+                str(snapshot.market_family),
+                snapshot.latest_obs_time_utc,
+                snapshot.obs_delay_bucket,
+                str(snapshot.strategy_bucket),
+                snapshot.model_name,
+            ),
+        ).fetchone()
+        return None if row is None else int(row["id"])
+
+    def insert_or_get_prediction_snapshot(self, snapshot: PredictionSnapshot) -> int:
+        inserted = self.insert_prediction_snapshot(snapshot)
+        if inserted is not None:
+            return inserted
+        existing = self.prediction_snapshot_id_for_snapshot(snapshot)
+        if existing is None:
+            raise RuntimeError("prediction snapshot insert was ignored but existing row was not found")
+        return existing
 
     def upsert_station_date_outcome(self, outcome: StationDateOutcome) -> None:
         data = dataclass_to_jsonable(outcome)
@@ -1732,22 +1941,110 @@ class ExecutionStore:
         self.connection.commit()
         return int(cursor.rowcount)
 
+    def insert_live_candidate_snapshot(
+        self,
+        *,
+        candidate_id: str,
+        cycle_timestamp: str,
+        local_receipt_timestamp: str,
+        source_stage: str,
+        station: str,
+        market_family: str,
+        source_prediction_snapshot_ids: list[int],
+        raw_payload: dict[str, Any],
+        quote_features: dict[str, Any] | None = None,
+        strategy_name: str | None = None,
+        policy_name: str | None = None,
+        model_name: str | None = None,
+        model_group: str | None = None,
+        prediction_snapshot_id: int | None = None,
+        live_position_id: int | None = None,
+        market_date: date | str | None = None,
+        obs_delay_bucket: str | None = None,
+        strategy_bucket: str | None = None,
+        selected_market_id: str | None = None,
+        selected_token_id: str | None = None,
+        selected_side: str | None = None,
+        selected_bucket: str | None = None,
+        entry_price: float | None = None,
+        entry_fair: float | None = None,
+        entry_edge: float | None = None,
+    ) -> int | None:
+        cursor = self.connection.execute(
+            """
+            insert or ignore into live_candidate_snapshots (
+                candidate_id, cycle_timestamp, local_receipt_timestamp, source_stage,
+                strategy_name, policy_name, model_name, model_group,
+                prediction_snapshot_id, source_prediction_snapshot_ids, live_position_id,
+                station, market_date, market_family, obs_delay_bucket, strategy_bucket,
+                selected_market_id, selected_token_id, selected_side, selected_bucket,
+                entry_price, entry_fair, entry_edge, quote_features_json, raw_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                candidate_id,
+                cycle_timestamp,
+                local_receipt_timestamp,
+                source_stage,
+                strategy_name,
+                policy_name,
+                model_name,
+                model_group,
+                prediction_snapshot_id,
+                json.dumps(source_prediction_snapshot_ids),
+                live_position_id,
+                station,
+                _date_text(market_date),
+                market_family,
+                obs_delay_bucket,
+                strategy_bucket,
+                selected_market_id,
+                selected_token_id,
+                selected_side,
+                selected_bucket,
+                entry_price,
+                entry_fair,
+                entry_edge,
+                json.dumps(quote_features or {}, sort_keys=True),
+                json.dumps(raw_payload, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+        if cursor.rowcount == 0:
+            return None
+        return int(cursor.lastrowid)
+
+    def link_live_candidate_position(self, candidate_id: str | None, live_position_id: int) -> None:
+        if not candidate_id:
+            return
+        self.connection.execute(
+            """
+            update live_candidate_snapshots
+            set live_position_id = ?
+            where candidate_id = ? and live_position_id is null
+            """,
+            (live_position_id, candidate_id),
+        )
+        self.connection.commit()
+
     def insert_live_policy_position(self, position: LivePolicyPosition) -> int | None:
         data = dataclass_to_jsonable(position)
         raw_payload = {**data, **(position.raw_json or {})}
         cursor = self.connection.execute(
             """
             insert or ignore into live_policy_positions (
-                timestamp, strategy_name, station, market_date, market_family, scope_key,
+                timestamp, live_candidate_id, strategy_name, station, market_date, market_family, scope_key,
                 selected_market_id, selected_token_id, selected_side, selected_bucket,
                 obs_delay_bucket, entry_price, entry_fair, entry_edge,
                 target_notional_usd, target_shares, state,
                 source_prediction_snapshot_ids, raw_json
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 position.timestamp,
+                position.live_candidate_id,
                 position.strategy_name,
                 position.station,
                 data["market_date"],
@@ -1973,15 +2270,16 @@ class ExecutionStore:
         cursor = self.connection.execute(
             """
             insert or ignore into live_order_attempts (
-                timestamp, live_position_id, attempt_seq, token_id, side, order_mode,
+                timestamp, live_candidate_id, live_position_id, attempt_seq, token_id, side, order_mode,
                 limit_price, target_notional_usd, target_shares, external_order_id,
                 external_status, final_state, final_reason, filled_shares,
                 avg_price, cost_usd, raw_payload
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 attempt.timestamp,
+                attempt.live_candidate_id,
                 attempt.live_position_id,
                 attempt.attempt_seq,
                 attempt.token_id,
@@ -2010,12 +2308,13 @@ class ExecutionStore:
         cursor = self.connection.execute(
             """
             insert into live_trade_events (
-                timestamp, live_position_id, strategy_name, event_type, message, raw_payload
+                timestamp, live_candidate_id, live_position_id, strategy_name, event_type, message, raw_payload
             )
-            values (?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event.timestamp,
+                event.live_candidate_id,
                 event.live_position_id,
                 event.strategy_name,
                 str(event.event_type),
