@@ -2,6 +2,30 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-07-06
+
+- Documented the execution-first phase in `docs/hypotheses/2026-07-06-execution-first-phase.md` after whole-chain analysis showed persistent replay-to-live divergence, adverse fill selection, and recent global low MVP signal degradation.
+- Updated `docs/live-trading-journal.md` to pause funded live trading pending fill-conditioned gates and to require actual filled R/R, filled-at-entry replay, filled-vs-unfilled selected comparison, settlement alignment, and recent-window checks before future promotion or sizing.
+- Updated `docs/continuous-improvement-loop.md` with adverse-selection and fill-conditioned evidence gates so raw snapshot replay is treated as hypothesis generation rather than live funding approval.
+
+## 2026-06-18
+
+- Extended `scripts/portfolio_promotion_report.py` with `10:00-12:00` replay variants for the live US consensus core and the two promoted high-temp consensus sleeves, so portfolio-grade liquidity and capacity can be compared against the existing `12:00-15:00` window.
+- Lowered the live US high-temperature consensus core from $100 to $50 and promoted two additional $50 `0.05-0.50` live sleeves: `metar_hrrr_rich_catboost_mvp_entry_05_50` and `hrrr_v2_three_model_consensus_entry_05_50`. `weather_trader/live/execution.py` now loads the paired METAR/HRRR v2 model artifacts and registers both sleeves in `live_strategy_plans()`.
+- Deactivated the live global low-temperature consensus canary `global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first` by removing it from `live_strategy_plans()` and dropping the global-low dynamic model from default live model loading. The single-model global low MVP BUY_NO add-on remains active.
+- Extended `scripts/portfolio_promotion_report.py` with no-tiny `0.05-0.50` variants of the broad US high-temperature consensus candidates from `docs/hypotheses/2026-06-18-us-high-temp-consensus-candidates.md`: METAR+HRRR-rich CatBoost+MVP, HRRR v2 three-model consensus, HRRR v2 bucket consensus, and PM US12 CatBoost+MVP. These now run through the same current-stack, cap-aware, recorded-depth promotion gate as existing candidate sleeves.
+- Added `scripts/top_bucket_cluster_calibration_replay.py` for top-2/top-3 YES cluster research. It builds raw top-N clusters from candidate distributions, reports baseline raw cluster calibration, trains walk-forward Platt/context calibrators on prior resolved dates, and replays dutched cluster policies using raw or calibrated hit probabilities.
+- Added `scripts/top_bucket_basket_replay.py`, a raw-candidate-distribution replay for dutched top-N YES bucket baskets. It supports first-eligible, cheapest-intraday, and best-edge-intraday selection modes, ask-sum/edge grids, model and consensus distributions, and alive-bucket filtering so low-temperature buckets already impossible from `low_so_far` are excluded by default.
+
+## 2026-06-17
+
+- Integrated the bucket-YES Platt calibration artifact into live/research candidate selection for US high-temperature obs bucket models. `FairValueEngine.price_markets` now applies calibrated YES probabilities after dynamic bucket normalization, recomputes NO probabilities/edges from the calibrated fair, and carries raw fair plus fit metadata in candidate/snapshot audit JSON.
+- Added `--bucket-calibration-path` and `--bucket-calibration-mode off|apply` to research and live loop commands. Default mode is `apply` against `~/.local/state/roboweather/bucket_calibration_pm_us12_high_temp.json` when present; `off` is the rollback switch.
+- Disabled the legacy Layer 1 live calibration gate whenever bucket calibration mode is `apply`. `scripts/run_research.sh live-loop` no longer passes the old `CALIBRATION_PATH` by default, and legacy gate metadata now records `disabled_by_bucket_calibration`.
+- Added `scripts/bucket_probability_calibration.py`, a probability-only walk-forward diagnostic for US high-temperature bucket models. It trains bucket-YES Platt calibration from raw candidate distributions, reports binary Brier/log-loss and reliability bands, and compares raw-normalized, Platt-normalized, and temperature-scaled multiclass bucket distributions without using execution depth or portfolio caps.
+- Added `scripts/build_bucket_calibration_artifact.py` to generate the bucket-YES Platt calibration JSON artifact for the US high-temperature obs bucket models, including model/station fits, model-global fallbacks, source coverage, and in-sample diagnostics.
+- Added `scripts/calibrated_candidate_replay.py`, a walk-forward model-level calibration replay that trains only on prior resolved dates, recalculates each model's selected candidate from raw `candidate_distribution` payloads, rebuilds obs bucket consensus from calibrated selections, and compares raw live selection with selected-row and candidate-universe calibration variants. The report includes Brier/log-loss, fair-band reliability tables, and a compact parameter-grid mode for feature/sample/edge/side-awareness sweeps.
+
 ## 2026-06-16
 
 - Changed global low-temperature research resolution for `RJTT`, `RKSI`, `VHHH`, and `ZSPD` to use Polymarket Gamma's settled winning low-temperature bucket when scoring `LOW_TEMP` snapshots, aligning replay labels with Polymarket settlement for Tokyo, Seoul, Hong Kong, and Shanghai. High-temperature fields still come from the existing weather source because `station_date_outcomes` stores one station/date row. Backfilled the active research DB for 68 existing closed affected station/date outcomes and rewrote the corresponding low-temp prediction results.

@@ -136,24 +136,51 @@ def test_live_weather_feature_service_routes_global_stations_to_celsius_service(
 
 def test_live_execution_config_defaults_to_fifty_cent_entry_cap() -> None:
     assert LiveExecutionConfig().max_entry_price == pytest.approx(DEFAULT_LIVE_ENTRY_PRICE_MAX)
+    assert LiveExecutionConfig().consensus_notional_usd == pytest.approx(50.0)
     assert LiveExecutionConfig().resting_fallback_ttl_seconds == pytest.approx(420.0)
 
 
-def test_live_strategy_plans_include_moonshot_and_hrrr_disagreement() -> None:
+def test_live_strategy_plans_include_promoted_high_temp_candidates() -> None:
     plans = live_strategy_plans(LiveExecutionConfig(max_entry_price=0.40))
 
     assert [plan.strategy.name for plan in plans] == [
         LIVE_POLICY_NAME,
+        live_execution.METAR_HRRR_RICH_CATBOOST_MVP_POLICY_NAME,
+        live_execution.HRRR_V2_THREE_MODEL_CONSENSUS_POLICY_NAME,
         MOONSHOT_POLICY_NAME,
         live_execution.HRRR_INLAND_DISAGREEMENT_POLICY_NAME,
         live_execution.METAR_HRRR_INLAND_DISAGREEMENT_POLICY_NAME,
+        live_execution.GLOBAL_LOW_MVP_BUY_NO_POLICY_NAME,
     ]
+    assert live_execution.GLOBAL_LOW_CANARY_POLICY_NAME not in {plan.strategy.name for plan in plans}
     consensus = plans[0]
     assert consensus.target_notional_usd == pytest.approx(CONSENSUS_NOTIONAL_USD)
     assert consensus.strategy.max_notional_usd == pytest.approx(CONSENSUS_NOTIONAL_USD)
     assert consensus.policies[0].entry_price_max == pytest.approx(0.40)
 
-    moonshot = plans[1]
+    metar_hrrr = plans[1]
+    assert metar_hrrr.target_notional_usd == pytest.approx(50.0)
+    assert metar_hrrr.strategy.max_notional_usd == pytest.approx(50.0)
+    assert metar_hrrr.strategy.source == "consensus"
+    assert metar_hrrr.strategy.market_family == MarketFamily.HIGH_TEMP
+    assert len(metar_hrrr.policies) == 1
+    assert metar_hrrr.policies[0].model_group == "metar_hrrr_rich_catboost_mvp"
+    assert metar_hrrr.policies[0].entry_price_min == pytest.approx(0.05)
+    assert metar_hrrr.policies[0].entry_price_max == pytest.approx(0.50)
+    assert metar_hrrr.min_entry_price == pytest.approx(0.05)
+
+    hrrr_v2 = plans[2]
+    assert hrrr_v2.target_notional_usd == pytest.approx(50.0)
+    assert hrrr_v2.strategy.max_notional_usd == pytest.approx(50.0)
+    assert hrrr_v2.strategy.source == "consensus"
+    assert hrrr_v2.strategy.market_family == MarketFamily.HIGH_TEMP
+    assert len(hrrr_v2.policies) == 1
+    assert hrrr_v2.policies[0].model_group == "hrrr_v2_three_model_consensus"
+    assert hrrr_v2.policies[0].entry_price_min == pytest.approx(0.05)
+    assert hrrr_v2.policies[0].entry_price_max == pytest.approx(0.50)
+    assert hrrr_v2.min_entry_price == pytest.approx(0.05)
+
+    moonshot = plans[3]
     assert moonshot.target_notional_usd == pytest.approx(2.0)
     assert moonshot.strategy.max_notional_usd == pytest.approx(2.0)
     assert moonshot.strategy.entry_price_min == pytest.approx(0.05)
@@ -168,7 +195,7 @@ def test_live_strategy_plans_include_moonshot_and_hrrr_disagreement() -> None:
     assert moonshot.selected_side == TradeAction.BUY_NO
     assert moonshot.min_entry_price == pytest.approx(0.05)
 
-    hrrr = plans[2]
+    hrrr = plans[4]
     assert hrrr.target_notional_usd == pytest.approx(live_execution.HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD)
     assert hrrr.strategy.max_notional_usd == pytest.approx(live_execution.HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD)
     assert hrrr.strategy.market_family == MarketFamily.HIGH_TEMP
@@ -185,7 +212,7 @@ def test_live_strategy_plans_include_moonshot_and_hrrr_disagreement() -> None:
     assert hrrr.policies[0].obs_edge_max == pytest.approx(live_execution.HRRR_INLAND_OBS_EDGE_MAX)
     assert hrrr.min_entry_price == pytest.approx(0.0)
 
-    metar = plans[3]
+    metar = plans[5]
     assert metar.target_notional_usd == pytest.approx(live_execution.HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD)
     assert metar.strategy.max_notional_usd == pytest.approx(live_execution.HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD)
     assert metar.strategy.market_family == MarketFamily.HIGH_TEMP

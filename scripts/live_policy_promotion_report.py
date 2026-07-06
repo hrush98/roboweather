@@ -170,11 +170,13 @@ def candidate_policy_specs(scope: str = DEFAULT_SCOPE) -> list[PolicySpec]:
         ("model", HRRR_V2_DYNAMIC_MODEL, "hrrr_v2 dynamic"),
         ("model", HRRR_V2_CATBOOST_MODEL, "hrrr_v2 catboost"),
         ("consensus", "hrrr_v2_bucket_consensus", "hrrr_v2 bucket consensus"),
+        ("consensus", "hrrr_v2_three_model_consensus", "hrrr_v2 three model consensus"),
         ("model", HRRR_RICH_DYNAMIC_TUNED_MODEL, "hrrr_rich dynamic tuned"),
         ("model", HRRR_RICH_CATBOOST_MODEL, "hrrr_rich catboost"),
         ("consensus", "hrrr_rich_bucket_consensus", "hrrr_rich bucket consensus"),
         ("model", METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL, "metar_hrrr dynamic tuned"),
         ("model", METAR_HRRR_RICH_CATBOOST_MODEL, "metar_hrrr catboost"),
+        ("consensus", "metar_hrrr_rich_catboost_mvp", "metar_hrrr catboost+mvp"),
         ("consensus", "metar_hrrr_rich_bucket_consensus", "metar_hrrr bucket consensus"),
     ]
     seen = {spec.name for spec in specs}

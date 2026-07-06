@@ -45,6 +45,8 @@ from weather_trader.stations.metadata import get_station
 from weather_trader.research.policies import (
     CATBOOST_MODEL,
     DYNAMIC_TUNED_MODEL,
+    GLOBAL_LOW_DYNAMIC_MODEL,
+    GLOBAL_LOW_MVP_MODEL,
     HRRR_RICH_DYNAMIC_TUNED_MODEL,
     METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL,
     NGBOOST_MODEL,
@@ -55,6 +57,8 @@ from weather_trader.research.policies import (
 
 LIVE_POLICY_NAME = "pm_us12_bucket_consensus_hc_late_no_tiny_by_bucket_side_delay_first"
 EDGE_CORE_POLICY_NAME = "pm_us12_bucket_consensus_hc_15m_late_entry_00_50_by_bucket_side_delay_first"
+METAR_HRRR_RICH_CATBOOST_MVP_POLICY_NAME = "metar_hrrr_rich_catboost_mvp_entry_05_50"
+HRRR_V2_THREE_MODEL_CONSENSUS_POLICY_NAME = "hrrr_v2_three_model_consensus_entry_05_50"
 MOONSHOT_POLICY_NAME = "pm_us12_dynamic_tuned_hc_late_entry_05_10_buy_no_by_bucket_side_delay_first"
 HRRR_INLAND_DISAGREEMENT_POLICY_NAME = "hrrr_dynamic_tuned_inland_late_disagreement_entry_00_50_by_bucket_side_delay_first"
 METAR_HRRR_INLAND_DISAGREEMENT_POLICY_NAME = "metar_hrrr_dynamic_tuned_inland_late_disagreement_entry_00_50_by_bucket_side_delay_first"
@@ -62,7 +66,7 @@ LIVE_MODEL_GROUP = "obs_bucket_consensus"
 DEFAULT_LIVE_ENTRY_PRICE_MAX = 0.50
 LIVE_ENTRY_PRICE_MAX = DEFAULT_LIVE_ENTRY_PRICE_MAX
 EDGE_CORE_OBS_DELAY_BUCKET = "15m"
-CONSENSUS_NOTIONAL_USD = 100.0
+CONSENSUS_NOTIONAL_USD = 50.0
 EDGE_CORE_NOTIONAL_USD = 50.0
 MOONSHOT_MIN_EDGE = 0.90
 MOONSHOT_NOTIONAL_USD = 2.0
@@ -72,11 +76,32 @@ HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD = 25.0
 HRRR_INLAND_DISAGREEMENT_EDGE_MIN = 0.25
 HRRR_INLAND_DISAGREEMENT_MIN = 0.15
 HRRR_INLAND_OBS_EDGE_MAX = 0.10
+METAR_HRRR_RICH_CATBOOST_MODEL = "catboost_bucket_metar_hrrr_rich_pm_active_us12_obs_2022_2025"
+METAR_HRRR_RICH_MVP_MODEL = "mvp_metar_hrrr_rich_pm_active_us12_obs_2022_2025"
+HRRR_V2_DYNAMIC_TUNED_MODEL = "dynamic_bucket_tuned_hrrr_v2_obs_2022_2025"
+HRRR_V2_CATBOOST_MODEL = "catboost_bucket_hrrr_v2_obs_2022_2025"
+HRRR_V2_MVP_MODEL = "mvp_hrrr_v2_obs_2022_2025"
+GLOBAL_LOW_CANARY_POLICY_NAME = "global_low_dynamic_mvp_high_conviction_by_bucket_side_delay_first"
+GLOBAL_LOW_MVP_BUY_NO_POLICY_NAME = "global_low_mvp_high_conviction_buy_no_entry_05_50_by_bucket_side_delay_first"
+GLOBAL_LOW_MODEL_GROUP = "global_low_dynamic_mvp"
+GLOBAL_LOW_NOTIONAL_USD = 100.0
+GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD = 50.0
+GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN = 0.05
+GLOBAL_LOW_ENTRY_PRICE_MAX = 0.75
+GLOBAL_LOW_MVP_BUY_NO_ENTRY_PRICE_MAX = 0.50
+GLOBAL_LOW_LOCAL_DECISION_START = "00:30"
+GLOBAL_LOW_LOCAL_DECISION_END = "05:00"
 LIVE_MODEL_PATHS = (
     MODELS_DIR / f"{DYNAMIC_TUNED_MODEL}.joblib",
     MODELS_DIR / f"{CATBOOST_MODEL}.joblib",
     MODELS_DIR / f"{HRRR_RICH_DYNAMIC_TUNED_MODEL}.joblib",
     MODELS_DIR / f"{METAR_HRRR_RICH_DYNAMIC_TUNED_MODEL}.joblib",
+    MODELS_DIR / f"{METAR_HRRR_RICH_CATBOOST_MODEL}.joblib",
+    MODELS_DIR / f"{METAR_HRRR_RICH_MVP_MODEL}.joblib",
+    MODELS_DIR / f"{HRRR_V2_DYNAMIC_TUNED_MODEL}.joblib",
+    MODELS_DIR / f"{HRRR_V2_CATBOOST_MODEL}.joblib",
+    MODELS_DIR / f"{HRRR_V2_MVP_MODEL}.joblib",
+    MODELS_DIR / f"{GLOBAL_LOW_MVP_MODEL}.joblib",
 )
 PM_ACTIVE_US12_STATIONS = frozenset(
     {
@@ -95,9 +120,12 @@ PM_ACTIVE_US12_STATIONS = frozenset(
     }
 )
 HRRR_INLAND_STATIONS = frozenset({"KATL", "KDAL", "KORD"})
+GLOBAL_LOW_STATIONS = frozenset({"EGLC", "LFPB", "RJTT", "RKSI", "VHHH", "ZSPD"})
 CALIBRATION_FAMILY_MAP = {
     LIVE_POLICY_NAME: "obs",
     EDGE_CORE_POLICY_NAME: "obs",
+    METAR_HRRR_RICH_CATBOOST_MVP_POLICY_NAME: "metar_hrrr_rich",
+    HRRR_V2_THREE_MODEL_CONSENSUS_POLICY_NAME: "hrrr_v2",
     MOONSHOT_POLICY_NAME: "obs",
     HRRR_INLAND_DISAGREEMENT_POLICY_NAME: "hrrr_rich",
     METAR_HRRR_INLAND_DISAGREEMENT_POLICY_NAME: "metar_hrrr_rich",
@@ -313,6 +341,56 @@ def edge_core_live_strategy(max_notional_usd: float = 3.0) -> LiveStrategy:
     )
 
 
+def metar_hrrr_rich_catboost_mvp_live_strategy(max_notional_usd: float = CONSENSUS_NOTIONAL_USD) -> LiveStrategy:
+    return LiveStrategy(
+        name=METAR_HRRR_RICH_CATBOOST_MVP_POLICY_NAME,
+        active=True,
+        source="consensus",
+        model_group="metar_hrrr_rich_catboost_mvp",
+        model_names=[METAR_HRRR_RICH_CATBOOST_MODEL, METAR_HRRR_RICH_MVP_MODEL],
+        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        market_family=MarketFamily.HIGH_TEMP,
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+        entry_price_min=0.05,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+        max_notional_usd=max_notional_usd,
+        raw_payload={
+            "report": {
+                "role": "live_promoted_candidate",
+                "target_notional_usd": max_notional_usd,
+                "entry_price_min": 0.05,
+                "entry_price_max": DEFAULT_LIVE_ENTRY_PRICE_MAX,
+            }
+        },
+    )
+
+
+def hrrr_v2_three_model_consensus_live_strategy(max_notional_usd: float = CONSENSUS_NOTIONAL_USD) -> LiveStrategy:
+    return LiveStrategy(
+        name=HRRR_V2_THREE_MODEL_CONSENSUS_POLICY_NAME,
+        active=True,
+        source="consensus",
+        model_group="hrrr_v2_three_model_consensus",
+        model_names=[HRRR_V2_DYNAMIC_TUNED_MODEL, HRRR_V2_CATBOOST_MODEL, HRRR_V2_MVP_MODEL],
+        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        market_family=MarketFamily.HIGH_TEMP,
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+        entry_price_min=0.05,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+        max_notional_usd=max_notional_usd,
+        raw_payload={
+            "report": {
+                "role": "live_promoted_candidate",
+                "target_notional_usd": max_notional_usd,
+                "entry_price_min": 0.05,
+                "entry_price_max": DEFAULT_LIVE_ENTRY_PRICE_MAX,
+            }
+        },
+    )
+
+
 def ngboost_best_buy_yes_live_strategy() -> LiveStrategy:
     return LiveStrategy(
         name=NGBOOST_BEST_BUY_YES_POLICY_NAME,
@@ -515,6 +593,120 @@ def metar_hrrr_inland_disagreement_policy_spec() -> ResearchPolicySpec:
     )
 
 
+def metar_hrrr_rich_catboost_mvp_policy_spec() -> ResearchPolicySpec:
+    return ResearchPolicySpec(
+        METAR_HRRR_RICH_CATBOOST_MVP_POLICY_NAME,
+        "consensus",
+        StrategyBucket.HIGH_CONVICTION,
+        model_group="metar_hrrr_rich_catboost_mvp",
+        entry_price_min=0.05,
+        entry_price_max=DEFAULT_LIVE_ENTRY_PRICE_MAX,
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+    )
+
+
+def hrrr_v2_three_model_consensus_policy_spec() -> ResearchPolicySpec:
+    return ResearchPolicySpec(
+        HRRR_V2_THREE_MODEL_CONSENSUS_POLICY_NAME,
+        "consensus",
+        StrategyBucket.HIGH_CONVICTION,
+        model_group="hrrr_v2_three_model_consensus",
+        entry_price_min=0.05,
+        entry_price_max=DEFAULT_LIVE_ENTRY_PRICE_MAX,
+        local_decision_start="12:00",
+        local_decision_end="15:00",
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+    )
+
+
+def global_low_canary_live_strategy(max_notional_usd: float = GLOBAL_LOW_NOTIONAL_USD) -> LiveStrategy:
+    return LiveStrategy(
+        name=GLOBAL_LOW_CANARY_POLICY_NAME,
+        active=True,
+        source="consensus",
+        model_group=GLOBAL_LOW_MODEL_GROUP,
+        model_names=[GLOBAL_LOW_DYNAMIC_MODEL, GLOBAL_LOW_MVP_MODEL],
+        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        market_family=MarketFamily.LOW_TEMP,
+        local_decision_start=GLOBAL_LOW_LOCAL_DECISION_START,
+        local_decision_end=GLOBAL_LOW_LOCAL_DECISION_END,
+        entry_price_min=GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+        max_notional_usd=max_notional_usd,
+        raw_payload={
+            "report": {
+                "role": "live_canary",
+                "target_notional_usd": max_notional_usd,
+                "entry_price_min": GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
+                "entry_price_max": GLOBAL_LOW_ENTRY_PRICE_MAX,
+                "local_decision_start": GLOBAL_LOW_LOCAL_DECISION_START,
+                "local_decision_end": GLOBAL_LOW_LOCAL_DECISION_END,
+                "selected_side": str(TradeAction.BUY_NO),
+            }
+        },
+    )
+
+
+def global_low_mvp_buy_no_live_strategy(max_notional_usd: float = GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD) -> LiveStrategy:
+    return LiveStrategy(
+        name=GLOBAL_LOW_MVP_BUY_NO_POLICY_NAME,
+        active=True,
+        source="model",
+        model_group=GLOBAL_LOW_MVP_MODEL,
+        model_names=[GLOBAL_LOW_MVP_MODEL],
+        strategy_bucket=StrategyBucket.HIGH_CONVICTION,
+        market_family=MarketFamily.LOW_TEMP,
+        local_decision_start="00:00",
+        local_decision_end="23:59",
+        entry_price_min=GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+        max_notional_usd=max_notional_usd,
+        raw_payload={
+            "report": {
+                "role": "live_additive_canary",
+                "target_notional_usd": max_notional_usd,
+                "entry_price_min": GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
+                "entry_price_max": GLOBAL_LOW_MVP_BUY_NO_ENTRY_PRICE_MAX,
+                "selected_side": str(TradeAction.BUY_NO),
+            }
+        },
+    )
+
+
+def global_low_canary_policy_spec() -> ResearchPolicySpec:
+    return ResearchPolicySpec(
+        GLOBAL_LOW_CANARY_POLICY_NAME,
+        "consensus",
+        StrategyBucket.HIGH_CONVICTION,
+        model_group=GLOBAL_LOW_MODEL_GROUP,
+        selected_side=TradeAction.BUY_NO,
+        station_allow_set=GLOBAL_LOW_STATIONS,
+        entry_price_min=GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
+        entry_price_max=GLOBAL_LOW_ENTRY_PRICE_MAX,
+        local_decision_start=GLOBAL_LOW_LOCAL_DECISION_START,
+        local_decision_end=GLOBAL_LOW_LOCAL_DECISION_END,
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+    )
+
+
+def global_low_mvp_buy_no_policy_spec() -> ResearchPolicySpec:
+    return ResearchPolicySpec(
+        GLOBAL_LOW_MVP_BUY_NO_POLICY_NAME,
+        "model",
+        StrategyBucket.HIGH_CONVICTION,
+        model_name=GLOBAL_LOW_MVP_MODEL,
+        selected_side=TradeAction.BUY_NO,
+        station_allow_set=GLOBAL_LOW_STATIONS,
+        entry_price_min=GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
+        entry_price_max=GLOBAL_LOW_MVP_BUY_NO_ENTRY_PRICE_MAX,
+        local_decision_start="00:00",
+        local_decision_end="23:59",
+        uniqueness_key_mode="station_date_bucket_side_obs_delay",
+    )
+
+
 def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, ...]:
     return (
         LiveStrategyPlan(
@@ -522,6 +714,18 @@ def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, 
             (live_policy_spec(config),),
             config.consensus_notional_usd,
             min_entry_price=config.min_entry_price,
+        ),
+        LiveStrategyPlan(
+            metar_hrrr_rich_catboost_mvp_live_strategy(),
+            (metar_hrrr_rich_catboost_mvp_policy_spec(),),
+            CONSENSUS_NOTIONAL_USD,
+            min_entry_price=0.05,
+        ),
+        LiveStrategyPlan(
+            hrrr_v2_three_model_consensus_live_strategy(),
+            (hrrr_v2_three_model_consensus_policy_spec(),),
+            CONSENSUS_NOTIONAL_USD,
+            min_entry_price=0.05,
         ),
         LiveStrategyPlan(
             moonshot_live_strategy(),
@@ -541,6 +745,13 @@ def live_strategy_plans(config: LiveExecutionConfig) -> tuple[LiveStrategyPlan, 
             (metar_hrrr_inland_disagreement_policy_spec(),),
             HRRR_INLAND_DISAGREEMENT_NOTIONAL_USD,
             min_entry_price=0.0,
+        ),
+        LiveStrategyPlan(
+            global_low_mvp_buy_no_live_strategy(),
+            (global_low_mvp_buy_no_policy_spec(),),
+            GLOBAL_LOW_MVP_BUY_NO_NOTIONAL_USD,
+            TradeAction.BUY_NO,
+            GLOBAL_LOW_CANARY_ENTRY_PRICE_MIN,
         ),
     )
 

@@ -134,6 +134,18 @@ class ExposureState:
 def default_replay_specs(include_hrrr_candidate: bool = True) -> list[ReplaySpec]:
     specs = [
         ReplaySpec(
+            name="live_consensus_no_tiny_10_12",
+            label="LIVE US consensus no-tiny 10-12",
+            source="consensus",
+            identifier="obs_bucket_consensus",
+            target_notional_usd=100.0,
+            market_family="HIGH_TEMP",
+            entry_price_min=0.05,
+            entry_price_max=0.50,
+            local_decision_start="10:00",
+            local_decision_end="12:00",
+        ),
+        ReplaySpec(
             name="live_consensus_no_tiny",
             label="LIVE US consensus no-tiny",
             source="consensus",
@@ -202,6 +214,80 @@ def default_replay_specs(include_hrrr_candidate: bool = True) -> list[ReplaySpec
         ),
     ]
     if include_hrrr_candidate:
+        specs.extend(
+            [
+                ReplaySpec(
+                    name="metar_hrrr_rich_catboost_mvp_entry_05_50_10_12",
+                    label="CANDIDATE METAR+HRRR rich CatBoost+MVP 10-12",
+                    source="consensus",
+                    identifier="metar_hrrr_rich_catboost_mvp",
+                    target_notional_usd=50.0,
+                    market_family="HIGH_TEMP",
+                    entry_price_min=0.05,
+                    entry_price_max=0.50,
+                    local_decision_start="10:00",
+                    local_decision_end="12:00",
+                    role="candidate",
+                ),
+                ReplaySpec(
+                    name="metar_hrrr_rich_catboost_mvp_entry_05_50",
+                    label="CANDIDATE METAR+HRRR rich CatBoost+MVP no-tiny",
+                    source="consensus",
+                    identifier="metar_hrrr_rich_catboost_mvp",
+                    target_notional_usd=50.0,
+                    market_family="HIGH_TEMP",
+                    entry_price_min=0.05,
+                    entry_price_max=0.50,
+                    role="candidate",
+                ),
+                ReplaySpec(
+                    name="hrrr_v2_three_model_consensus_entry_05_50_10_12",
+                    label="CANDIDATE HRRR v2 three-model consensus 10-12",
+                    source="consensus",
+                    identifier="hrrr_v2_three_model_consensus",
+                    target_notional_usd=50.0,
+                    market_family="HIGH_TEMP",
+                    entry_price_min=0.05,
+                    entry_price_max=0.50,
+                    local_decision_start="10:00",
+                    local_decision_end="12:00",
+                    role="candidate",
+                ),
+                ReplaySpec(
+                    name="hrrr_v2_three_model_consensus_entry_05_50",
+                    label="CANDIDATE HRRR v2 three-model consensus no-tiny",
+                    source="consensus",
+                    identifier="hrrr_v2_three_model_consensus",
+                    target_notional_usd=50.0,
+                    market_family="HIGH_TEMP",
+                    entry_price_min=0.05,
+                    entry_price_max=0.50,
+                    role="candidate",
+                ),
+                ReplaySpec(
+                    name="hrrr_v2_bucket_consensus_entry_05_50",
+                    label="CANDIDATE HRRR v2 bucket consensus no-tiny",
+                    source="consensus",
+                    identifier="hrrr_v2_bucket_consensus",
+                    target_notional_usd=50.0,
+                    market_family="HIGH_TEMP",
+                    entry_price_min=0.05,
+                    entry_price_max=0.50,
+                    role="candidate",
+                ),
+                ReplaySpec(
+                    name="pm_us12_catboost_mvp_entry_05_50",
+                    label="CANDIDATE PM US12 CatBoost+MVP no-tiny",
+                    source="consensus",
+                    identifier="obs_catboost_mvp",
+                    target_notional_usd=50.0,
+                    market_family="HIGH_TEMP",
+                    entry_price_min=0.05,
+                    entry_price_max=0.50,
+                    role="candidate",
+                ),
+            ]
+        )
         specs.append(
             ReplaySpec(
                 name="hrrr_dynamic_tuned_inland_late_disagreement",

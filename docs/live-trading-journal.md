@@ -6,24 +6,28 @@ Git history remains the source of truth for code changes. This journal is the so
 
 ## Current Live State
 
-Updated: 2026-06-16
+Updated: 2026-07-06
 
-### Active policies
+Execution status: funded live trading paused pending the execution-first gates documented in `docs/hypotheses/2026-07-06-execution-first-phase.md`. The policies below describe the last configured live stack, not approval to restart funded execution.
+
+### Last configured policies
 
 | Policy | Side | Target notional | Entry cap | Notes |
 | --- | --- | ---: | ---: | --- |
-| Consensus no-tiny | mixed | $100 BUY_NO; $50 BUY_YES | <= $0.50 | Canonical promoted US high-temp core. Selected by the raw-snapshot promotion report and mapped to `pm_us12_bucket_consensus_hc_late_no_tiny_by_bucket_side_delay_first`. |
+| Consensus no-tiny | mixed | $50 | <= $0.50 | Canonical promoted US high-temp core. Selected by the raw-snapshot promotion report and mapped to `pm_us12_bucket_consensus_hc_late_no_tiny_by_bucket_side_delay_first`. |
+| METAR+HRRR rich CatBoost+MVP | mixed | $50 | $0.05-$0.50 | Promoted US high-temp consensus sleeve for METAR+HRRR-rich CatBoost + MVP. Mapped to `metar_hrrr_rich_catboost_mvp_entry_05_50`. |
+| HRRR v2 three-model consensus | mixed | $50 | $0.05-$0.50 | Promoted US high-temp consensus sleeve for HRRR v2 dynamic-tuned + CatBoost + MVP. Mapped to `hrrr_v2_three_model_consensus_entry_05_50`. |
 | Moonshot | BUY_NO | $2 | <= $0.50 | Small US high-temperature tail allocation. Original tiny moonshot remains constrained by its tighter policy price rules. |
 | HRRR rich inland late disagreement | mixed | $25 | $0.00-$0.50 | Execution experiment: HRRR-rich dynamic-tuned inland-only (KATL, KDAL, KORD) high-conviction late (12:00-15:00) entries where edge >= 0.25, HRRR fair disagrees >= 0.15 vs obs bucket consensus (or obs absent), and obs edge < 0.10. Mapped to `hrrr_dynamic_tuned_inland_late_disagreement_entry_00_50_by_bucket_side_delay_first`. |
 | METAR+HRRR inland late disagreement | mixed | $25 | $0.00-$0.50 | Execution experiment: same shape as HRRR-rich but using METAR+HRRR-rich dynamic-tuned model. Mapped to `metar_hrrr_dynamic_tuned_inland_late_disagreement_entry_00_50_by_bucket_side_delay_first`. |
+| Global low-temp MVP add-on | BUY_NO | $50 | $0.05-$0.50 | Single-model LOW_TEMP add-on for EGLC/LFPB/RJTT/RKSI/VHHH/ZSPD. Consensus global-low canary is inactive. Mapped to `global_low_mvp_high_conviction_buy_no_entry_05_50_by_bucket_side_delay_first`. |
 
-### Retired policies (2026-06-16)
+### Retired policies
 
 | Policy | Side | Target notional | Notes |
 | --- | --- | ---: | --- |
-| Global low-temp canary | BUY_NO | $100 | Deactivated. Settlement-source mismatch and adverse live fill selection; kept collecting only. |
-| Global low-temp MVP add-on | BUY_NO | $50 | Deactivated. Additive sleeve competing with canary for same station/date/bucket/side caps; kept collecting only. |
-| Global low-temp tiny tail | BUY_NO | $5 | Deactivated. Kept collecting only. |
+| Global low-temp consensus canary | BUY_NO | $100 | Deactivated 2026-06-18. Consensus sleeve removed from the active live plan and the global-low dynamic model removed from default live model loading. |
+| Global low-temp tiny tail | BUY_NO | $5 | Deactivated 2026-06-16. Kept collecting only. |
 
 ### Risk caps
 
@@ -45,7 +49,8 @@ Updated: 2026-06-16
 - Resting fallback TTL is 420 seconds. The ladder allocates remaining notional across deterministic bands `entry + $0.01`, `entry`, `entry - $0.01`, and `entry - $0.02` with weights `30% / 40% / 20% / 10%`, skipping children below the live minimum order size.
 - The `entry + $0.01` resting child is normal GTC because immediate fills at that price are acceptable; `entry` and lower children are exchange-enforced post-only GTC where the CLOB client supports it.
 - The resting fallback is intentionally narrow: it is for improving fill odds at replay-compatible prices without adding a broad passive market-making system.
-- When `--calibration-path` is configured, calibration is a hard blocker for normal live sleeves: only `TRADE` buckets may execute, while `BLOCK`, `WATCH`, `CANARY`, `INSUFFICIENT_DATA`, and missing buckets reject with `CALIBRATION_BLOCK`. The two HRRR inland late disagreement execution experiments are the only exception: they execute unless calibration explicitly says `BLOCK`, and their allowed rows are tagged `EXPERIMENT_ALLOW`.
+- Bucket-YES Platt calibration is the default US high-temperature obs bucket probability layer. Live/research candidate selection runs with `--bucket-calibration-mode apply` and `~/.local/state/roboweather/bucket_calibration_pm_us12_high_temp.json` when present, applying model+station fits first and model-global fits as fallback before edge selection.
+- Rollback is `--bucket-calibration-mode off` or `BUCKET_CALIBRATION_MODE=off` in `scripts/run_research.sh`. The legacy Layer 1 `--calibration-path` gate is ignored while bucket calibration mode is `apply`; only use it deliberately with bucket mode `off`.
 - `calibration_canary_notional_usd` remains in CLI/config output for backward compatibility only. Live execution no longer downsizes `CANARY` buckets.
 - Live settlement in the live DB updates only when the Polymarket live resolver runs. Polymarket UI may show resolution before `live_policy_positions` is marked `SETTLED`.
 
@@ -57,6 +62,16 @@ Updated: 2026-06-16
 - Polymarket's portfolio P/L is account-level. The live SQLite ledger tracks the bot's positions, fills, and settlements, so any mismatch means the bot ledger is missing some mark, settlement, or timing state relative to the exchange view.
 
 ## Rationale
+### 2026-06-18 global low consensus deactivation
+
+The global low-temperature consensus canary is no longer part of the active live strategy plan. The remaining low-temperature live exposure is the single-model MVP BUY_NO add-on, so live cycles do not load the global-low dynamic model by default and cannot build active consensus trades from that family.
+
+### 2026-06-17 bucket-YES calibration
+
+US high-temperature obs bucket models now calibrate each bucket's YES probability with the Platt artifact before candidate and consensus selection. This replaces the prior defensive Layer 1 trade gate for the live path: raw and calibrated fairs plus fit scope/n/source metadata are kept in candidate/snapshot JSON, and consensus rows average calibrated model fairs/edges.
+
+The operating assumption is that bucket selection should be based on calibrated model probability rather than a post-selection blocklist. If the replay evidence degrades or the artifact needs removal, switch bucket calibration mode to `off`; do not run both bucket calibration and the old Layer 1 gate together.
+
 ### 2026-06-15 entry-anchored execution upgrade
 
 Live execution now treats replay EV as an entry-price claim, not a broad directional permission to chase. The old FAK/retry path could inherit `selected_sweep_price_cap` and submit several cents above the scored entry, which made live fills a different trade than replay. The new contract caps immediate FAK/retry at `entry + 1c`, then rests a 7-minute ladder at `entry+1c`, `entry`, `entry-1c`, and `entry-2c`, with entry-and-lower children post-only.
@@ -110,6 +125,23 @@ The 360-second TTL is a deliberate compromise: weather does not normally reprice
 
 ## Journal
 
+### 2026-07-06
+
+- Phase change: funded live trading should remain paused while the system moves to an execution-first rebuild. Raw snapshot replay remains useful for hypothesis generation, but it is no longer sufficient evidence for live promotion or sizing.
+- Whole-chain review showed the repeated failure mode is structural: since 2026-06-20, live-selected rows replayed at +0.455 R/R on $3,878.50 intended risk, but actual filled rows lost -0.138 R/R on $578.22 filled. Filled-at-entry replay was already negative (-0.150 R/R), while unfilled selected replay was positive (+0.624 R/R).
+- All loaded live history shows the same pattern: selected replay +0.210 R/R, filled-at-entry replay -0.061 R/R, and actual live R/R -0.148. The US consensus sleeve's winner fill rate was 17.8% versus loser fill rate 52.4%, which is direct adverse-selection evidence.
+- The gap is not primarily purchase-price slippage. Recent actual fills were close to, and slightly better than, recorded decision entry on average; the larger problem is that the market fills a worse subset than replay assumes.
+- Global low MVP should remain stopped: recent selected replay was negative before execution effects (-0.453 R/R since 2026-06-20), so execution improvements cannot rescue that sleeve by themselves.
+- New promotion standard: no funded sleeve or size-up without positive actual filled R/R when available, positive filled-at-entry replay, filled-subset replay not materially worse than unfilled selected replay, settlement alignment, and a current-window check. See `docs/hypotheses/2026-07-06-execution-first-phase.md`.
+
+### 2026-06-30
+
+- Incident follow-up from the June 27 live/research stop: the process should not be operated as an unsupervised tmux-only service. Add a durable supervisor for live and research loops with restart-on-failure, memory limits, and explicit log paths.
+- Add per-cycle process RSS/memory telemetry and alert/restart before memory reaches host-risk levels. The June 27 host logs showed an OOM kill in the tmux-launched scope, with multiple Python processes consuming tens of GB of resident memory.
+- Add a cash/allowance-aware execution throttle. Repeated `insufficient_balance` exchange rejects should stop or downsize further submissions and raise an operator alert instead of continuing to submit eligible candidates.
+- Persist the full live candidate universe, or a dedicated live candidate snapshot table, before live policy filtering. The current live DB is adequate for selected positions and order attempts, but not for a complete selected-versus-unselected candidate audit.
+- Add an operator health report that ties together latest live/research cycle timestamps, current tmux/systemd process state, open risk, unsettled positions, balance-reject counts, and latest resolver coverage.
+
 ### 2026-06-16
 
 - Reconciled the global low-temperature settlement-source mismatch for Tokyo, Seoul, Hong Kong, and Shanghai. The resolver now uses Polymarket Gamma's settled winning low-temperature bucket for `LOW_TEMP` snapshots on `RJTT`, `RKSI`, `VHHH`, and `ZSPD`; the station/date high field remains filled from the existing weather source because the outcome table stores high and low in one row. The active research DB was backfilled for existing closed affected rows, rewriting 68 station/date outcomes and their low-temp prediction results; older reports generated before this backfill should be treated as stale for those stations.
@@ -121,6 +153,7 @@ The 360-second TTL is a deliberate compromise: weather does not normally reprice
 - Updated `LIVE_MODEL_PATHS` to load the HRRR-rich and METAR+HRRR-rich dynamic-tuned model artifacts alongside the existing obs models, and removed global low model paths from live loading.
 - Tightened live calibration from allow/canary/block sizing into gate mode. Normal mapped live policies now require a `TRADE` calibration bucket before execution; any non-`TRADE`, missing, or unmapped calibration state blocks with `CALIBRATION_BLOCK`. The two HRRR inland late disagreement execution experiments are allowed through `WATCH`, `CANARY`, `INSUFFICIENT_DATA`, and missing buckets, but still block on explicit `BLOCK`.
 - Trading-system lesson: raw replay and shadow selection checks are signal evidence, not proof that the edge is executable at live size. A sleeve should be evaluated as `signal policy + execution policy + sizing policy`; `$5` canary fills do not prove `$100` capacity, and shadow fills do not expose adverse live fill selection when the book is thin. Before scaling new sleeves, run controlled live execution experiments with meaningful but capped size, one pick per station/date, strict daily loss caps, and separated execution tactics such as FAK-only versus passive resting. Promote only when the filled subset is not materially worse than missed candidates, slippage stays inside the scored entry contract, and Polymarket settlement matches the scoring source.
+- Execution hypothesis for later testing: very small or partial fills may sometimes be positive information rather than just missed capacity. A quick live/research check found settled live rows with tiny fill fractions had better historical R/R than near-full fills, and scarce research sweep liquidity looked strongest for US high-temperature BUY_NO obs-style rows; global low-temperature showed the opposite, so this is not a universal rule. Do not chase automatically. If post-calibration data confirms the pattern for a specific calibrated sleeve, consider a controlled limited-chase arm that only applies to `TRADE` calibration buckets, strong edge/fair cushions, thin initial fill, and immediate book repricing away from entry, with a narrow added cap such as `entry + 2c` or `entry + 3c` and explicit daily loss limits.
 
 ### 2026-06-15
 

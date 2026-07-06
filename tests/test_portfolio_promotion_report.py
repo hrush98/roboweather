@@ -126,3 +126,23 @@ def test_hrrr_disagreement_candidate_requires_weak_or_absent_obs_core() -> None:
 
     selected_with_weak_obs = build_portfolio_report([weak_obs, hrrr_same], [hrrr_spec], use_depth=False)[0].stats
     assert selected_with_weak_obs.candidate_rows == 1
+
+
+def test_default_replay_specs_include_broad_consensus_candidates() -> None:
+    specs = {spec.name: spec for spec in default_replay_specs()}
+
+    assert specs["live_consensus_no_tiny_10_12"].local_decision_start == "10:00"
+    assert specs["live_consensus_no_tiny_10_12"].local_decision_end == "12:00"
+    assert specs["metar_hrrr_rich_catboost_mvp_entry_05_50"].identifier == "metar_hrrr_rich_catboost_mvp"
+    assert specs["hrrr_v2_three_model_consensus_entry_05_50"].identifier == "hrrr_v2_three_model_consensus"
+    assert specs["metar_hrrr_rich_catboost_mvp_entry_05_50_10_12"].local_decision_start == "10:00"
+    assert specs["hrrr_v2_three_model_consensus_entry_05_50_10_12"].local_decision_end == "12:00"
+    assert specs["hrrr_v2_bucket_consensus_entry_05_50"].identifier == "hrrr_v2_bucket_consensus"
+    assert specs["pm_us12_catboost_mvp_entry_05_50"].identifier == "obs_catboost_mvp"
+    assert all(specs[name].target_notional_usd == 50.0 for name in (
+        "metar_hrrr_rich_catboost_mvp_entry_05_50",
+        "hrrr_v2_three_model_consensus_entry_05_50",
+        "hrrr_v2_bucket_consensus_entry_05_50",
+        "pm_us12_catboost_mvp_entry_05_50",
+    ))
+    assert all(spec.entry_price_min == 0.05 for name, spec in specs.items() if name.endswith("_entry_05_50"))

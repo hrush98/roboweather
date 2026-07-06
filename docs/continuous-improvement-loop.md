@@ -125,6 +125,8 @@ Known failure modes that should be checked during review:
 | Earlier live sleeves consume all good rows | Apply current live plan order before candidates. |
 | Same station/date or bucket/side overconcentration | Apply station/date, station/date/side, exact bucket/side caps. |
 | Book-depth replay mismatch | Use recorded ask-sweep fillable fields; treat `--no-depth` as upper bound only. |
+| Snapshot depth treated as deterministic execution | Require fill-conditioned evidence from selected, filled, and unfilled live candidates before funded promotion. |
+| Adverse live fill selection | Run the whole-chain truth report and reject or pause sleeves where filled-subset replay materially underperforms unfilled selected replay. |
 | Station allow-list leakage | Add tests around policy specs and live strategy plans. |
 | Market-family leakage | Assert `HIGH_TEMP` vs `LOW_TEMP` filters in tests and replay specs. |
 | Polymarket settlement differs from weather-outcome scoring | Track live settlement separately from research weather outcomes. |
@@ -132,6 +134,19 @@ Known failure modes that should be checked during review:
 | Tick-size or order-version execution failures | Quantization tests and order-attempt rejection summaries. |
 | Recent model family has too little sample | Canary sizing only until minimum resolved sample is met. |
 | Coastal/inland or other regime transfer failure | Regime-specific replay before broad promotion. |
+| Funded live execution without current fill-conditioned edge | Keep live paused or at tiny smoke-test size until actual filled R/R, filled-at-entry replay, settlement alignment, and current-window checks pass. |
+
+## Current Phase
+
+As of 2026-07-06, RoboWeather is in an execution-first phase. Funded live trading should remain paused except for explicitly approved tiny smoke tests. The operating record is `docs/hypotheses/2026-07-06-execution-first-phase.md`.
+
+Before any new funded sleeve, promotion, or size-up:
+
+1. Raw snapshot replay may identify candidates, but cannot approve funding by itself.
+2. The review must compare live-selected replay, filled-at-entry replay, filled-at-actual replay, unfilled selected replay, and actual settlement.
+3. The filled subset must not materially underperform the unfilled selected subset.
+4. Any replay capacity claim must be downgraded by observed fill behavior or a documented fill-probability model.
+5. If the recent raw replay is negative, the sleeve stays stopped regardless of execution improvements.
 
 ## Scheduled Review Cadence
 
