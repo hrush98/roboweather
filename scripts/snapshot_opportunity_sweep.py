@@ -386,6 +386,7 @@ def build_consensus_rows(
         item["paper_pnl"] = paper_pnl_from_entry(item.get("correct"), entry_price(item))
         item["source_prediction_snapshot_ids"] = [int(row["id"]) for row in agreed]
         item["consensus_models"] = list(required_models)
+        item["model_fairs"] = {str(row.get("model_name")): selected_fair(row) for row in agreed}
         consensus.append(item)
     return sorted(consensus, key=sort_key)
 

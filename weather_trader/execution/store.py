@@ -12,6 +12,7 @@ from weather_trader.execution.contracts import (
     Decision,
     EngineState,
     LiveOrderAttempt,
+    LivePriceSheet,
     LivePolicyPosition,
     LivePositionState,
     LiveRiskSnapshot,
@@ -648,6 +649,41 @@ class ExecutionStore:
                 on live_candidate_snapshots(live_position_id);
             create index if not exists idx_live_candidate_snapshots_snapshot
                 on live_candidate_snapshots(prediction_snapshot_id);
+
+            create table if not exists live_price_sheets (
+                id integer primary key autoincrement,
+                timestamp text not null,
+                version text not null,
+                live_candidate_id text not null,
+                strategy_name text not null,
+                policy_name text,
+                station text not null,
+                market_date text not null,
+                market_family text not null,
+                selected_market_id text not null,
+                selected_token_id text,
+                selected_side text not null,
+                selected_bucket text,
+                raw_model_fair real,
+                calibrated_fair real,
+                market_mid_or_reference real,
+                uncertainty_haircut real not null,
+                adverse_selection_haircut real not null,
+                min_required_edge real not null,
+                max_quote_price real,
+                quote_size_cap real not null,
+                fair_valid_until text not null,
+                cancel_triggers_json text not null,
+                eligible integer not null,
+                reject_reason text,
+                raw_json text not null,
+                unique(live_candidate_id, version)
+            );
+
+            create index if not exists idx_live_price_sheets_candidate
+                on live_price_sheets(live_candidate_id);
+            create index if not exists idx_live_price_sheets_strategy_market
+                on live_price_sheets(strategy_name, market_date, station);
 
             create table if not exists hermes_insights (
                 id integer primary key autoincrement,
@@ -2027,6 +2063,54 @@ class ExecutionStore:
             (live_position_id, candidate_id),
         )
         self.connection.commit()
+
+    def insert_live_price_sheet(self, sheet: LivePriceSheet) -> int | None:
+        data = dataclass_to_jsonable(sheet)
+        raw_payload = {**data, **(sheet.raw_json or {})}
+        cursor = self.connection.execute(
+            """
+            insert or ignore into live_price_sheets (
+                timestamp, version, live_candidate_id, strategy_name, policy_name,
+                station, market_date, market_family, selected_market_id, selected_token_id,
+                selected_side, selected_bucket, raw_model_fair, calibrated_fair,
+                market_mid_or_reference, uncertainty_haircut, adverse_selection_haircut,
+                min_required_edge, max_quote_price, quote_size_cap, fair_valid_until,
+                cancel_triggers_json, eligible, reject_reason, raw_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                sheet.timestamp,
+                sheet.version,
+                sheet.live_candidate_id,
+                sheet.strategy_name,
+                sheet.policy_name,
+                sheet.station,
+                data["market_date"],
+                str(sheet.market_family),
+                sheet.selected_market_id,
+                sheet.selected_token_id,
+                str(sheet.selected_side),
+                sheet.selected_bucket,
+                sheet.raw_model_fair,
+                sheet.calibrated_fair,
+                sheet.market_mid_or_reference,
+                sheet.uncertainty_haircut,
+                sheet.adverse_selection_haircut,
+                sheet.min_required_edge,
+                sheet.max_quote_price,
+                sheet.quote_size_cap,
+                sheet.fair_valid_until,
+                json.dumps(sheet.cancel_triggers),
+                int(sheet.eligible),
+                sheet.reject_reason,
+                json.dumps(raw_payload, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+        if cursor.rowcount == 0:
+            return None
+        return int(cursor.lastrowid)
 
     def insert_live_policy_position(self, position: LivePolicyPosition) -> int | None:
         data = dataclass_to_jsonable(position)

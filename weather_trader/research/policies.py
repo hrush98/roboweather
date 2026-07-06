@@ -397,6 +397,7 @@ class ResearchPolicyEvaluator:
                         "model_names": list(required_models),
                         "model_snapshot_ids": {str(item.get("model_name")): int(item["id"]) for item in agreed},
                         "model_edges": {str(item.get("model_name")): item.get("selected_edge") for item in agreed},
+                        "model_fairs": {str(item.get("model_name")): _selected_fair(item) for item in agreed},
                         "model_bucket_calibration": {
                             str(item.get("model_name")): _selected_bucket_calibration(item)
                             for item in agreed

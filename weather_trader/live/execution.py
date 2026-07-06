@@ -37,6 +37,7 @@ from weather_trader.execution.discovery import MarketDiscoveryService, same_day_
 from weather_trader.execution.fair_value import FairValueEngine, FairValueResult
 from weather_trader.execution.grouping import GroupMarketContext, StationDateDecisionEngine, group_key
 from weather_trader.execution.liquidity import quantize_price, quantize_shares, quantize_usdc, walk_ask_ladder
+from weather_trader.execution.price_maker import build_phase1_price_sheet
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import CelsiusWeatherFeatureService, StationWeatherState, WeatherFeatureService
 from weather_trader.live.settings import LiveSettings, load_live_settings, private_key_from_env_or_keyfile
@@ -1067,6 +1068,25 @@ class LiveExecutionEngine:
                             "source_live_candidate_ids": self._source_live_candidate_ids(candidate),
                         },
                     )
+                    price_sheet_record = self._record_phase1_price_sheet(
+                        plan,
+                        policy,
+                        position,
+                        live_candidate_id=live_candidate_id,
+                        as_of_utc=as_of_utc,
+                        market_by_id=market_by_id,
+                        book_by_market_side=book_by_market_side,
+                    )
+                    if price_sheet_record is not None:
+                        price_sheet_id, price_sheet = price_sheet_record
+                        position = replace(
+                            position,
+                            raw_policy={
+                                **dict(position.raw_policy or {}),
+                                "phase1_price_sheet_id": price_sheet_id,
+                                "phase1_price_sheet": dataclass_to_jsonable(price_sheet),
+                            },
+                        )
                     position_count += 1
                     key = (position.station, position.market_date, position.market_family, position.scope_key)
                     existing = plan_candidates.get(key)
@@ -1214,6 +1234,37 @@ class LiveExecutionEngine:
             raw_payload=dataclass_to_jsonable(position),
         )
         return candidate_id
+
+    def _record_phase1_price_sheet(
+        self,
+        plan: LiveStrategyPlan,
+        policy: ResearchPolicySpec,
+        position: Any,
+        *,
+        live_candidate_id: str,
+        as_of_utc: datetime,
+        market_by_id: dict[str, MarketSnapshot],
+        book_by_market_side: dict[tuple[str, str], BookSnapshot],
+    ) -> tuple[int | None, Any] | None:
+        if plan.strategy.name != LIVE_POLICY_NAME:
+            return None
+        selected_side = str(position.selected_side)
+        selected_market_id = str(position.selected_market_id)
+        selected_token_id = self._selected_token_id(selected_market_id, selected_side, market_by_id)
+        selected_book = book_by_market_side.get((selected_market_id, selected_side))
+        quote_features = self._quote_lifecycle_features(selected_token_id, selected_book, as_of_utc)
+        sheet = build_phase1_price_sheet(
+            live_candidate_id=live_candidate_id,
+            strategy_name=plan.strategy.name,
+            policy_name=policy.name,
+            source=position,
+            selected_token_id=selected_token_id,
+            quote_features=quote_features,
+            as_of_utc=as_of_utc,
+            target_notional_usd=plan.target_notional_usd,
+        )
+        sheet_id = self.store.insert_live_price_sheet(sheet)
+        return sheet_id, sheet
 
     def _quote_lifecycle_features(
         self,

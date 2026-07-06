@@ -611,6 +611,35 @@ class LiveStrategy:
 
 
 @dataclass(frozen=True)
+class LivePriceSheet:
+    timestamp: str
+    version: str
+    live_candidate_id: str
+    strategy_name: str
+    policy_name: str | None
+    station: str
+    market_date: date
+    market_family: MarketFamily
+    selected_market_id: str
+    selected_token_id: str | None
+    selected_side: TradeAction
+    selected_bucket: str | None
+    raw_model_fair: float | None
+    calibrated_fair: float | None
+    market_mid_or_reference: float | None
+    uncertainty_haircut: float
+    adverse_selection_haircut: float
+    min_required_edge: float
+    max_quote_price: float | None
+    quote_size_cap: float
+    fair_valid_until: str
+    cancel_triggers: list[str]
+    eligible: bool
+    reject_reason: str | None
+    raw_json: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class LivePolicyPosition:
     timestamp: str
     strategy_name: str

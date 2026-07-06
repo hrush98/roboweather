@@ -210,6 +210,14 @@ Exit gate: every candidate can be reconstructed as a timeline from signal creati
 
 Build the price sheet that the quoting engine will use. This is the real model handoff: the forecast model no longer says "take this ask"; it says "we are willing to bid up to this price after haircuts."
 
+Implementation status, 2026-07-06: source support is in place for a scoped Phase 1 price sheet on the US high-temperature consensus no-tiny BUY_NO sleeve. Live candidate builds now persist `live_price_sheets` with raw/capped fair, market reference, uncertainty/adverse-selection haircuts, minimum edge, max quote price, size cap, validity, and cancel triggers. The read-only replay command is:
+
+```text
+/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase1_price_sheet_report.py --db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite
+```
+
+Initial active-DB sanity check on 2026-07-06: 15 resolved all-history sheets were +0.059 R/R, and 7 resolved last-30-day sheets were +0.044 R/R. This clears only the narrow "sheet generation is positive after haircuts" sanity check. It is not funded-trading approval because passive fill probability, queue position, cancellation behavior, and filled-subset quote PnL remain Phase 3/4 evidence.
+
 Required output per candidate/bucket/side:
 
 ```text

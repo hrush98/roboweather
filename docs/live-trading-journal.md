@@ -10,6 +10,8 @@ Updated: 2026-07-06
 
 Execution status: funded live trading paused pending the execution-first gates documented in `docs/hypotheses/2026-07-06-execution-first-phase.md`. The policies below describe the last configured live stack, not approval to restart funded execution.
 
+Phase 1 adverse-selection status: the scoped US high-temperature consensus no-tiny BUY_NO price sheet now exists in source and is persisted to `live_price_sheets`, with read-only replay available through `scripts/phase1_price_sheet_report.py`. The first active-DB sanity check was positive but thin (15 all-history resolved sheets at +0.059 R/R; 7 last-30-day resolved sheets at +0.044 R/R), so funded trading remains paused until passive shadow fills, cancellation labels, and filled-subset quote PnL pass later gates.
+
 ### Last configured policies
 
 | Policy | Side | Target notional | Entry cap | Notes |

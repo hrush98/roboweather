@@ -23,6 +23,7 @@ from weather_trader.execution.contracts import (
     utc_now_iso,
 )
 from weather_trader.execution.fair_value import FairValueResult
+from weather_trader.execution.price_maker import PHASE1_PRICE_SHEET_VERSION, build_phase1_price_sheet
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import StationWeatherState
 from weather_trader.live.execution import (
@@ -835,8 +836,16 @@ def test_live_build_candidates_persists_prefilter_universe_and_links_position(tm
     assert policy_rows
     assert all(row["prediction_snapshot_id"] is not None for row in model_rows)
     assert json.loads(model_rows[0]["quote_features_json"])["top_book_age_seconds"] == pytest.approx(0.0)
+    price_sheet = store.connection.execute("select * from live_price_sheets order by id limit 1").fetchone()
+    assert price_sheet is not None
+    assert price_sheet["version"] == PHASE1_PRICE_SHEET_VERSION
+    assert price_sheet["live_candidate_id"] in {row["candidate_id"] for row in policy_rows}
+    assert price_sheet["selected_side"] == "BUY_NO"
+    assert price_sheet["eligible"] == 1
+    assert price_sheet["max_quote_price"] < price_sheet["calibrated_fair"]
 
     candidate = next(item for item in candidates if item.live_candidate_id == policy_rows[0]["candidate_id"])
+    assert candidate.position.raw_policy["phase1_price_sheet_id"] == price_sheet["id"]
     sizing = engine._size_candidate(candidate, as_of)
     market_by_id = {market.market_id: market for market in markets}
     position = engine._live_position(candidate, market_by_id[candidate.position.selected_market_id], reject_reason=None, sizing=sizing)
@@ -857,6 +866,81 @@ def test_live_build_candidates_persists_prefilter_universe_and_links_position(tm
     ).fetchone()
     assert linked["live_candidate_id"] == candidate.live_candidate_id
     assert linked["live_position_id"] == position_id
+
+
+def test_phase1_price_sheet_caps_extreme_fair_and_applies_haircuts(tmp_path: Path) -> None:
+    candidate = _calibration_candidate(target=50.0)
+    source = candidate.position.__class__(
+        **{
+            **candidate.position.__dict__,
+            "entry_fair": 0.99,
+            "raw_policy": {
+                "model_fairs": {
+                    DYNAMIC_TUNED_MODEL: 0.99,
+                    CATBOOST_MODEL: 0.97,
+                },
+                "model_bucket_calibration": {
+                    DYNAMIC_TUNED_MODEL: {"decision": "TRADE"},
+                    CATBOOST_MODEL: {"decision": "TRADE"},
+                },
+            },
+            "selected_best_bid": 0.31,
+            "selected_best_ask": 0.40,
+            "selected_spread": 0.09,
+        }
+    )
+
+    sheet = build_phase1_price_sheet(
+        live_candidate_id="policy-test",
+        strategy_name=LIVE_POLICY_NAME,
+        policy_name=LIVE_POLICY_NAME,
+        source=source,
+        selected_token_id="no-token",
+        quote_features={
+            "best_bid": 0.31,
+            "best_ask": 0.40,
+            "spread": 0.09,
+            "top_level_cancel_count_5m": 2,
+            "recent_trade_count_5m": 3,
+        },
+        as_of_utc=datetime(2026, 6, 15, 18, 0, tzinfo=timezone.utc),
+        target_notional_usd=50.0,
+    )
+
+    assert sheet.raw_model_fair == pytest.approx(0.98)
+    assert sheet.calibrated_fair == pytest.approx(0.90)
+    assert sheet.uncertainty_haircut > 0.04
+    assert sheet.adverse_selection_haircut > 0.06
+    assert sheet.min_required_edge >= 0.12
+    assert sheet.max_quote_price <= 0.77
+    assert sheet.quote_size_cap == pytest.approx(5.0)
+    assert sheet.eligible is True
+
+
+def test_phase1_price_sheet_marks_buy_yes_out_of_scope(tmp_path: Path) -> None:
+    candidate = _calibration_candidate(target=50.0)
+    source = candidate.position.__class__(
+        **{
+            **candidate.position.__dict__,
+            "selected_side": TradeAction.BUY_YES,
+            "entry_fair": 0.75,
+            "raw_policy": {"model_fairs": {DYNAMIC_TUNED_MODEL: 0.75, CATBOOST_MODEL: 0.72}},
+        }
+    )
+
+    sheet = build_phase1_price_sheet(
+        live_candidate_id="policy-test-buy-yes",
+        strategy_name=LIVE_POLICY_NAME,
+        policy_name=LIVE_POLICY_NAME,
+        source=source,
+        selected_token_id="yes-token",
+        quote_features={},
+        as_of_utc=datetime(2026, 6, 15, 18, 0, tzinfo=timezone.utc),
+        target_notional_usd=50.0,
+    )
+
+    assert sheet.eligible is False
+    assert sheet.reject_reason == "PHASE1_SIDE_OUT_OF_SCOPE"
 
 
 def _candidate_market(
