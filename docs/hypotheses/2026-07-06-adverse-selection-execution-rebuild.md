@@ -17,7 +17,7 @@ live EV   = P(fill | selected, book state, order tactic) * E[pnl | filled, selec
 
 The system has repeatedly optimized the first term and only loosely measured the second. In thin weather books, posted liquidity is not a commitment to be filled. If the quote is stale in our favor, the maker can cancel or move before we arrive. If the quote is stale against us, it remains available and we fill. That is adverse selection.
 
-The immediate implication: faster taker execution may help only when the quote is genuinely stale and reachable. Faster execution against the same bad fill distribution just loses faster. The system needs to decide, per candidate, whether to take, make, wait, or skip.
+The immediate implication: faster taker execution may help only when the quote is genuinely stale and reachable. Faster execution against the same bad fill distribution just loses faster. The primary next-phase build should therefore be a conservative price-maker / quoting system, not a broader grid of taker and resting variants. The model edge should set our price; the market should have to trade with us there.
 
 ## Local Evidence
 
@@ -95,17 +95,24 @@ The current system has mostly measured 1 and 4. The next system must measure 2 a
 
 ### The Correct Unit
 
-The tradable object is:
+The tradable object is a priced quote:
 
 ```text
-signal policy + execution tactic + sizing rule + market-state filter
+forecast distribution
++ calibrated fair price
++ quote rule
++ cancellation rule
++ sizing rule
++ market-state filter
 ```
 
-Do not evaluate `US consensus` by itself. Evaluate concrete arms such as:
+Do not evaluate `US consensus` by itself. Evaluate concrete price-making mechanisms such as:
 
-- `US consensus / taker FAK entry+1c / max $10 / only if ask depth age and queue stability pass`
-- `US consensus / post-only bid improves best bid by 1c / 180s GTD / cancel on adverse book move`
-- `US consensus / no trade when fill-toxicity score is high`
+- `US consensus / calibrated NO fair / bid fair minus 12c / GTD 120s / cancel on fair deterioration`
+- `US consensus / calibrated NO fair / bid best bid plus 1c only when still at least 10c below fair / cancel on adverse book move`
+- `US consensus / skip when no quote price preserves the required edge after uncertainty and toxicity haircuts`
+
+Taker FAK can remain as a diagnostic or rare opportunistic arm, but it should not be the primary path. The phase-shift hypothesis is that RoboWeather must stop chasing visible asks and instead test whether its model can set prices that are occasionally accepted with positive filled-subset EV.
 
 ## Answering The Key Questions
 
@@ -124,20 +131,21 @@ But do not simply chase more quotes. If the fill event is negatively correlated 
 
 ### Do We Need Better Mechanisms?
 
-Yes. The current mechanism is a price-anchored taker attempt plus fallback ladder. The next mechanism should be a router:
+Yes. The current mechanism is a price-anchored taker attempt plus fallback ladder. That still starts from the market's visible ask and lets the market decide which stale quotes remain available. The next mechanism should start from our calibrated fair value and quote a conservative bid we are happy to own if filled.
 
-| Tactic | Use When | Avoid When |
+| Component | Job | Non-goal |
 | --- | --- | --- |
-| FAK/FOK taker | Quote is deep, stable, spread is tight, edge remains positive after a fill-toxicity haircut | Quote just appeared, spread is wide, top ask is tiny, model edge is mostly extreme calibration artifact |
-| Post-only maker | Signal is durable for minutes, best bid can be improved without crossing, fill-toxicity score is acceptable | Outcome information is changing fast or fills historically predict losses |
-| GTD ladder | Multiple price levels are justified by calibrated fair and TTL is event-aware | It is only being used to rescue missed taker fills without a queue model |
-| Skip | Fill-conditioned EV is negative or unknown | Never treat replay EV alone as approval |
+| Calibrated fair engine | Convert model distribution into a conservative buy price with uncertainty and toxicity haircuts | Do not output 0.999-style certainty as a trading price without strong calibration evidence |
+| Post-only quote engine | Place bids/offers at our price, never crossing just because the ask looks cheap | Do not use passive orders as retry logic after failed FAK |
+| Cancellation engine | Pull quotes when fair value, book state, weather state, or risk state changes | Do not rely only on a fixed TTL |
+| Fill-quality report | Decide whether fills at our prices are profitable | Do not promote from selected replay alone |
+| Taker control arm | Measure whether rare stable visible liquidity is worth taking | Do not let taker fills drive the main system unless filled-subset EV proves it |
 
 ### Do We Need A Different Model?
 
 Not just another weather model. We need two additional models:
 
-1. A calibrated fair-value model that treats market price as a strong prior and penalizes extreme certainty. Fair values like 0.999 against 0.19 asks are suspicious unless uncertainty and bucket-resolution semantics are fully controlled.
+1. A calibrated fair-value model that treats market price as a strong prior and penalizes extreme certainty. Fair values like 0.999 against 0.19 asks are suspicious unless uncertainty and bucket-resolution semantics are fully controlled. The output must be a quoteable price, not only a trade/no-trade edge.
 2. A fill/toxicity model:
 
 ```text
@@ -150,7 +158,7 @@ The target is not "best weather forecast"; it is "best fill-conditioned trade."
 
 ## Rebuild Plan
 
-### Phase 0: Instrumentation Before Trading
+### Phase 0: Instrumentation And Data Integrity
 
 No funded restart until this exists.
 
@@ -164,58 +172,130 @@ Implementation status, 2026-07-06: source support is in place for durable live c
 
 Exit gate: every candidate can be reconstructed as a timeline from signal creation through book events, order attempts, fills/misses, and settlement.
 
-### Phase 1: Shadow Queue And Toxicity Replay
+### Phase 1: Calibrated Price-Maker Model
 
-Build a shadow simulator from recorded WebSocket books:
+Build the price sheet that the quoting engine will use. This is the real model handoff: the forecast model no longer says "take this ask"; it says "we are willing to bid up to this price after haircuts."
 
-- simulate whether a FAK at `entry+1c` would have filled at the next event;
-- simulate post-only queue placement and whether the quote would have filled before an adverse book move;
-- label each selected candidate as filled, missed, toxic fill, benign fill, adverse no-fill, or stale quote;
-- compare selected, fillable, filled, unfilled, and skipped rows with the same settlement labels.
-
-Exit gate: a report shows fill-conditioned EV by tactic, not just selected replay EV.
-
-### Phase 2: Execution Router
-
-Implement a small policy router:
+Required output per candidate/bucket/side:
 
 ```text
-if fill_conditioned_ev(taker) > threshold and quote_stability passes:
-    submit FAK/FOK
-elif fill_conditioned_ev(maker) > threshold and signal_half_life passes:
-    submit post-only GTD ladder
-else:
-    skip
+raw_model_fair
+calibrated_fair
+market_mid_or_reference
+uncertainty_haircut
+adverse_selection_haircut
+min_required_edge
+max_quote_price
+quote_size_cap
+fair_valid_until
+cancel_triggers
 ```
 
-Requirements:
+Initial scope:
 
-- Use WebSocket-maintained books, not only REST snapshots.
-- Batch resting ladder children where supported instead of submitting each child sequentially.
-- Prefer GTD auto-expiry for passive orders where viable; keep heartbeat/cancel safeguards.
-- Cancel passive orders on adverse book moves, weather feature refresh, model fair deterioration, or station/date risk changes.
-- Keep FAK and maker arms separate in reporting. Do not pool them.
+- US high-temperature consensus no-tiny only.
+- BUY side only, preferably BUY_NO first unless the evidence says BUY_YES is cleaner.
+- No global low restart in this phase.
+- Conservative probability caps and minimum edge after all haircuts.
 
-### Phase 3: Randomized Tiny Live Experiments
+Exit gate: historical and current-window replay show that the generated quote prices would have positive theoretical EV after haircuts, and the price sheet does not depend on extreme uncalibrated fairs.
+
+### Phase 2: Post-Only Quote Engine
+
+Build a one-sided quoting engine, not a resting fallback.
+
+Behavior:
+
+- Place post-only GTC/GTD bids at or below `max_quote_price`.
+- Never cross the spread as part of the primary price-maker path.
+- Prefer GTD where practical so quote expiry is exchange-enforced; keep heartbeat cancel safeguards.
+- Batch child quotes where supported instead of submitting a ladder sequentially.
+- Cancel on any adverse fair-value change, weather update, book move, station/date risk change, or stale feed condition.
+- Record each quote with the price-sheet version and all haircuts used to set the price.
+
+Quote examples:
+
+```text
+if calibrated_fair - quote_price >= required_edge_after_haircuts:
+    post_only_bid(quote_price, size, gtd_expiry)
+
+if calibrated_fair deteriorates or book/weather state invalidates the quote:
+    cancel
+```
+
+Exit gate: dry-run/shadow quotes can be reconstructed and cancelled correctly, with no funded exposure.
+
+### Phase 3: Shadow Quote Replay
+
+Use recorded CLOB events to replay whether our posted prices would plausibly have filled. Do not expect perfect passive-fill replay from aggregate public books; score scenarios conservatively.
+
+For each shadow quote, label:
+
+- postable or crossed;
+- queue ahead estimate;
+- pessimistic fill;
+- base-case fill;
+- optimistic fill;
+- adverse book move before fill;
+- cancel-trigger fired before fill;
+- final settlement PnL if filled.
+
+Promotion interpretation:
+
+- If only optimistic queue assumptions are positive, the quote policy is not promotable.
+- If pessimistic/base fills are rare but positive, it may support tiny live exploration.
+- If fills are still the bad subset, the model edge is not accessible through this venue/tactic.
+
+Exit gate: shadow quote replay reports fill-conditioned EV by quoted price band, spread regime, station, side, and cancellation trigger.
+
+### Phase 4: Tiny Funded Quote Canary
 
 Only after shadow labels are working.
 
-- Use tiny, explicit funded arms such as `$2-$5` per order and a strict daily loss cap.
-- Randomize among equivalent eligible candidates across tactics to avoid choosing the arm after seeing book behavior.
-- Run enough resolved rows to compare `E[pnl | filled]` versus `E[pnl | missed]` per tactic.
-- Promote only if actual filled R/R, filled-at-entry replay, and fill-conditioned replay are positive in the current window.
+- Use `$2-$5` post-only quotes and a strict daily loss cap.
+- Randomize quote aggressiveness inside a preapproved safe band so the later analysis is not purely self-selected.
+- Keep taker FAK off by default except as a separately tagged control arm.
+- Run enough resolved fills and misses to compare `E[pnl | filled at our quote]` versus `E[pnl | missed]`.
+- Promote only if actual filled R/R, filled-at-quote replay, shadow base-case replay, and current-window settlement are positive.
 
-### Phase 4: Sizing
+### Phase 5: Learned Quote Policy And Sizing
 
-Sizing should be a function of fill-conditioned edge, not raw edge:
+Only after the tiny quote canary passes. The learned policy should choose quote/skip/size from context, not from a hand-written list of 100 execution strategies.
+
+Inputs:
+
+```text
+calibrated_fair
+uncertainty
+spread
+depth
+queue_age
+recent cancels/trades
+station/side/regime
+time-to-resolution
+weather update freshness
+inventory/risk state
+```
+
+Outputs:
+
+```text
+skip_or_quote
+quote_price
+quote_size
+ttl_or_gtd_expiry
+cancel_rule
+```
+
+Sizing should be a function of fill-conditioned quote edge, not raw model edge:
 
 ```text
 target_size =
     bankroll
     * fractional_kelly
-    * calibrated_edge
+    * calibrated_quote_edge
     * fill_quality_score
-    * liquidity_capacity
+    * quote_capacity
     * regime_confidence
 ```
 
@@ -224,44 +304,48 @@ Until the fill/toxicity model is stable, use flat tiny canary sizing. Do not siz
 ## Concrete Near-Term Priorities
 
 1. Keep global low MVP stopped. Recent selected replay is negative, so execution work cannot rescue it.
-2. Use US consensus no-tiny as the first execution research subject. It has positive selected replay but severe fill-quality degradation.
-3. Replace `selected_book_age_seconds` with real exchange/feed age and quote-lifecycle metrics.
-4. Build the candidate-event/fill-attribution dataset before another live restart.
-5. Add a fill-conditioned promotion report:
+2. Use US consensus no-tiny as the first price-maker research subject. It has positive selected replay but severe fill-quality degradation when we chase available liquidity.
+3. Build the calibrated price-sheet generator: fair, uncertainty haircut, adverse-selection haircut, max quote price, quote size cap, and cancel triggers.
+4. Run the CLOB recorder against current candidates so quote lifecycle, feed age, queue movement, and cancellation triggers are observable.
+5. Build the shadow quote replay report:
 
 ```text
 selected replay
-fillable shadow replay by tactic
-actual filled replay at entry
-actual filled replay at fill price
+posted-price shadow replay
+pessimistic/base/optimistic passive fill assumptions
+actual filled replay at quoted price
 unfilled selected replay
 actual settled PnL
-fill probability
-toxicity probability
-capacity by tactic
+fill probability by quote band
+toxicity probability by quote band
+cancel-trigger attribution
 ```
 
-6. Add the first router only after the report exists; otherwise another execution tactic becomes another unmeasured band-aid.
+6. Build the post-only quote engine for tiny canaries only after the price sheet and shadow replay exist.
+7. Do not build a broad execution-variant leaderboard before the price-maker test. The decisive question is whether our model can set bid prices that the market occasionally accepts with positive filled-subset EV.
 
 ## Kill Rules For The Next Phase
 
 - Kill a tactic if `E[pnl | filled]` is negative, even when selected replay is positive.
 - Kill a tactic if winner fill rate is materially below loser fill rate after minimum sample.
 - Kill a sleeve if recent selected replay is negative before execution effects.
-- Kill any passive tactic whose fills occur mostly after adverse book movement.
+- Kill any quote policy whose fills occur mostly after adverse book movement.
+- Kill any quote policy that only works under optimistic queue assumptions.
+- Kill any quote policy that depends on extreme uncalibrated fair values.
 - Kill any taker tactic that depends on quotes with high cancellation probability.
 
 ## Bottom Line
 
-RoboWeather should not restart as a better-filtered version of the same taker bot. It should restart as a measured execution system.
+RoboWeather should not restart as a better-filtered version of the same taker bot. It should restart, if at all, as a measured price-maker that uses forecast edge to set conservative quotes.
 
-The path is not "find the one good model." The path is:
+The path is not "find the one good model" or "try enough resting TTLs." The path is:
 
 ```text
 calibrated weather edge
 + event-driven book state
-+ fill/toxicity prediction
-+ tactic-specific execution
++ conservative quote prices
++ post-only execution with cancellation rules
++ fill/toxicity validation at our prices
 + tiny randomized live validation
 ```
 
