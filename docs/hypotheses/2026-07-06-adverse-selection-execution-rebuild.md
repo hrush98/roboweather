@@ -38,7 +38,7 @@ The desk question for every sleeve is therefore:
 At this price, size, and book state, does getting filled make us happier or more worried?
 ```
 
-If the answer is "more worried," the system should skip, quote lower, or cancel faster. If the answer cannot be measured, funded size should stay at canary level.
+If the answer is "more worried," the system should skip, quote lower, or cancel faster. If the answer cannot be measured at useful size, funded trading should stay paused for that tactic.
 
 ## Local Evidence
 
@@ -296,7 +296,7 @@ Exit gate: dry-run/shadow quotes can be reconstructed and cancelled correctly, w
 
 This is the next build target for data collection. It is not funded trading and it should not require registering a large set of live strategies.
 
-Implementation status, 2026-07-06: source support is in place for the first steady-state collection milestone. The scoped Phase 1 sheet now fans out a bounded 24-spec shadow grid per candidate, with stable `quote_spec_id` values, direct `live_quote_intents` columns for spec/rule metadata, `would_post` flags, skipped/postable lifecycle states, and pending markout hook metadata for `10s`, `30s`, `2m`, `10m`, next weather update, close, and settlement. Shadow reconciliation now distinguishes expiry, stale feed, and rule cancellation states. `scripts/shadow_collection_report.py` reads the live ledger and reconstructs a sample candidate through candidate features, price sheet, emitted specs, book/feed coverage, lifecycle states, and pending/available markout windows. This remains dry-run/shadow infrastructure only; no funded CLOB quote placement or broad live strategy registration was added.
+Implementation status, 2026-07-06: source support is only partially in place for this milestone. The scoped Phase 1 sheet now fans out a bounded 24-spec shadow grid per candidate, with stable `quote_spec_id` values, direct `live_quote_intents` columns for spec/rule metadata, `would_post` flags, skipped/postable lifecycle states, and pending markout hook metadata for `10s`, `30s`, `2m`, `10m`, next weather update, close, and settlement. Shadow reconciliation now distinguishes expiry, stale feed, and rule cancellation states. `scripts/shadow_collection_report.py` reads the live ledger and reconstructs a sample candidate through candidate features, price sheet, emitted specs, book/feed coverage, lifecycle states, and pending/available markout windows. This is not enough to declare the collection milestone complete: the current tiny-size shadow grid is not representative, there is no operational CLOB event collector wired to candidate tokens, and there is no persisted fill/toxicity outcome labeler yet. This remains dry-run/shadow infrastructure only; no funded CLOB quote placement or broad live strategy registration was added.
 
 Keep these concepts separate:
 
@@ -311,11 +311,11 @@ The collection architecture should be:
 dry-run/live scan
 -> full candidate universe
 -> one or more price sheets
--> many virtual quote specs per candidate
+-> many useful-size virtual quote specs per candidate
 -> shadow quote intents
 -> shared CLOB/book event stream by token
 -> lifecycle states and markout hooks
--> later shadow fill/toxicity/settlement labels
+-> later shadow fill/toxicity/settlement labels at $50-$100 intended size
 ```
 
 Minimum components to enter steady-state shadow collection:
@@ -330,9 +330,12 @@ Minimum components to enter steady-state shadow collection:
    - specs are not live strategies;
    - each spec has a stable `quote_spec_id` or hash;
    - each spec records `fair_source`, haircut/edge rule, `quote_rule`, `ttl`, `cancel_rule`, size, side, and post-only/crossing behavior;
+   - the useful-size axis is `$50` baseline and `$100` target-capacity stress, because that is the size range the system must trade to matter;
+   - do not use `$5` or `$10` quote arms as phase evidence. If the market cannot support `$50` shadow capacity under conservative labels, the right answer is skip/not executable, not "small size worked";
    - start with roughly 20-60 specs, broad enough to learn response curves but small enough to audit.
 3. The shadow quote intent emitter fans out specs over candidates:
    - for each eligible candidate/spec pair, persist `candidate_id`, `quote_spec_id`, `quote_price`, size, `would_post`, `skip_reason`, creation timestamp, expiry timestamp, cancel rule, and feature payload;
+   - persist intended notional and enough top/depth context to label whether `$50` and `$100` were plausibly fillable under conservative, base, and optimistic assumptions;
    - no funded order path is reachable from these rows.
 4. Lifecycle reconciliation runs continuously:
    - mark intents as `SHADOW_POSTABLE`, `SHADOW_SKIPPED`, `SHADOW_EXPIRED`, `SHADOW_CANCELLED_BY_RULE`, `SHADOW_STALE_FEED`, or equivalent;
@@ -340,20 +343,25 @@ Minimum components to enter steady-state shadow collection:
 5. Minimal markout hooks are present:
    - quote timestamps and token/event coverage are sufficient to compute `10s`, `30s`, `2m`, `10m`, next weather update, close, and settlement markouts later;
    - the first implementation can compute these in batch rather than synchronously.
+6. The run-readiness report proves useful-size coverage:
+   - candidate rows, quote intents, book snapshots, and CLOB feed events are present for current candidates;
+   - the report separates `$50` and `$100` intended notional coverage from smaller incidental depth;
+   - missing feed coverage, missing token coverage, or only tiny-size quote coverage fails the milestone.
 
-The first done gate is operational reconstruction, not profitability:
+The first done gate is useful-size operational reconstruction, not profitability:
 
 ```text
 For a random current candidate, an operator can inspect:
 candidate features
-all emitted shadow quote specs
+all emitted $50/$100 shadow quote specs
 initial book state
 book events after quote time
 shadow expiry/cancel state
 markout windows available or pending
+whether $50 and $100 intended notional have enough event/depth data to label later
 ```
 
-When this is true for current candidates across a full dry-run session, the system is in the new mental model and can collect the dataset needed for Phase 3. Strategy registration, funded canaries, learned sizing, and promotion logic should remain out of scope until after this collection milestone is stable.
+When this is true for current candidates across a full dry-run session, the system is in the new mental model and can collect the dataset needed for Phase 3. Strategy registration, funded validation, learned sizing, and promotion logic should remain out of scope until after this collection milestone is stable.
 
 ### Phase 3: Shadow Quote Replay
 
@@ -375,39 +383,37 @@ For each shadow quote, label:
 Promotion interpretation:
 
 - If only optimistic queue assumptions are positive, the quote policy is not promotable.
-- If pessimistic/base fills are rare but positive, it may support tiny live exploration.
+- If pessimistic/base fills are rare but positive at `$50-$100`, it may support tightly capped funded validation at the same size. If they are only positive below useful size, the tactic is not promotable.
 - If fills are still the bad subset, the model edge is not accessible through this venue/tactic.
 - If immediate markouts are adverse but settlement is positive, keep size capped until the reason is understood; the policy may be taking toxic intraday fills and surviving only because the weather forecast is strong enough.
 - If markouts are favorable but settlement is negative, investigate bucket semantics, late weather updates, and settlement-source alignment before changing execution.
 
 Exit gate: shadow quote replay reports fill-conditioned EV and markouts by quoted price band, spread regime, station, side, queue estimate, and cancellation trigger.
 
-### Phase 4: Funded Quote Canary Ladder
+### Phase 4: Funded Useful-Size Quote Validation
 
 Only after shadow labels are working.
 
-Tiny canaries are plumbing checks, not promotion evidence. They prove that orders post, post-only behavior works, cancels work, ledger links are correct, and settlement attribution works. They do not prove `$50+` tradability.
+Do not run `$5` or `$10` quote canaries for this phase. They are not representative of the execution problem we need to solve and should not be treated as plumbing, capacity, or promotion evidence. If a tactic cannot pass shadow and funded checks at roughly the size we need to trade, it is not useful for this system.
 
 Capacity evidence must be size-specific:
 
 ```text
-$5 fills prove $5 plumbing/tradability only
-$25 fills are the first useful capacity read
-$50 fills are the minimum normal-size promotion evidence
+$50 fills are the minimum useful-size validation
+$100 fills are the target-capacity validation
 ```
 
-Canary ladder:
+Funded validation ladder:
 
-1. `$2-$5` smoke test: verify post-only quote placement, cancellation, event linkage, ledger accounting, and settlement attribution.
-2. `$25` quote canary: first real adverse-selection/capacity read with strict daily loss caps.
-3. `$50` quote canary: promotion evidence for normal live sizing.
+1. `$50` quote validation: first funded adverse-selection/capacity read with strict daily loss caps.
+2. `$100` quote validation: target-capacity evidence only after `$50` fills and misses are clean.
 
 Rules:
 
 - Randomize quote aggressiveness inside a preapproved safe band so the later analysis is not purely self-selected.
 - Keep taker FAK off by default except as a separately tagged control arm.
 - Run enough resolved fills and misses at each size to compare `E[pnl | filled at our quote]` versus `E[pnl | missed]`.
-- Promote only at the size that passed. Do not extrapolate `$5` fills to `$25` or `$50`.
+- Promote only at the size that passed. Do not extrapolate sub-`$50` behavior to `$50` or `$100`.
 - Promote only if actual filled R/R, filled-at-quote replay, shadow base-case replay, and current-window settlement are positive at the target size.
 
 ### Hard No-Promote Gates
@@ -421,7 +427,7 @@ Do not restart normal funded trading or size up a sleeve until all of these are 
 - Base-case shadow queue assumptions are positive; optimistic-only profitability is research-only.
 - Post-fill markouts are not persistently adverse at `30s`, `2m`, and next weather update.
 - Settlement labels match Polymarket outcomes for the market family being traded.
-- The tested size has direct evidence. `$5` fills do not authorize `$25` or `$50` sizing.
+- The tested size has direct evidence. `$50` fills authorize at most `$50`; `$100` sizing requires `$100` evidence.
 
 Minimum evidence before normal sizing:
 
@@ -432,11 +438,11 @@ comparable resolved missed/expired quote sample
 no open data-integrity gaps in quote, order, fill, and settlement linkage
 ```
 
-Below that threshold, the only allowed funded exposure is a predeclared canary with strict daily loss caps.
+Below that threshold, the system stays paused for that tactic/size. Do not substitute tiny funded exposure for useful-size validation.
 
 ### Phase 5: Learned Quote Policy And Sizing
 
-Only after the tiny quote canary passes. The learned policy should choose quote/skip/size from context, not from a hand-written list of 100 execution strategies.
+Only after useful-size quote validation passes. The learned policy should choose quote/skip/size from context, not from a hand-written list of 100 execution strategies.
 
 Inputs:
 
@@ -476,7 +482,7 @@ target_size =
     * regime_confidence
 ```
 
-Until the fill/toxicity model is stable, use staged quote sizing with strict loss caps. Tiny quotes are only plumbing evidence; capacity and promotion evidence must come from the same approximate size intended for live use. Do not size up to compensate for missed fills; that scales the adverse-selection problem unless `E[pnl | filled]` is proven positive at the target size.
+Until the fill/toxicity model is stable, use staged quote sizing with strict loss caps. Capacity and promotion evidence must come from the same approximate size intended for live use, with `$50` as the minimum useful validation and `$100` as target-capacity validation. Do not size up to compensate for missed fills; that scales the adverse-selection problem unless `E[pnl | filled]` is proven positive at the target size.
 
 ## Concrete Near-Term Priorities
 
@@ -501,8 +507,8 @@ toxicity probability by quote band
 cancel-trigger attribution
 ```
 
-8. Build funded post-only placement only after the price sheet and shadow replay exist. The current quote-intent support is shadow/dry-run infrastructure, not live CLOB placement. Treat `$2-$5` funded quotes as plumbing tests only.
-9. Require `$25` and then `$50` capacity canaries before considering normal funded restart.
+8. Build funded post-only placement only after the price sheet, CLOB recorder, useful-size shadow specs, and shadow replay exist. The current quote-intent support is shadow/dry-run infrastructure, not live CLOB placement. Do not add `$5` or `$10` funded quote canaries for this phase.
+9. Require `$50` useful-size validation and then `$100` target-capacity validation before considering normal funded restart.
 10. Do not build a broad execution-variant leaderboard before the price-maker test. The decisive question is whether our model can set bid prices that the market occasionally accepts with positive filled-subset EV at useful size.
 
 ## Kill Rules For The Next Phase
@@ -527,7 +533,7 @@ calibrated weather edge
 + conservative quote prices
 + post-only execution with cancellation rules
 + fill/toxicity validation at our prices
-+ tiny randomized live validation
++ useful-size live validation at $50-$100
 ```
 
 Only after that can replay EV become tradable EV.
