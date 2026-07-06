@@ -4,6 +4,7 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-07-06
 
+- Updated the adverse-selection rebuild plan to distinguish tiny quote canaries from capacity evidence: `$2-$5` funded quotes are plumbing tests only, while `$25` and `$50` quote canaries are required before normal-size promotion evidence.
 - Implemented Phase 1 adverse-selection price-maker source support: scoped US high-temperature consensus no-tiny BUY_NO candidates now get persisted `live_price_sheets` with raw/capped fair, market reference, uncertainty/adverse-selection haircuts, minimum edge, max quote price, size cap, validity, and cancel triggers. Added `scripts/phase1_price_sheet_report.py` to replay the generated sheet on raw research snapshots.
 - Clarified the ML framing in `docs/hypotheses/2026-07-06-adverse-selection-execution-rebuild.md`: keep the existing regression/tree/HRRR/METAR forecast stack, but route outputs through calibration, market-aware shrinkage, uncertainty haircuts, quoteable fair prices, and filled-subset quote-PnL evaluation.
 - Refined `docs/hypotheses/2026-07-06-adverse-selection-execution-rebuild.md` so the primary next-phase build is a conservative price-maker / post-only quoting engine with calibrated quote prices, cancellation rules, shadow quote replay, and tiny funded quote canaries rather than a broad taker/resting execution-variant search.

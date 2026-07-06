@@ -290,15 +290,33 @@ Promotion interpretation:
 
 Exit gate: shadow quote replay reports fill-conditioned EV by quoted price band, spread regime, station, side, and cancellation trigger.
 
-### Phase 4: Tiny Funded Quote Canary
+### Phase 4: Funded Quote Canary Ladder
 
 Only after shadow labels are working.
 
-- Use `$2-$5` post-only quotes and a strict daily loss cap.
+Tiny canaries are plumbing checks, not promotion evidence. They prove that orders post, post-only behavior works, cancels work, ledger links are correct, and settlement attribution works. They do not prove `$50+` tradability.
+
+Capacity evidence must be size-specific:
+
+```text
+$5 fills prove $5 plumbing/tradability only
+$25 fills are the first useful capacity read
+$50 fills are the minimum normal-size promotion evidence
+```
+
+Canary ladder:
+
+1. `$2-$5` smoke test: verify post-only quote placement, cancellation, event linkage, ledger accounting, and settlement attribution.
+2. `$25` quote canary: first real adverse-selection/capacity read with strict daily loss caps.
+3. `$50` quote canary: promotion evidence for normal live sizing.
+
+Rules:
+
 - Randomize quote aggressiveness inside a preapproved safe band so the later analysis is not purely self-selected.
 - Keep taker FAK off by default except as a separately tagged control arm.
-- Run enough resolved fills and misses to compare `E[pnl | filled at our quote]` versus `E[pnl | missed]`.
-- Promote only if actual filled R/R, filled-at-quote replay, shadow base-case replay, and current-window settlement are positive.
+- Run enough resolved fills and misses at each size to compare `E[pnl | filled at our quote]` versus `E[pnl | missed]`.
+- Promote only at the size that passed. Do not extrapolate `$5` fills to `$25` or `$50`.
+- Promote only if actual filled R/R, filled-at-quote replay, shadow base-case replay, and current-window settlement are positive at the target size.
 
 ### Phase 5: Learned Quote Policy And Sizing
 
@@ -341,7 +359,7 @@ target_size =
     * regime_confidence
 ```
 
-Until the fill/toxicity model is stable, use flat tiny canary sizing. Do not size up to compensate for missed fills; that scales the adverse-selection problem unless `E[pnl | filled]` is proven positive.
+Until the fill/toxicity model is stable, use staged quote sizing with strict loss caps. Tiny quotes are only plumbing evidence; capacity and promotion evidence must come from the same approximate size intended for live use. Do not size up to compensate for missed fills; that scales the adverse-selection problem unless `E[pnl | filled]` is proven positive at the target size.
 
 ## Concrete Near-Term Priorities
 
@@ -363,8 +381,9 @@ toxicity probability by quote band
 cancel-trigger attribution
 ```
 
-6. Build the post-only quote engine for tiny canaries only after the price sheet and shadow replay exist.
-7. Do not build a broad execution-variant leaderboard before the price-maker test. The decisive question is whether our model can set bid prices that the market occasionally accepts with positive filled-subset EV.
+6. Build the post-only quote engine after the price sheet and shadow replay exist. Treat `$2-$5` funded quotes as plumbing tests only.
+7. Require `$25` and then `$50` capacity canaries before considering normal funded restart.
+8. Do not build a broad execution-variant leaderboard before the price-maker test. The decisive question is whether our model can set bid prices that the market occasionally accepts with positive filled-subset EV at useful size.
 
 ## Kill Rules For The Next Phase
 
