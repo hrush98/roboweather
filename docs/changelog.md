@@ -4,6 +4,7 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-07-06
 
+- Added `docs/hypotheses/2026-07-06-adverse-selection-execution-rebuild.md`, a deep-dive execution rebuild report covering adverse selection, market microstructure lessons, local whole-chain evidence, and the recommended WebSocket/fill-conditioned execution roadmap.
 - Documented the execution-first phase in `docs/hypotheses/2026-07-06-execution-first-phase.md` after whole-chain analysis showed persistent replay-to-live divergence, adverse fill selection, and recent global low MVP signal degradation.
 - Updated `docs/live-trading-journal.md` to pause funded live trading pending fill-conditioned gates and to require actual filled R/R, filled-at-entry replay, filled-vs-unfilled selected comparison, settlement alignment, and recent-window checks before future promotion or sizing.
 - Updated `docs/continuous-improvement-loop.md` with adverse-selection and fill-conditioned evidence gates so raw snapshot replay is treated as hypothesis generation rather than live funding approval.

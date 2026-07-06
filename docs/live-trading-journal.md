@@ -128,6 +128,7 @@ The 360-second TTL is a deliberate compromise: weather does not normally reprice
 ### 2026-07-06
 
 - Phase change: funded live trading should remain paused while the system moves to an execution-first rebuild. Raw snapshot replay remains useful for hypothesis generation, but it is no longer sufficient evidence for live promotion or sizing.
+- Execution rebuild direction is documented in `docs/hypotheses/2026-07-06-adverse-selection-execution-rebuild.md`: the next phase should add event-driven book capture, full live candidate persistence, fill/toxicity modeling, tactic-specific execution routing, and tiny randomized live experiments before any normal funded restart.
 - Whole-chain review showed the repeated failure mode is structural: since 2026-06-20, live-selected rows replayed at +0.455 R/R on $3,878.50 intended risk, but actual filled rows lost -0.138 R/R on $578.22 filled. Filled-at-entry replay was already negative (-0.150 R/R), while unfilled selected replay was positive (+0.624 R/R).
 - All loaded live history shows the same pattern: selected replay +0.210 R/R, filled-at-entry replay -0.061 R/R, and actual live R/R -0.148. The US consensus sleeve's winner fill rate was 17.8% versus loser fill rate 52.4%, which is direct adverse-selection evidence.
 - The gap is not primarily purchase-price slippage. Recent actual fills were close to, and slightly better than, recorded decision entry on average; the larger problem is that the market fills a worse subset than replay assumes.
