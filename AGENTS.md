@@ -66,10 +66,15 @@
 ## Shadow collection workflow
 
 - Steady-state adverse-selection collection is shadow-only. Do not register the bounded quote specs as live funded strategies, and do not infer live promotion from quote intent rows alone.
-- Use the live ledger health report to verify that current dry-run/live cycles can reconstruct candidates through price sheets, emitted quote specs, lifecycle states, book/feed coverage, and pending markout windows:
+- Current collection sequence for a dry-run session:
+  - Run the live dry-run cycle so current candidate rows, price sheets, and `$50/$100` shadow quote intents are persisted.
+  - Run CLOB candidate-token collection: `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/collect_candidate_clob_events.py --db /home/maxrush/.local/state/roboweather/live_trading.sqlite --max-seconds 900`
+  - Persist batch labels: `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/label_shadow_quote_outcomes.py --db /home/maxrush/.local/state/roboweather/live_trading.sqlite`
+  - Run the strict health report: `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/shadow_collection_report.py --db /home/maxrush/.local/state/roboweather/live_trading.sqlite`
+- Use the live ledger health report to verify that current dry-run/live cycles can reconstruct candidates through price sheets, emitted useful-size quote specs, lifecycle states, book/feed coverage, persisted labels, and pending/available markout windows:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/shadow_collection_report.py --db /home/maxrush/.local/state/roboweather/live_trading.sqlite`
   - Add `--since-timestamp ISO_TS` for a specific dry-run session, and `--candidate-id LIVE_CANDIDATE_ID` to inspect a known row.
-- Healthy collection means the report shows policy candidates with quote intents, roughly the expected spec count for the scoped sleeve, and book or CLOB feed coverage for candidate tokens. It is an operational reconstruction gate, not a profitability gate.
+- Healthy collection means the report shows policy candidates with token coverage, quote intents at both `$50` and `$100`, CLOB feed events, book snapshots, and shadow outcome labels. The report intentionally exits nonzero for missing token/feed/useful-size/outcome coverage unless `--no-fail` is supplied. It is an operational reconstruction gate, not a profitability gate.
 
 ## Continuous improvement workflow
 

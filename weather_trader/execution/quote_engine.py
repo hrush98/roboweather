@@ -46,7 +46,7 @@ def stable_spec_id(payload: dict[str, Any]) -> str:
 def phase2_shadow_quote_specs() -> tuple[ShadowQuoteSpec, ...]:
     specs: list[ShadowQuoteSpec] = []
     for ttl_seconds in (60, 180):
-        for quote_size_usd in (5.0, 2.0):
+        for quote_size_usd in (50.0, 100.0):
             for ask_offset_cents in (1, 2, 3, 5, 8, 12):
                 payload = {
                     "grid_version": PHASE2_SHADOW_SPEC_GRID_VERSION,
@@ -103,7 +103,7 @@ def build_post_only_quote_intent(
     max_quote = _float_or_none(sheet.max_quote_price)
     best_ask = book.best_ask if book is not None else None
     quote_price = _post_only_price(max_quote, best_ask, spec.ask_offset_cents)
-    intended_size = quantize_usdc(min(float(sheet.quote_size_cap), float(spec.quote_size_usd)))
+    intended_size = quantize_usdc(float(spec.quote_size_usd))
     skip_reason = _skip_reason(sheet, book, quote_price, intended_size, min_quote_notional_usd)
     state = LiveQuoteState.SHADOW_SKIPPED if skip_reason else LiveQuoteState.SHADOW_POSTABLE
     quote_size = intended_size
@@ -140,6 +140,7 @@ def build_post_only_quote_intent(
             "cancel_triggers": list(sheet.cancel_triggers),
         },
         "book": _book_payload(book),
+        "initial_depth_context": _depth_context(book, quote_price=quote_price, quote_size_usd=intended_size),
         "post_only": {
             "tick_size": 0.01,
             "formula": spec.quote_rule,
@@ -156,6 +157,7 @@ def build_post_only_quote_intent(
             "quote_time_utc": as_of_utc.astimezone(timezone.utc).isoformat(),
             "event_source": "clob_feed_events",
             "windows": ["10s", "30s", "2m", "10m", "next_weather_update", "close", "settlement"],
+            "useful_size_notional_usd": intended_size,
         },
         "decision_time_utc": as_of_utc.astimezone(timezone.utc).isoformat(),
     }
@@ -248,6 +250,46 @@ def _book_payload(book: BookSnapshot | None) -> dict[str, Any] | None:
         "best_bid": book.best_bid,
         "best_ask": book.best_ask,
         "spread": book.spread,
+    }
+
+
+def _depth_context(book: BookSnapshot | None, *, quote_price: float | None, quote_size_usd: float) -> dict[str, Any]:
+    if book is None or quote_price is None or quote_price <= 0.0:
+        return {
+            "quote_price": quote_price,
+            "quote_size_usd": quote_size_usd,
+            "queue_ahead_shares": None,
+            "queue_ahead_usd": None,
+            "same_price_bid_shares": None,
+            "same_price_bid_usd": None,
+            "better_price_bid_shares": None,
+            "better_price_bid_usd": None,
+            "plausible_50_usd_depth": False,
+            "plausible_100_usd_depth": False,
+        }
+    better = [level for level in book.bids if level.price > quote_price + 1e-9]
+    same = [level for level in book.bids if abs(level.price - quote_price) <= 1e-9]
+    ahead = better + same
+    better_usd = sum(level.price * level.size for level in better)
+    same_usd = sum(level.price * level.size for level in same)
+    queue_usd = better_usd + same_usd
+    queue_shares = sum(level.size for level in ahead)
+    same_shares = sum(level.size for level in same)
+    better_shares = sum(level.size for level in better)
+    return {
+        "quote_price": quote_price,
+        "quote_size_usd": quote_size_usd,
+        "best_bid": book.best_bid,
+        "best_ask": book.best_ask,
+        "spread": book.spread,
+        "queue_ahead_shares": quantize_shares(queue_shares),
+        "queue_ahead_usd": quantize_usdc(queue_usd),
+        "same_price_bid_shares": quantize_shares(same_shares),
+        "same_price_bid_usd": quantize_usdc(same_usd),
+        "better_price_bid_shares": quantize_shares(better_shares),
+        "better_price_bid_usd": quantize_usdc(better_usd),
+        "plausible_50_usd_depth": quote_size_usd >= 50.0,
+        "plausible_100_usd_depth": quote_size_usd >= 100.0,
     }
 
 

@@ -14,7 +14,7 @@ Phase 1 adverse-selection status: the scoped US high-temperature consensus no-ti
 
 Phase 2 adverse-selection status: scoped price sheets now generate persisted post-only GTD shadow quotes in `live_quote_intents`. These are dry-run/shadow records only: they prove quote construction, post-only price clamping, candidate/position linkage, and expiry/cancel bookkeeping, but they do not place funded orders.
 
-Steady-state shadow collection status: the scoped sheet now emits a bounded 24-spec shadow quote grid per candidate, with stable spec ids, rule metadata, `would_post` flags, lifecycle states, and pending markout hooks persisted for later replay. This is only partial infrastructure: the current tiny-size grid is not representative, and the milestone now requires CLOB event collection plus `$50-$100` useful-size shadow coverage before a dry-run can be trusted to collect promotion-grade execution data. This is still non-funded collection infrastructure, not approval to restart live trading.
+Steady-state shadow collection status: the scoped sheet now emits a bounded 24-spec useful-size shadow grid per candidate, with `$50` baseline and `$100` target-capacity intended notional, stable spec ids, rule metadata, top/depth context, `would_post` flags, lifecycle states, and markout hooks. The non-funded collection workflow is now: run the dry-run live cycle, run `scripts/collect_candidate_clob_events.py` for current candidate tokens, run `scripts/label_shadow_quote_outcomes.py`, then require `scripts/shadow_collection_report.py` to pass without missing token/feed/useful-size/outcome coverage. This is still collection infrastructure, not approval to restart live trading.
 
 ### Last configured policies
 

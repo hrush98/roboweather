@@ -1006,7 +1006,7 @@ def test_phase2_quote_intent_clamps_below_ask_and_uses_gtd(tmp_path: Path) -> No
     assert quote.post_only is True
     assert quote.quote_price == pytest.approx(0.39)
     assert quote.quote_price < 0.40
-    assert quote.quote_size_usd == pytest.approx(5.0)
+    assert quote.quote_size_usd == pytest.approx(50.0)
     assert quote.quote_shares > 0.0
     assert quote.quote_spec_id is not None
     assert quote.fair_source == "phase1_capped_haircut_fair"
@@ -1014,6 +1014,7 @@ def test_phase2_quote_intent_clamps_below_ask_and_uses_gtd(tmp_path: Path) -> No
     assert quote.cancel_rule == "ttl_or_fair_book_cross_or_stale_feed"
     assert quote.would_post is True
     assert quote.raw_json["markout_hooks"]["windows"] == ["10s", "30s", "2m", "10m", "next_weather_update", "close", "settlement"]
+    assert quote.raw_json["initial_depth_context"]["quote_size_usd"] == pytest.approx(50.0)
 
 
 def test_shadow_quote_reconcile_expires_open_quote(tmp_path: Path) -> None:

@@ -24,6 +24,7 @@ dev = [
 ]
 live = [
     "py_clob_client_v2",
+    "websockets>=12",
 ]
 
 [tool.setuptools.packages.find]
