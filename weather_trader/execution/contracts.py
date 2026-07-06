@@ -89,6 +89,8 @@ class LiveQuoteState(StringEnum):
     SHADOW_POSTABLE = "SHADOW_POSTABLE"
     SHADOW_SKIPPED = "SHADOW_SKIPPED"
     SHADOW_CANCELLED = "SHADOW_CANCELLED"
+    SHADOW_CANCELLED_BY_RULE = "SHADOW_CANCELLED_BY_RULE"
+    SHADOW_STALE_FEED = "SHADOW_STALE_FEED"
     SHADOW_EXPIRED = "SHADOW_EXPIRED"
 
 
@@ -673,6 +675,11 @@ class LiveQuoteIntent:
     cancel_reason: str | None = None
     live_position_id: int | None = None
     external_order_id: str | None = None
+    quote_spec_id: str | None = None
+    fair_source: str | None = None
+    quote_rule: str | None = None
+    cancel_rule: str | None = None
+    would_post: bool | None = None
     raw_json: dict[str, Any] = field(default_factory=dict)
 
 

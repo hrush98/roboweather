@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -17,6 +18,75 @@ from weather_trader.execution.liquidity import quantize_price, quantize_shares, 
 
 
 PHASE2_QUOTE_ENGINE_VERSION = "phase2_post_only_shadow_v1"
+PHASE2_SHADOW_SPEC_GRID_VERSION = "phase2_shadow_spec_grid_v1"
+
+
+@dataclass(frozen=True)
+class ShadowQuoteSpec:
+    quote_spec_id: str
+    grid_version: str
+    fair_source: str
+    haircut_rule: str
+    edge_rule: str
+    quote_rule: str
+    ttl_seconds: int
+    cancel_rule: str
+    quote_size_usd: float
+    side: str
+    post_only: bool
+    crossing_behavior: str
+    ask_offset_cents: int
+
+
+def stable_spec_id(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return f"qspec_{hashlib.sha256(encoded.encode('utf-8')).hexdigest()[:16]}"
+
+
+def phase2_shadow_quote_specs() -> tuple[ShadowQuoteSpec, ...]:
+    specs: list[ShadowQuoteSpec] = []
+    for ttl_seconds in (60, 180):
+        for quote_size_usd in (5.0, 2.0):
+            for ask_offset_cents in (1, 2, 3, 5, 8, 12):
+                payload = {
+                    "grid_version": PHASE2_SHADOW_SPEC_GRID_VERSION,
+                    "fair_source": "phase1_capped_haircut_fair",
+                    "haircut_rule": "phase1_uncertainty_plus_adverse_selection",
+                    "edge_rule": "phase1_min_required_edge",
+                    "quote_rule": f"min(max_quote_price,best_ask-{ask_offset_cents}c)",
+                    "ttl_seconds": ttl_seconds,
+                    "cancel_rule": "ttl_or_fair_book_cross_or_stale_feed",
+                    "quote_size_usd": quote_size_usd,
+                    "side": "BUY_NO",
+                    "post_only": True,
+                    "crossing_behavior": "skip_if_crossing_or_missing_book",
+                    "ask_offset_cents": ask_offset_cents,
+                }
+                specs.append(ShadowQuoteSpec(quote_spec_id=stable_spec_id(payload), **payload))
+    return tuple(specs)
+
+
+DEFAULT_PHASE2_SHADOW_QUOTE_SPEC = phase2_shadow_quote_specs()[0]
+
+
+def build_shadow_quote_intents(
+    *,
+    sheet: LivePriceSheet,
+    book: BookSnapshot | None,
+    as_of_utc: datetime,
+    specs: tuple[ShadowQuoteSpec, ...] | None = None,
+    min_quote_notional_usd: float = 1.0,
+) -> list[LiveQuoteIntent]:
+    return [
+        build_post_only_quote_intent(
+            sheet=sheet,
+            book=book,
+            as_of_utc=as_of_utc,
+            spec=spec,
+            min_quote_notional_usd=min_quote_notional_usd,
+        )
+        for spec in (specs or phase2_shadow_quote_specs())
+    ]
 
 
 def build_post_only_quote_intent(
@@ -24,20 +94,39 @@ def build_post_only_quote_intent(
     sheet: LivePriceSheet,
     book: BookSnapshot | None,
     as_of_utc: datetime,
+    spec: ShadowQuoteSpec | None = None,
     min_quote_notional_usd: float = 1.0,
 ) -> LiveQuoteIntent:
-    quote_id = stable_quote_id(sheet.live_candidate_id, sheet.version, sheet.fair_valid_until)
-    batch_group_id = stable_quote_id("batch", sheet.strategy_name, sheet.market_date, sheet.station, sheet.selected_bucket, sheet.selected_side)
+    spec = spec or DEFAULT_PHASE2_SHADOW_QUOTE_SPEC
+    quote_id = stable_quote_id(sheet.live_candidate_id, sheet.version, sheet.fair_valid_until, spec.quote_spec_id)
+    batch_group_id = stable_quote_id("batch", sheet.strategy_name, sheet.market_date, sheet.station, sheet.selected_bucket, sheet.selected_side, sheet.live_candidate_id)
     max_quote = _float_or_none(sheet.max_quote_price)
     best_ask = book.best_ask if book is not None else None
-    quote_price = _post_only_price(max_quote, best_ask)
-    skip_reason = _skip_reason(sheet, book, quote_price, min_quote_notional_usd)
+    quote_price = _post_only_price(max_quote, best_ask, spec.ask_offset_cents)
+    intended_size = quantize_usdc(min(float(sheet.quote_size_cap), float(spec.quote_size_usd)))
+    skip_reason = _skip_reason(sheet, book, quote_price, intended_size, min_quote_notional_usd)
     state = LiveQuoteState.SHADOW_SKIPPED if skip_reason else LiveQuoteState.SHADOW_POSTABLE
-    quote_size = quantize_usdc(sheet.quote_size_cap if skip_reason is None else 0.0)
+    quote_size = intended_size
     quote_shares = quantize_shares(quote_size / quote_price) if quote_price and quote_price > 0.0 and quote_size > 0.0 else 0.0
     raw = {
         "version": PHASE2_QUOTE_ENGINE_VERSION,
+        "spec_grid_version": PHASE2_SHADOW_SPEC_GRID_VERSION,
         "source": "phase1_price_sheet",
+        "quote_spec": {
+            "quote_spec_id": spec.quote_spec_id,
+            "grid_version": spec.grid_version,
+            "fair_source": spec.fair_source,
+            "haircut_rule": spec.haircut_rule,
+            "edge_rule": spec.edge_rule,
+            "quote_rule": spec.quote_rule,
+            "ttl_seconds": spec.ttl_seconds,
+            "cancel_rule": spec.cancel_rule,
+            "quote_size_usd": spec.quote_size_usd,
+            "side": spec.side,
+            "post_only": spec.post_only,
+            "crossing_behavior": spec.crossing_behavior,
+            "ask_offset_cents": spec.ask_offset_cents,
+        },
         "price_sheet": {
             "version": sheet.version,
             "raw_model_fair": sheet.raw_model_fair,
@@ -53,12 +142,20 @@ def build_post_only_quote_intent(
         "book": _book_payload(book),
         "post_only": {
             "tick_size": 0.01,
-            "formula": "min(max_quote_price, best_ask - 0.01)",
+            "formula": spec.quote_rule,
             "price_clamped_below_ask": bool(best_ask is not None and max_quote is not None and quote_price is not None and quote_price < max_quote),
             "best_ask": best_ask,
             "max_quote_price": max_quote,
             "quote_price": quote_price,
             "skip_reason": skip_reason,
+            "would_post": skip_reason is None,
+        },
+        "markout_hooks": {
+            "status": "pending_batch",
+            "token_id": sheet.selected_token_id,
+            "quote_time_utc": as_of_utc.astimezone(timezone.utc).isoformat(),
+            "event_source": "clob_feed_events",
+            "windows": ["10s", "30s", "2m", "10m", "next_weather_update", "close", "settlement"],
         },
         "decision_time_utc": as_of_utc.astimezone(timezone.utc).isoformat(),
     }
@@ -84,6 +181,11 @@ def build_post_only_quote_intent(
         gtd_expiry=sheet.fair_valid_until,
         state=state,
         skip_reason=skip_reason,
+        quote_spec_id=spec.quote_spec_id,
+        fair_source=spec.fair_source,
+        quote_rule=spec.quote_rule,
+        cancel_rule=spec.cancel_rule,
+        would_post=skip_reason is None,
         raw_json=raw,
     )
 
@@ -107,18 +209,19 @@ def stable_quote_id(*parts: Any) -> str:
     return f"quote_{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:24]}"
 
 
-def _post_only_price(max_quote: float | None, best_ask: float | None) -> float | None:
+def _post_only_price(max_quote: float | None, best_ask: float | None, ask_offset_cents: int = 1) -> float | None:
     if max_quote is None:
         return None
     if best_ask is None:
-        return quantize_price(max_quote)
-    return _floor_cent(min(max_quote, float(best_ask) - 0.01))
+        return None
+    return _floor_cent(min(max_quote, float(best_ask) - max(1, ask_offset_cents) / 100.0))
 
 
 def _skip_reason(
     sheet: LivePriceSheet,
     book: BookSnapshot | None,
     quote_price: float | None,
+    quote_size: float,
     min_quote_notional_usd: float,
 ) -> str | None:
     if not sheet.eligible:
@@ -131,7 +234,7 @@ def _skip_reason(
         return "NO_POST_ONLY_PRICE"
     if quote_price >= float(book.best_ask) - 1e-9:
         return "WOULD_CROSS_SPREAD"
-    if sheet.quote_size_cap < min_quote_notional_usd:
+    if quote_size < min_quote_notional_usd:
         return "QUOTE_SIZE_BELOW_MIN"
     return None
 

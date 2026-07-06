@@ -25,7 +25,7 @@ from weather_trader.execution.contracts import (
 )
 from weather_trader.execution.fair_value import FairValueResult
 from weather_trader.execution.price_maker import PHASE1_PRICE_SHEET_VERSION, build_phase1_price_sheet
-from weather_trader.execution.quote_engine import build_post_only_quote_intent
+from weather_trader.execution.quote_engine import build_post_only_quote_intent, phase2_shadow_quote_specs
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import StationWeatherState
 from weather_trader.live.execution import (
@@ -845,17 +845,30 @@ def test_live_build_candidates_persists_prefilter_universe_and_links_position(tm
     assert price_sheet["selected_side"] == "BUY_NO"
     assert price_sheet["eligible"] == 1
     assert price_sheet["max_quote_price"] < price_sheet["calibrated_fair"]
-    quote_intent = store.connection.execute("select * from live_quote_intents order by id limit 1").fetchone()
+    quote_rows = store.connection.execute("select * from live_quote_intents where live_candidate_id = ? order by id", (price_sheet["live_candidate_id"],)).fetchall()
+    quote_intent = quote_rows[0] if quote_rows else None
     assert quote_intent is not None
+    assert len(quote_rows) == len(phase2_shadow_quote_specs())
+    assert {row["quote_spec_id"] for row in quote_rows} == {spec.quote_spec_id for spec in phase2_shadow_quote_specs()}
     assert quote_intent["live_candidate_id"] == price_sheet["live_candidate_id"]
     assert quote_intent["order_mode"] == "GTD"
     assert quote_intent["post_only"] == 1
     assert quote_intent["state"] == "SHADOW_POSTABLE"
+    assert quote_intent["would_post"] == 1
+    assert quote_intent["fair_source"] == "phase1_capped_haircut_fair"
     assert quote_intent["quote_price"] < 0.40
 
     candidate = next(item for item in candidates if item.live_candidate_id == policy_rows[0]["candidate_id"])
     assert candidate.position.raw_policy["phase1_price_sheet_id"] == price_sheet["id"]
     assert candidate.position.raw_policy["phase2_quote_intent_id"] == quote_intent["id"]
+    assert len(candidate.position.raw_policy["shadow_quote_intent_ids"]) == len(phase2_shadow_quote_specs())
+    assert len(candidate.position.raw_policy["shadow_quote_intents"]) == len(phase2_shadow_quote_specs())
+    health = store.shadow_collection_health()
+    assert health["unique_quote_specs"] == len(phase2_shadow_quote_specs())
+    reconstruction = store.shadow_candidate_reconstruction(price_sheet["live_candidate_id"])
+    assert reconstruction is not None
+    assert len(reconstruction["quote_intents"]) == len(phase2_shadow_quote_specs())
+    assert reconstruction["markout_windows"] == ["10s", "30s", "2m", "10m", "next_weather_update", "close", "settlement"]
     sizing = engine._size_candidate(candidate, as_of)
     market_by_id = {market.market_id: market for market in markets}
     position = engine._live_position(candidate, market_by_id[candidate.position.selected_market_id], reject_reason=None, sizing=sizing)
@@ -995,6 +1008,12 @@ def test_phase2_quote_intent_clamps_below_ask_and_uses_gtd(tmp_path: Path) -> No
     assert quote.quote_price < 0.40
     assert quote.quote_size_usd == pytest.approx(5.0)
     assert quote.quote_shares > 0.0
+    assert quote.quote_spec_id is not None
+    assert quote.fair_source == "phase1_capped_haircut_fair"
+    assert quote.quote_rule == "min(max_quote_price,best_ask-1c)"
+    assert quote.cancel_rule == "ttl_or_fair_book_cross_or_stale_feed"
+    assert quote.would_post is True
+    assert quote.raw_json["markout_hooks"]["windows"] == ["10s", "30s", "2m", "10m", "next_weather_update", "close", "settlement"]
 
 
 def test_shadow_quote_reconcile_expires_open_quote(tmp_path: Path) -> None:

@@ -14,6 +14,8 @@ Phase 1 adverse-selection status: the scoped US high-temperature consensus no-ti
 
 Phase 2 adverse-selection status: scoped price sheets now generate persisted post-only GTD shadow quotes in `live_quote_intents`. These are dry-run/shadow records only: they prove quote construction, post-only price clamping, candidate/position linkage, and expiry/cancel bookkeeping, but they do not place funded orders.
 
+Steady-state shadow collection status: the scoped sheet now emits a bounded 24-spec shadow quote grid per candidate, with stable spec ids, rule metadata, `would_post` flags, lifecycle states, and pending markout hooks persisted for later replay. Use `scripts/shadow_collection_report.py` against the live ledger to verify candidate reconstruction and book/feed coverage. This is still non-funded collection infrastructure, not approval to restart live trading.
+
 ### Last configured policies
 
 | Policy | Side | Target notional | Entry cap | Notes |

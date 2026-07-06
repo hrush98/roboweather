@@ -19,6 +19,27 @@ The system has repeatedly optimized the first term and only loosely measured the
 
 The immediate implication: faster taker execution may help only when the quote is genuinely stale and reachable. Faster execution against the same bad fill distribution just loses faster. The primary next-phase build should therefore be a conservative price-maker / quoting system, not a broader grid of taker and resting variants. The model edge should set our price; the market should have to trade with us there.
 
+## Jane Street-Style Desk Intuition
+
+The correct mental model is not "the model found a good bucket, now get filled." It is "we are showing or taking a price, and the fill itself is information." In a thin order book, the counterparty's decision to trade with us is part of the signal. If better-informed or faster liquidity providers only leave quotes up when our fair is stale, then a fill is not a neutral event; it is evidence that the conditional distribution changed against us.
+
+That means every tactic needs the same accounting a serious trading desk would demand:
+
+- Mark every fill against immediate and delayed book/fair markouts: `10s`, `30s`, `2m`, `10m`, next weather update, close, and settlement.
+- Treat missed fills as data, not failure noise. A missed winner and a filled loser are both observations about the execution policy.
+- Separate forecast alpha from access alpha. A good weather forecast is not monetizable unless the venue lets us trade it at a price and size that survive fill conditioning.
+- Avoid one-sided backtests. If the rule only looks good when unfilled quotes are assumed filled, the rule is not trading evidence.
+- Randomize small quote aggressiveness within a safe band so later analysis can estimate response curves instead of only analyzing self-selected fills.
+- Quote only prices we are happy to own after haircuts. Do not chase to prove the model right.
+
+The desk question for every sleeve is therefore:
+
+```text
+At this price, size, and book state, does getting filled make us happier or more worried?
+```
+
+If the answer is "more worried," the system should skip, quote lower, or cancel faster. If the answer cannot be measured, funded size should stay at canary level.
+
 ## Local Evidence
 
 Reports rerun on 2026-07-06:
@@ -131,11 +152,11 @@ But do not simply chase more quotes. If the fill event is negatively correlated 
 
 ### Do We Need Better Mechanisms?
 
-Yes. The current mechanism is a price-anchored taker attempt plus fallback ladder. That still starts from the market's visible ask and lets the market decide which stale quotes remain available. The next mechanism should start from our calibrated fair value and quote a conservative bid we are happy to own if filled.
+Yes. The current mechanism is a price-anchored taker attempt plus fallback ladder. That still starts from the market's visible ask and lets the market decide which stale quotes remain available. The next mechanism should start from our quoteable fair value, capped and haircut until true calibration is proven, and quote a conservative bid we are happy to own if filled.
 
 | Component | Job | Non-goal |
 | --- | --- | --- |
-| Calibrated fair engine | Convert model distribution into a conservative buy price with uncertainty and toxicity haircuts | Do not output 0.999-style certainty as a trading price without strong calibration evidence |
+| Quoteable fair engine | Convert model distribution into a conservative buy price with uncertainty and toxicity haircuts | Do not output 0.999-style certainty as a trading price without strong calibration evidence |
 | Post-only quote engine | Place bids/offers at our price, never crossing just because the ask looks cheap | Do not use passive orders as retry logic after failed FAK |
 | Cancellation engine | Pull quotes when fair value, book state, weather state, or risk state changes | Do not rely only on a fixed TTL |
 | Fill-quality report | Decide whether fills at our prices are profitable | Do not promote from selected replay alone |
@@ -206,9 +227,11 @@ Implementation status, 2026-07-06: source support is in place for durable live c
 
 Exit gate: every candidate can be reconstructed as a timeline from signal creation through book events, order attempts, fills/misses, and settlement.
 
-### Phase 1: Calibrated Price-Maker Model
+### Phase 1: Capped/Haircut Price Sheet V1
 
 Build the price sheet that the quoting engine will use. This is the real model handoff: the forecast model no longer says "take this ask"; it says "we are willing to bid up to this price after haircuts."
+
+Important naming discipline: the current source field is called `calibrated_fair`, but Phase 1 v1 is only a capped and haircut fair value. It is not yet a full market-aware calibration layer. Treat the column as `capped_quote_fair` for trading interpretation until walk-forward reliability, market-prior shrinkage, and fair-band calibration are implemented and measured.
 
 Implementation status, 2026-07-06: source support is in place for a scoped Phase 1 price sheet on the US high-temperature consensus no-tiny BUY_NO sleeve. Live candidate builds now persist `live_price_sheets` with raw/capped fair, market reference, uncertainty/adverse-selection haircuts, minimum edge, max quote price, size cap, validity, and cancel triggers. The read-only replay command is:
 
@@ -222,7 +245,7 @@ Required output per candidate/bucket/side:
 
 ```text
 raw_model_fair
-calibrated_fair
+capped_or_calibrated_fair
 market_mid_or_reference
 uncertainty_haircut
 adverse_selection_haircut
@@ -240,7 +263,7 @@ Initial scope:
 - No global low restart in this phase.
 - Conservative probability caps and minimum edge after all haircuts.
 
-Exit gate: historical and current-window replay show that the generated quote prices would have positive theoretical EV after haircuts, and the price sheet does not depend on extreme uncalibrated fairs.
+Exit gate: historical and current-window replay show that the generated quote prices would have positive theoretical EV after haircuts, and the price sheet does not depend on extreme uncalibrated fairs. This is a sheet-generation gate only. It does not approve funded execution without Phase 3/4 fill-conditioned evidence.
 
 ### Phase 2: Post-Only Quote Engine
 
@@ -269,6 +292,69 @@ if calibrated_fair deteriorates or book/weather state invalidates the quote:
 
 Exit gate: dry-run/shadow quotes can be reconstructed and cancelled correctly, with no funded exposure.
 
+### Steady-State Shadow Collection Milestone
+
+This is the next build target for data collection. It is not funded trading and it should not require registering a large set of live strategies.
+
+Implementation status, 2026-07-06: source support is in place for the first steady-state collection milestone. The scoped Phase 1 sheet now fans out a bounded 24-spec shadow grid per candidate, with stable `quote_spec_id` values, direct `live_quote_intents` columns for spec/rule metadata, `would_post` flags, skipped/postable lifecycle states, and pending markout hook metadata for `10s`, `30s`, `2m`, `10m`, next weather update, close, and settlement. Shadow reconciliation now distinguishes expiry, stale feed, and rule cancellation states. `scripts/shadow_collection_report.py` reads the live ledger and reconstructs a sample candidate through candidate features, price sheet, emitted specs, book/feed coverage, lifecycle states, and pending/available markout windows. This remains dry-run/shadow infrastructure only; no funded CLOB quote placement or broad live strategy registration was added.
+
+Keep these concepts separate:
+
+```text
+live strategy registry = funded execution sleeves, kept small and paused
+shadow quote specs    = broad research parameter arms, persisted and replayed
+```
+
+The collection architecture should be:
+
+```text
+dry-run/live scan
+-> full candidate universe
+-> one or more price sheets
+-> many virtual quote specs per candidate
+-> shadow quote intents
+-> shared CLOB/book event stream by token
+-> lifecycle states and markout hooks
+-> later shadow fill/toxicity/settlement labels
+```
+
+Minimum components to enter steady-state shadow collection:
+
+1. Phase 0 recorder is operational, not merely implemented:
+   - dry-run cycles persist the full candidate universe before policy filtering;
+   - every row has a stable `live_candidate_id`;
+   - the recorder subscribes to the union of candidate token IDs;
+   - feed events persist exchange/feed timestamps and local receipt timestamps;
+   - a health check shows candidate rows have book-event coverage.
+2. A bounded shadow quote spec grid exists:
+   - specs are not live strategies;
+   - each spec has a stable `quote_spec_id` or hash;
+   - each spec records `fair_source`, haircut/edge rule, `quote_rule`, `ttl`, `cancel_rule`, size, side, and post-only/crossing behavior;
+   - start with roughly 20-60 specs, broad enough to learn response curves but small enough to audit.
+3. The shadow quote intent emitter fans out specs over candidates:
+   - for each eligible candidate/spec pair, persist `candidate_id`, `quote_spec_id`, `quote_price`, size, `would_post`, `skip_reason`, creation timestamp, expiry timestamp, cancel rule, and feature payload;
+   - no funded order path is reachable from these rows.
+4. Lifecycle reconciliation runs continuously:
+   - mark intents as `SHADOW_POSTABLE`, `SHADOW_SKIPPED`, `SHADOW_EXPIRED`, `SHADOW_CANCELLED_BY_RULE`, `SHADOW_STALE_FEED`, or equivalent;
+   - cancellation reasons must be reconstructable from book/fair/weather/risk state.
+5. Minimal markout hooks are present:
+   - quote timestamps and token/event coverage are sufficient to compute `10s`, `30s`, `2m`, `10m`, next weather update, close, and settlement markouts later;
+   - the first implementation can compute these in batch rather than synchronously.
+
+The first done gate is operational reconstruction, not profitability:
+
+```text
+For a random current candidate, an operator can inspect:
+candidate features
+all emitted shadow quote specs
+initial book state
+book events after quote time
+shadow expiry/cancel state
+markout windows available or pending
+```
+
+When this is true for current candidates across a full dry-run session, the system is in the new mental model and can collect the dataset needed for Phase 3. Strategy registration, funded canaries, learned sizing, and promotion logic should remain out of scope until after this collection milestone is stable.
+
 ### Phase 3: Shadow Quote Replay
 
 Use recorded CLOB events to replay whether our posted prices would plausibly have filled. Do not expect perfect passive-fill replay from aggregate public books; score scenarios conservatively.
@@ -282,6 +368,8 @@ For each shadow quote, label:
 - optimistic fill;
 - adverse book move before fill;
 - cancel-trigger fired before fill;
+- markout after fill or hypothetical fill at `10s`, `30s`, `2m`, `10m`, next weather update, close, and settlement;
+- quote/fill toxicity: whether the book moved away from our side after the fill, whether top-of-book depth vanished before the fill, and whether the fill occurred after fair-value deterioration;
 - final settlement PnL if filled.
 
 Promotion interpretation:
@@ -289,8 +377,10 @@ Promotion interpretation:
 - If only optimistic queue assumptions are positive, the quote policy is not promotable.
 - If pessimistic/base fills are rare but positive, it may support tiny live exploration.
 - If fills are still the bad subset, the model edge is not accessible through this venue/tactic.
+- If immediate markouts are adverse but settlement is positive, keep size capped until the reason is understood; the policy may be taking toxic intraday fills and surviving only because the weather forecast is strong enough.
+- If markouts are favorable but settlement is negative, investigate bucket semantics, late weather updates, and settlement-source alignment before changing execution.
 
-Exit gate: shadow quote replay reports fill-conditioned EV by quoted price band, spread regime, station, side, and cancellation trigger.
+Exit gate: shadow quote replay reports fill-conditioned EV and markouts by quoted price band, spread regime, station, side, queue estimate, and cancellation trigger.
 
 ### Phase 4: Funded Quote Canary Ladder
 
@@ -320,6 +410,30 @@ Rules:
 - Promote only at the size that passed. Do not extrapolate `$5` fills to `$25` or `$50`.
 - Promote only if actual filled R/R, filled-at-quote replay, shadow base-case replay, and current-window settlement are positive at the target size.
 
+### Hard No-Promote Gates
+
+Do not restart normal funded trading or size up a sleeve until all of these are true for the exact `signal policy + quote policy + size` being promoted:
+
+- The current resolved window is positive; all-history performance alone is not enough.
+- Theoretical selected replay is positive, but the filled-at-quote subset is also positive.
+- Filled rows do not materially underperform missed rows after controlling for quote price band and station/date risk caps.
+- Winner fill rate is not materially below loser fill rate after the minimum sample.
+- Base-case shadow queue assumptions are positive; optimistic-only profitability is research-only.
+- Post-fill markouts are not persistently adverse at `30s`, `2m`, and next weather update.
+- Settlement labels match Polymarket outcomes for the market family being traded.
+- The tested size has direct evidence. `$5` fills do not authorize `$25` or `$50` sizing.
+
+Minimum evidence before normal sizing:
+
+```text
+>= 20 resolved quote outcomes at the target tactic/size
+>= 10 actual funded fills at that target tactic/size
+comparable resolved missed/expired quote sample
+no open data-integrity gaps in quote, order, fill, and settlement linkage
+```
+
+Below that threshold, the only allowed funded exposure is a predeclared canary with strict daily loss caps.
+
 ### Phase 5: Learned Quote Policy And Sizing
 
 Only after the tiny quote canary passes. The learned policy should choose quote/skip/size from context, not from a hand-written list of 100 execution strategies.
@@ -333,6 +447,7 @@ spread
 depth
 queue_age
 recent cancels/trades
+post_fill_markouts
 station/side/regime
 time-to-resolution
 weather update freshness
@@ -368,8 +483,10 @@ Until the fill/toxicity model is stable, use staged quote sizing with strict los
 1. Keep global low MVP stopped. Recent selected replay is negative, so execution work cannot rescue it.
 2. Use US consensus no-tiny as the first price-maker research subject. It has positive selected replay but severe fill-quality degradation when we chase available liquidity.
 3. Build the calibrated price-sheet generator: fair, uncertainty haircut, adverse-selection haircut, max quote price, quote size cap, and cancel triggers.
-4. Run the CLOB recorder against current candidates so quote lifecycle, feed age, queue movement, and cancellation triggers are observable.
-5. Build the shadow quote replay report:
+4. Build the bounded shadow quote spec grid and intent fanout. Do not register these as live strategies.
+5. Run the CLOB recorder against current candidates so quote lifecycle, feed age, queue movement, and cancellation triggers are observable.
+6. Reach the steady-state shadow collection milestone: a random current candidate can be reconstructed from candidate features through all shadow specs, book events, lifecycle state, and pending/available markouts.
+7. Build the shadow quote replay report:
 
 ```text
 selected replay
@@ -377,15 +494,16 @@ posted-price shadow replay
 pessimistic/base/optimistic passive fill assumptions
 actual filled replay at quoted price
 unfilled selected replay
+post-fill markouts at 10s/30s/2m/10m/next weather update
 actual settled PnL
 fill probability by quote band
 toxicity probability by quote band
 cancel-trigger attribution
 ```
 
-6. Build the post-only quote engine after the price sheet and shadow replay exist. Treat `$2-$5` funded quotes as plumbing tests only.
-7. Require `$25` and then `$50` capacity canaries before considering normal funded restart.
-8. Do not build a broad execution-variant leaderboard before the price-maker test. The decisive question is whether our model can set bid prices that the market occasionally accepts with positive filled-subset EV at useful size.
+8. Build funded post-only placement only after the price sheet and shadow replay exist. The current quote-intent support is shadow/dry-run infrastructure, not live CLOB placement. Treat `$2-$5` funded quotes as plumbing tests only.
+9. Require `$25` and then `$50` capacity canaries before considering normal funded restart.
+10. Do not build a broad execution-variant leaderboard before the price-maker test. The decisive question is whether our model can set bid prices that the market occasionally accepts with positive filled-subset EV at useful size.
 
 ## Kill Rules For The Next Phase
 

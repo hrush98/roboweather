@@ -713,6 +713,11 @@ class ExecutionStore:
                 cancel_reason text,
                 live_position_id integer,
                 external_order_id text,
+                quote_spec_id text,
+                fair_source text,
+                quote_rule text,
+                cancel_rule text,
+                would_post integer,
                 raw_json text not null
             );
 
@@ -722,6 +727,8 @@ class ExecutionStore:
                 on live_quote_intents(state, gtd_expiry);
             create index if not exists idx_live_quote_intents_strategy_market
                 on live_quote_intents(strategy_name, market_date, station);
+            create index if not exists idx_live_quote_intents_candidate_spec
+                on live_quote_intents(live_candidate_id, quote_spec_id);
 
             create table if not exists hermes_insights (
                 id integer primary key autoincrement,
@@ -825,6 +832,16 @@ class ExecutionStore:
         )
         self._add_nullable_columns("live_order_attempts", {"live_candidate_id": "text"})
         self._add_nullable_columns("live_trade_events", {"live_candidate_id": "text"})
+        self._add_nullable_columns(
+            "live_quote_intents",
+            {
+                "quote_spec_id": "text",
+                "fair_source": "text",
+                "quote_rule": "text",
+                "cancel_rule": "text",
+                "would_post": "integer",
+            },
+        )
         self._add_nullable_columns("station_date_outcomes", {"final_low_tmpf": "real"})
         self._add_nullable_columns("prediction_results", {"market_family": "text not null default 'HIGH_TEMP'", "final_low_tmpf": "real"})
         self.connection.commit()
@@ -2160,9 +2177,10 @@ class ExecutionStore:
                 station, market_date, market_family, selected_market_id, selected_token_id,
                 selected_side, selected_bucket, order_mode, quote_price, quote_size_usd,
                 quote_shares, post_only, batch_group_id, gtd_expiry, state, skip_reason,
-                cancel_reason, live_position_id, external_order_id, raw_json
+                cancel_reason, live_position_id, external_order_id, quote_spec_id, fair_source,
+                quote_rule, cancel_rule, would_post, raw_json
             )
-            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 quote.timestamp,
@@ -2189,6 +2207,11 @@ class ExecutionStore:
                 quote.cancel_reason,
                 quote.live_position_id,
                 quote.external_order_id,
+                quote.quote_spec_id,
+                quote.fair_source,
+                quote.quote_rule,
+                quote.cancel_rule,
+                None if quote.would_post is None else int(quote.would_post),
                 json.dumps(raw_payload, sort_keys=True),
             ),
         )
@@ -2244,6 +2267,150 @@ class ExecutionStore:
             (str(state), cancel_reason, json.dumps(raw_json, sort_keys=True), quote_id),
         )
         self.connection.commit()
+
+    def shadow_collection_health(self, *, since_timestamp: str | None = None) -> dict[str, Any]:
+        candidate_where = "where source_stage = 'POLICY_CANDIDATE'"
+        quote_where = ""
+        params: tuple[Any, ...] = ()
+        quote_params: tuple[Any, ...] = ()
+        if since_timestamp is not None:
+            candidate_where += " and cycle_timestamp >= ?"
+            quote_where = "where timestamp >= ?"
+            params = (since_timestamp,)
+            quote_params = (since_timestamp,)
+        candidate_count = int(
+            self.connection.execute(
+                f"select count(*) count from live_candidate_snapshots {candidate_where}",
+                params,
+            ).fetchone()["count"]
+        )
+        quote_summary = self.connection.execute(
+            f"""
+            select
+                count(*) quote_intents,
+                count(distinct live_candidate_id) candidates_with_quotes,
+                count(distinct quote_spec_id) unique_quote_specs,
+                sum(case when would_post = 1 then 1 else 0 end) would_post
+            from live_quote_intents
+            {quote_where}
+            """,
+            quote_params,
+        ).fetchone()
+        state_rows = self.connection.execute(
+            f"""
+            select state, count(*) count
+            from live_quote_intents
+            {quote_where}
+            group by state
+            order by state
+            """,
+            quote_params,
+        ).fetchall()
+        coverage_where = "where lcs.source_stage = 'POLICY_CANDIDATE' and lcs.selected_token_id is not null"
+        coverage_params: tuple[Any, ...] = ()
+        if since_timestamp is not None:
+            coverage_where += " and lcs.cycle_timestamp >= ?"
+            coverage_params = (since_timestamp,)
+        coverage = self.connection.execute(
+            f"""
+            select
+                count(distinct lcs.candidate_id) candidates_with_token,
+                count(distinct case when cfe.id is not null then lcs.candidate_id end) candidates_with_feed_events,
+                count(distinct case when bs.id is not null then lcs.candidate_id end) candidates_with_book_snapshots
+            from live_candidate_snapshots lcs
+            left join clob_feed_events cfe
+                on cfe.token_id = lcs.selected_token_id
+                and cfe.received_at >= lcs.cycle_timestamp
+            left join book_snapshots bs
+                on bs.token_id = lcs.selected_token_id
+                and coalesce(bs.received_at, bs.timestamp) >= lcs.cycle_timestamp
+            {coverage_where}
+            """,
+            coverage_params,
+        ).fetchone()
+        return {
+            "since_timestamp": since_timestamp,
+            "policy_candidates": candidate_count,
+            "quote_intents": int(quote_summary["quote_intents"] or 0),
+            "candidates_with_quotes": int(quote_summary["candidates_with_quotes"] or 0),
+            "unique_quote_specs": int(quote_summary["unique_quote_specs"] or 0),
+            "would_post_quote_intents": int(quote_summary["would_post"] or 0),
+            "quote_states": {str(row["state"]): int(row["count"]) for row in state_rows},
+            "candidates_with_token": int(coverage["candidates_with_token"] or 0),
+            "candidates_with_feed_events": int(coverage["candidates_with_feed_events"] or 0),
+            "candidates_with_book_snapshots": int(coverage["candidates_with_book_snapshots"] or 0),
+        }
+
+    def shadow_candidate_reconstruction(self, candidate_id: str | None = None) -> dict[str, Any] | None:
+        if candidate_id is None:
+            row = self.connection.execute(
+                """
+                select lcs.candidate_id
+                from live_candidate_snapshots lcs
+                join live_quote_intents lqi on lqi.live_candidate_id = lcs.candidate_id
+                where lcs.source_stage = 'POLICY_CANDIDATE'
+                order by lcs.cycle_timestamp desc, lcs.id desc
+                limit 1
+                """
+            ).fetchone()
+            if row is None:
+                return None
+            candidate_id = str(row["candidate_id"])
+        candidate = self.connection.execute("select * from live_candidate_snapshots where candidate_id = ?", (candidate_id,)).fetchone()
+        if candidate is None:
+            return None
+        price_sheets = [dict(row) for row in self.connection.execute("select * from live_price_sheets where live_candidate_id = ? order by id", (candidate_id,)).fetchall()]
+        quote_intents = [dict(row) for row in self.connection.execute("select * from live_quote_intents where live_candidate_id = ? order by id", (candidate_id,)).fetchall()]
+        token_id = candidate["selected_token_id"]
+        cycle_timestamp = candidate["cycle_timestamp"]
+        feed_events: list[dict[str, Any]] = []
+        book_snapshots: list[dict[str, Any]] = []
+        if token_id:
+            feed_events = [
+                dict(row)
+                for row in self.connection.execute(
+                    """
+                    select *
+                    from clob_feed_events
+                    where token_id = ? and received_at >= ?
+                    order by received_at, id
+                    limit 200
+                    """,
+                    (token_id, cycle_timestamp),
+                ).fetchall()
+            ]
+            book_snapshots = [
+                dict(row)
+                for row in self.connection.execute(
+                    """
+                    select *
+                    from book_snapshots
+                    where token_id = ? and coalesce(received_at, timestamp) >= ?
+                    order by coalesce(received_at, timestamp), id
+                    limit 200
+                    """,
+                    (token_id, cycle_timestamp),
+                ).fetchall()
+            ]
+        markout_windows: list[str] = []
+        for quote in quote_intents:
+            try:
+                raw = json.loads(str(quote.get("raw_json") or "{}"))
+            except json.JSONDecodeError:
+                raw = {}
+            windows = raw.get("markout_hooks", {}).get("windows")
+            if isinstance(windows, list):
+                markout_windows = [str(item) for item in windows]
+                break
+        return {
+            "candidate": dict(candidate),
+            "price_sheets": price_sheets,
+            "quote_intents": quote_intents,
+            "book_snapshots": book_snapshots,
+            "clob_feed_events": feed_events,
+            "markout_windows": markout_windows,
+            "markout_status": "available" if feed_events or book_snapshots else "pending_event_coverage",
+        }
 
     def insert_live_policy_position(self, position: LivePolicyPosition) -> int | None:
         data = dataclass_to_jsonable(position)

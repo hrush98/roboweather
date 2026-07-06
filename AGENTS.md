@@ -63,6 +63,14 @@
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/portfolio_promotion_report.py --db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite`
   - Add `--start-date YYYY-MM-DD` for recent-only reviews. Use `--no-depth` only for an upper-bound capacity diagnostic, not promotion evidence.
 
+## Shadow collection workflow
+
+- Steady-state adverse-selection collection is shadow-only. Do not register the bounded quote specs as live funded strategies, and do not infer live promotion from quote intent rows alone.
+- Use the live ledger health report to verify that current dry-run/live cycles can reconstruct candidates through price sheets, emitted quote specs, lifecycle states, book/feed coverage, and pending markout windows:
+  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/shadow_collection_report.py --db /home/maxrush/.local/state/roboweather/live_trading.sqlite`
+  - Add `--since-timestamp ISO_TS` for a specific dry-run session, and `--candidate-id LIVE_CANDIDATE_ID` to inspect a known row.
+- Healthy collection means the report shows policy candidates with quote intents, roughly the expected spec count for the scoped sleeve, and book or CLOB feed coverage for candidate tokens. It is an operational reconstruction gate, not a profitability gate.
+
 ## Continuous improvement workflow
 
 - Use `docs/continuous-improvement-loop.md` for the recursive improvement process. New strategy, sizing, model, risk, or execution hypotheses should get a record under `docs/hypotheses/` when they may affect live behavior or future promotion decisions.

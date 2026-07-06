@@ -39,7 +39,7 @@ from weather_trader.execution.fair_value import FairValueEngine, FairValueResult
 from weather_trader.execution.grouping import GroupMarketContext, StationDateDecisionEngine, group_key
 from weather_trader.execution.liquidity import quantize_price, quantize_shares, quantize_usdc, walk_ask_ladder
 from weather_trader.execution.price_maker import build_phase1_price_sheet
-from weather_trader.execution.quote_engine import build_post_only_quote_intent, shadow_cancel_reason
+from weather_trader.execution.quote_engine import build_shadow_quote_intents, shadow_cancel_reason
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import CelsiusWeatherFeatureService, StationWeatherState, WeatherFeatureService
 from weather_trader.live.settings import LiveSettings, load_live_settings, private_key_from_env_or_keyfile
@@ -1082,15 +1082,19 @@ class LiveExecutionEngine:
                         book_by_market_side=book_by_market_side,
                     )
                     if price_sheet_record is not None:
-                        price_sheet_id, price_sheet, quote_intent_id, quote_intent = price_sheet_record
+                        price_sheet_id, price_sheet, quote_intent_ids, quote_intents = price_sheet_record
+                        first_quote_intent_id = quote_intent_ids[0] if quote_intent_ids else None
+                        first_quote_intent = quote_intents[0] if quote_intents else None
                         position = replace(
                             position,
                             raw_policy={
                                 **dict(position.raw_policy or {}),
                                 "phase1_price_sheet_id": price_sheet_id,
                                 "phase1_price_sheet": dataclass_to_jsonable(price_sheet),
-                                "phase2_quote_intent_id": quote_intent_id,
-                                "phase2_quote_intent": dataclass_to_jsonable(quote_intent),
+                                "phase2_quote_intent_id": first_quote_intent_id,
+                                "phase2_quote_intent": dataclass_to_jsonable(first_quote_intent) if first_quote_intent is not None else None,
+                                "shadow_quote_intent_ids": quote_intent_ids,
+                                "shadow_quote_intents": [dataclass_to_jsonable(intent) for intent in quote_intents],
                             },
                         )
                     position_count += 1
@@ -1251,7 +1255,7 @@ class LiveExecutionEngine:
         as_of_utc: datetime,
         market_by_id: dict[str, MarketSnapshot],
         book_by_market_side: dict[tuple[str, str], BookSnapshot],
-    ) -> tuple[int | None, Any, int | None, Any] | None:
+    ) -> tuple[int | None, Any, list[int | None], list[Any]] | None:
         if plan.strategy.name != LIVE_POLICY_NAME:
             return None
         selected_side = str(position.selected_side)
@@ -1270,14 +1274,14 @@ class LiveExecutionEngine:
             target_notional_usd=plan.target_notional_usd,
         )
         sheet_id = self.store.insert_live_price_sheet(sheet)
-        quote_intent = build_post_only_quote_intent(
+        quote_intents = build_shadow_quote_intents(
             sheet=sheet,
             book=selected_book,
             as_of_utc=as_of_utc,
             min_quote_notional_usd=float(self.settings.live_min_order_notional),
         )
-        quote_intent_id = self.store.insert_live_quote_intent(quote_intent)
-        return sheet_id, sheet, quote_intent_id, quote_intent
+        quote_intent_ids = [self.store.insert_live_quote_intent(quote_intent) for quote_intent in quote_intents]
+        return sheet_id, sheet, quote_intent_ids, quote_intents
 
     def _reconcile_shadow_quotes(self, books: dict[str, BookSnapshot], as_of_utc: datetime) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -1286,7 +1290,12 @@ class LiveExecutionEngine:
             reason = shadow_cancel_reason(row, books.get(token_id), as_of_utc)
             if reason is None:
                 continue
-            state = LiveQuoteState.SHADOW_EXPIRED if reason == "fair_valid_until" else LiveQuoteState.SHADOW_CANCELLED
+            if reason == "fair_valid_until":
+                state = LiveQuoteState.SHADOW_EXPIRED
+            elif reason == "feed_stale_or_disconnected":
+                state = LiveQuoteState.SHADOW_STALE_FEED
+            else:
+                state = LiveQuoteState.SHADOW_CANCELLED_BY_RULE
             self.store.update_live_quote_intent_state(
                 str(row["quote_id"]),
                 state=state,
