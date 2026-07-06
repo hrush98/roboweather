@@ -15,6 +15,7 @@ from weather_trader.execution.contracts import (
     LiveOrderAttempt,
     LiveOrderMode,
     LivePositionState,
+    LiveQuoteState,
     LiveStrategy,
     MarketFamily,
     MarketSnapshot,
@@ -24,6 +25,7 @@ from weather_trader.execution.contracts import (
 )
 from weather_trader.execution.fair_value import FairValueResult
 from weather_trader.execution.price_maker import PHASE1_PRICE_SHEET_VERSION, build_phase1_price_sheet
+from weather_trader.execution.quote_engine import build_post_only_quote_intent
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import StationWeatherState
 from weather_trader.live.execution import (
@@ -843,29 +845,40 @@ def test_live_build_candidates_persists_prefilter_universe_and_links_position(tm
     assert price_sheet["selected_side"] == "BUY_NO"
     assert price_sheet["eligible"] == 1
     assert price_sheet["max_quote_price"] < price_sheet["calibrated_fair"]
+    quote_intent = store.connection.execute("select * from live_quote_intents order by id limit 1").fetchone()
+    assert quote_intent is not None
+    assert quote_intent["live_candidate_id"] == price_sheet["live_candidate_id"]
+    assert quote_intent["order_mode"] == "GTD"
+    assert quote_intent["post_only"] == 1
+    assert quote_intent["state"] == "SHADOW_POSTABLE"
+    assert quote_intent["quote_price"] < 0.40
 
     candidate = next(item for item in candidates if item.live_candidate_id == policy_rows[0]["candidate_id"])
     assert candidate.position.raw_policy["phase1_price_sheet_id"] == price_sheet["id"]
+    assert candidate.position.raw_policy["phase2_quote_intent_id"] == quote_intent["id"]
     sizing = engine._size_candidate(candidate, as_of)
     market_by_id = {market.market_id: market for market in markets}
     position = engine._live_position(candidate, market_by_id[candidate.position.selected_market_id], reject_reason=None, sizing=sizing)
     position_id = store.insert_live_policy_position(position)
     assert position_id is not None
     store.link_live_candidate_position(candidate.live_candidate_id, position_id)
+    store.link_live_quote_position(candidate.live_candidate_id, position_id)
     engine._record_rejected(position_id, position, "TEST_REJECT")
 
     linked = store.connection.execute(
         """
-        select lpp.live_candidate_id, loa.live_candidate_id, lcs.live_position_id
+        select lpp.live_candidate_id, loa.live_candidate_id, lcs.live_position_id, lqi.live_position_id quote_position_id
         from live_policy_positions lpp
         join live_order_attempts loa on loa.live_position_id = lpp.id
         join live_candidate_snapshots lcs on lcs.candidate_id = lpp.live_candidate_id
+        join live_quote_intents lqi on lqi.live_candidate_id = lpp.live_candidate_id
         where lpp.id = ?
         """,
         (position_id,),
     ).fetchone()
     assert linked["live_candidate_id"] == candidate.live_candidate_id
     assert linked["live_position_id"] == position_id
+    assert linked["quote_position_id"] == position_id
 
 
 def test_phase1_price_sheet_caps_extreme_fair_and_applies_haircuts(tmp_path: Path) -> None:
@@ -941,6 +954,86 @@ def test_phase1_price_sheet_marks_buy_yes_out_of_scope(tmp_path: Path) -> None:
 
     assert sheet.eligible is False
     assert sheet.reject_reason == "PHASE1_SIDE_OUT_OF_SCOPE"
+
+
+def test_phase2_quote_intent_clamps_below_ask_and_uses_gtd(tmp_path: Path) -> None:
+    candidate = _calibration_candidate(target=50.0)
+    source = candidate.position.__class__(
+        **{
+            **candidate.position.__dict__,
+            "entry_fair": 0.99,
+            "raw_policy": {"model_fairs": {DYNAMIC_TUNED_MODEL: 0.99, CATBOOST_MODEL: 0.97}},
+        }
+    )
+    sheet = build_phase1_price_sheet(
+        live_candidate_id="policy-test",
+        strategy_name=LIVE_POLICY_NAME,
+        policy_name=LIVE_POLICY_NAME,
+        source=source,
+        selected_token_id="no-token",
+        quote_features={"best_bid": 0.30, "best_ask": 0.40, "spread": 0.10},
+        as_of_utc=datetime(2026, 6, 15, 18, 0, tzinfo=timezone.utc),
+        target_notional_usd=50.0,
+    )
+
+    quote = build_post_only_quote_intent(
+        sheet=sheet,
+        book=BookSnapshot(
+            token_id="no-token",
+            bids=[BookLevel(price=0.30, size=100.0)],
+            asks=[BookLevel(price=0.40, size=100.0)],
+            timestamp="2026-06-15T18:00:00+00:00",
+        ),
+        as_of_utc=datetime(2026, 6, 15, 18, 0, tzinfo=timezone.utc),
+        min_quote_notional_usd=1.0,
+    )
+
+    assert quote.state == LiveQuoteState.SHADOW_POSTABLE
+    assert quote.order_mode == LiveOrderMode.GTD
+    assert quote.post_only is True
+    assert quote.quote_price == pytest.approx(0.39)
+    assert quote.quote_price < 0.40
+    assert quote.quote_size_usd == pytest.approx(5.0)
+    assert quote.quote_shares > 0.0
+
+
+def test_shadow_quote_reconcile_expires_open_quote(tmp_path: Path) -> None:
+    store = ExecutionStore(tmp_path / "live.sqlite")
+    engine = LiveExecutionEngine(store, LiveExecutionConfig(live_db_path=store.path, model_paths=(), mode="dry-run"))
+    candidate = _calibration_candidate(target=50.0)
+    sheet = build_phase1_price_sheet(
+        live_candidate_id="policy-expiring",
+        strategy_name=LIVE_POLICY_NAME,
+        policy_name=LIVE_POLICY_NAME,
+        source=candidate.position,
+        selected_token_id="no-token",
+        quote_features={"best_bid": 0.30, "best_ask": 0.40, "spread": 0.10},
+        as_of_utc=datetime(2026, 6, 15, 18, 0, tzinfo=timezone.utc),
+        target_notional_usd=50.0,
+    )
+    quote = build_post_only_quote_intent(
+        sheet=sheet,
+        book=BookSnapshot(
+            token_id="no-token",
+            bids=[BookLevel(price=0.30, size=100.0)],
+            asks=[BookLevel(price=0.40, size=100.0)],
+            timestamp="2026-06-15T18:00:00+00:00",
+        ),
+        as_of_utc=datetime(2026, 6, 15, 18, 0, tzinfo=timezone.utc),
+        min_quote_notional_usd=1.0,
+    )
+    store.insert_live_quote_intent(quote)
+
+    counts = engine._reconcile_shadow_quotes(
+        {"no-token": BookSnapshot(token_id="no-token", bids=[BookLevel(price=0.30, size=100.0)], asks=[BookLevel(price=0.40, size=100.0)], timestamp="2026-06-15T18:03:00+00:00")},
+        datetime(2026, 6, 15, 18, 3, tzinfo=timezone.utc),
+    )
+
+    assert counts == {"fair_valid_until": 1}
+    row = store.connection.execute("select state, cancel_reason, raw_json from live_quote_intents where quote_id = ?", (quote.quote_id,)).fetchone()
+    assert row["state"] == "SHADOW_EXPIRED"
+    assert row["cancel_reason"] == "fair_valid_until"
+    assert json.loads(row["raw_json"])["state"] == "SHADOW_EXPIRED"
 
 
 def _candidate_market(

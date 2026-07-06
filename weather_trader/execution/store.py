@@ -15,6 +15,8 @@ from weather_trader.execution.contracts import (
     LivePriceSheet,
     LivePolicyPosition,
     LivePositionState,
+    LiveQuoteIntent,
+    LiveQuoteState,
     LiveRiskSnapshot,
     LiveStrategy,
     LiveTradeEvent,
@@ -684,6 +686,42 @@ class ExecutionStore:
                 on live_price_sheets(live_candidate_id);
             create index if not exists idx_live_price_sheets_strategy_market
                 on live_price_sheets(strategy_name, market_date, station);
+
+            create table if not exists live_quote_intents (
+                id integer primary key autoincrement,
+                timestamp text not null,
+                quote_id text not null unique,
+                live_candidate_id text not null,
+                price_sheet_version text not null,
+                strategy_name text not null,
+                station text not null,
+                market_date text not null,
+                market_family text not null,
+                selected_market_id text not null,
+                selected_token_id text,
+                selected_side text not null,
+                selected_bucket text,
+                order_mode text not null,
+                quote_price real,
+                quote_size_usd real not null,
+                quote_shares real not null,
+                post_only integer not null,
+                batch_group_id text not null,
+                gtd_expiry text not null,
+                state text not null,
+                skip_reason text,
+                cancel_reason text,
+                live_position_id integer,
+                external_order_id text,
+                raw_json text not null
+            );
+
+            create index if not exists idx_live_quote_intents_candidate
+                on live_quote_intents(live_candidate_id);
+            create index if not exists idx_live_quote_intents_state_expiry
+                on live_quote_intents(state, gtd_expiry);
+            create index if not exists idx_live_quote_intents_strategy_market
+                on live_quote_intents(strategy_name, market_date, station);
 
             create table if not exists hermes_insights (
                 id integer primary key autoincrement,
@@ -2111,6 +2149,101 @@ class ExecutionStore:
         if cursor.rowcount == 0:
             return None
         return int(cursor.lastrowid)
+
+    def insert_live_quote_intent(self, quote: LiveQuoteIntent) -> int | None:
+        data = dataclass_to_jsonable(quote)
+        raw_payload = {**data, **(quote.raw_json or {})}
+        cursor = self.connection.execute(
+            """
+            insert or ignore into live_quote_intents (
+                timestamp, quote_id, live_candidate_id, price_sheet_version, strategy_name,
+                station, market_date, market_family, selected_market_id, selected_token_id,
+                selected_side, selected_bucket, order_mode, quote_price, quote_size_usd,
+                quote_shares, post_only, batch_group_id, gtd_expiry, state, skip_reason,
+                cancel_reason, live_position_id, external_order_id, raw_json
+            )
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                quote.timestamp,
+                quote.quote_id,
+                quote.live_candidate_id,
+                quote.price_sheet_version,
+                quote.strategy_name,
+                quote.station,
+                data["market_date"],
+                str(quote.market_family),
+                quote.selected_market_id,
+                quote.selected_token_id,
+                str(quote.selected_side),
+                quote.selected_bucket,
+                str(quote.order_mode),
+                quote.quote_price,
+                quote.quote_size_usd,
+                quote.quote_shares,
+                int(quote.post_only),
+                quote.batch_group_id,
+                quote.gtd_expiry,
+                str(quote.state),
+                quote.skip_reason,
+                quote.cancel_reason,
+                quote.live_position_id,
+                quote.external_order_id,
+                json.dumps(raw_payload, sort_keys=True),
+            ),
+        )
+        self.connection.commit()
+        if cursor.rowcount == 0:
+            return None
+        return int(cursor.lastrowid)
+
+    def link_live_quote_position(self, live_candidate_id: str | None, live_position_id: int) -> None:
+        if not live_candidate_id:
+            return
+        self.connection.execute(
+            """
+            update live_quote_intents
+            set live_position_id = ?
+            where live_candidate_id = ? and live_position_id is null
+            """,
+            (live_position_id, live_candidate_id),
+        )
+        self.connection.commit()
+
+    def open_shadow_quote_intents(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            select *
+            from live_quote_intents
+            where state = ?
+            order by timestamp, id
+            """,
+            (str(LiveQuoteState.SHADOW_POSTABLE),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def update_live_quote_intent_state(
+        self,
+        quote_id: str,
+        *,
+        state: LiveQuoteState,
+        cancel_reason: str | None = None,
+        raw_patch: dict[str, Any] | None = None,
+    ) -> None:
+        row = self.connection.execute("select raw_json from live_quote_intents where quote_id = ?", (quote_id,)).fetchone()
+        raw_json = json.loads(row["raw_json"]) if row is not None else {}
+        if raw_patch:
+            raw_json.update(raw_patch)
+        raw_json.update({"state": str(state), "cancel_reason": cancel_reason})
+        self.connection.execute(
+            """
+            update live_quote_intents
+            set state = ?, cancel_reason = ?, raw_json = ?
+            where quote_id = ?
+            """,
+            (str(state), cancel_reason, json.dumps(raw_json, sort_keys=True), quote_id),
+        )
+        self.connection.commit()
 
     def insert_live_policy_position(self, position: LivePolicyPosition) -> int | None:
         data = dataclass_to_jsonable(position)

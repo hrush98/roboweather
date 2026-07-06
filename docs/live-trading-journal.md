@@ -12,6 +12,8 @@ Execution status: funded live trading paused pending the execution-first gates d
 
 Phase 1 adverse-selection status: the scoped US high-temperature consensus no-tiny BUY_NO price sheet now exists in source and is persisted to `live_price_sheets`, with read-only replay available through `scripts/phase1_price_sheet_report.py`. The first active-DB sanity check was positive but thin (15 all-history resolved sheets at +0.059 R/R; 7 last-30-day resolved sheets at +0.044 R/R), so funded trading remains paused until passive shadow fills, cancellation labels, and filled-subset quote PnL pass later gates.
 
+Phase 2 adverse-selection status: scoped price sheets now generate persisted post-only GTD shadow quotes in `live_quote_intents`. These are dry-run/shadow records only: they prove quote construction, post-only price clamping, candidate/position linkage, and expiry/cancel bookkeeping, but they do not place funded orders.
+
 ### Last configured policies
 
 | Policy | Side | Target notional | Entry cap | Notes |

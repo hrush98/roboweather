@@ -246,6 +246,8 @@ Exit gate: historical and current-window replay show that the generated quote pr
 
 Build a one-sided quoting engine, not a resting fallback.
 
+Implementation status, 2026-07-06: shadow support is in place for the scoped Phase 1 sheet. Live candidate builds now persist `live_quote_intents` as post-only GTD shadow quotes linked to the price sheet, live candidate, and eventual live position. The engine clamps quote price to `min(max_quote_price, best_ask - 0.01)`, marks unpostable rows as skipped, and reconciles open shadow quotes to `SHADOW_EXPIRED` or `SHADOW_CANCELLED` when the fair validity window, feed/book state, or post-only crossing rule invalidates the quote. No funded CLOB quote placement was added.
+
 Behavior:
 
 - Place post-only GTC/GTD bids at or below `max_quote_price`.

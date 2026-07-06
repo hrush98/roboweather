@@ -70,6 +70,7 @@ class LiveOrderMode(StringEnum):
     FAK = "FAK"
     FOK = "FOK"
     GTC = "GTC"
+    GTD = "GTD"
 
 
 class LivePositionState(StringEnum):
@@ -82,6 +83,13 @@ class LivePositionState(StringEnum):
     UNKNOWN = "UNKNOWN"
     CANCELLED = "CANCELLED"
     SETTLED = "SETTLED"
+
+
+class LiveQuoteState(StringEnum):
+    SHADOW_POSTABLE = "SHADOW_POSTABLE"
+    SHADOW_SKIPPED = "SHADOW_SKIPPED"
+    SHADOW_CANCELLED = "SHADOW_CANCELLED"
+    SHADOW_EXPIRED = "SHADOW_EXPIRED"
 
 
 class LiveTradeEventType(StringEnum):
@@ -636,6 +644,35 @@ class LivePriceSheet:
     cancel_triggers: list[str]
     eligible: bool
     reject_reason: str | None
+    raw_json: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LiveQuoteIntent:
+    timestamp: str
+    quote_id: str
+    live_candidate_id: str
+    price_sheet_version: str
+    strategy_name: str
+    station: str
+    market_date: date
+    market_family: MarketFamily
+    selected_market_id: str
+    selected_token_id: str | None
+    selected_side: TradeAction
+    selected_bucket: str | None
+    order_mode: LiveOrderMode
+    quote_price: float | None
+    quote_size_usd: float
+    quote_shares: float
+    post_only: bool
+    batch_group_id: str
+    gtd_expiry: str
+    state: LiveQuoteState
+    skip_reason: str | None = None
+    cancel_reason: str | None = None
+    live_position_id: int | None = None
+    external_order_id: str | None = None
     raw_json: dict[str, Any] = field(default_factory=dict)
 
 

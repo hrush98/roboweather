@@ -21,6 +21,7 @@ from weather_trader.execution.contracts import (
     LiveOrderMode,
     LivePolicyPosition,
     LivePositionState,
+    LiveQuoteState,
     LiveRiskSnapshot,
     LiveStrategy,
     LiveTradeEvent,
@@ -38,6 +39,7 @@ from weather_trader.execution.fair_value import FairValueEngine, FairValueResult
 from weather_trader.execution.grouping import GroupMarketContext, StationDateDecisionEngine, group_key
 from weather_trader.execution.liquidity import quantize_price, quantize_shares, quantize_usdc, walk_ask_ladder
 from weather_trader.execution.price_maker import build_phase1_price_sheet
+from weather_trader.execution.quote_engine import build_post_only_quote_intent, shadow_cancel_reason
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.execution.weather import CelsiusWeatherFeatureService, StationWeatherState, WeatherFeatureService
 from weather_trader.live.settings import LiveSettings, load_live_settings, private_key_from_env_or_keyfile
@@ -854,6 +856,7 @@ class LiveExecutionEngine:
             self.store.upsert_market(market)
         books = self._fetch_books(markets)
         debug["books"] = len(books)
+        debug["shadow_quote_cancellations"] = self._reconcile_shadow_quotes(books, now)
         weather_by_station = self._fetch_weather(markets, now, errors)
         debug["weather"] = {
             "requested_stations": len({market.station for market in markets}),
@@ -889,6 +892,7 @@ class LiveExecutionEngine:
                 reject_reasons["DUPLICATE_POSITION"] = reject_reasons.get("DUPLICATE_POSITION", 0) + 1
                 continue
             self.store.link_live_candidate_position(candidate.live_candidate_id, position_id)
+            self.store.link_live_quote_position(candidate.live_candidate_id, position_id)
             reserved += 1
             self.store.insert_live_trade_event(
                 LiveTradeEvent(
@@ -1078,13 +1082,15 @@ class LiveExecutionEngine:
                         book_by_market_side=book_by_market_side,
                     )
                     if price_sheet_record is not None:
-                        price_sheet_id, price_sheet = price_sheet_record
+                        price_sheet_id, price_sheet, quote_intent_id, quote_intent = price_sheet_record
                         position = replace(
                             position,
                             raw_policy={
                                 **dict(position.raw_policy or {}),
                                 "phase1_price_sheet_id": price_sheet_id,
                                 "phase1_price_sheet": dataclass_to_jsonable(price_sheet),
+                                "phase2_quote_intent_id": quote_intent_id,
+                                "phase2_quote_intent": dataclass_to_jsonable(quote_intent),
                             },
                         )
                     position_count += 1
@@ -1245,7 +1251,7 @@ class LiveExecutionEngine:
         as_of_utc: datetime,
         market_by_id: dict[str, MarketSnapshot],
         book_by_market_side: dict[tuple[str, str], BookSnapshot],
-    ) -> tuple[int | None, Any] | None:
+    ) -> tuple[int | None, Any, int | None, Any] | None:
         if plan.strategy.name != LIVE_POLICY_NAME:
             return None
         selected_side = str(position.selected_side)
@@ -1264,7 +1270,38 @@ class LiveExecutionEngine:
             target_notional_usd=plan.target_notional_usd,
         )
         sheet_id = self.store.insert_live_price_sheet(sheet)
-        return sheet_id, sheet
+        quote_intent = build_post_only_quote_intent(
+            sheet=sheet,
+            book=selected_book,
+            as_of_utc=as_of_utc,
+            min_quote_notional_usd=float(self.settings.live_min_order_notional),
+        )
+        quote_intent_id = self.store.insert_live_quote_intent(quote_intent)
+        return sheet_id, sheet, quote_intent_id, quote_intent
+
+    def _reconcile_shadow_quotes(self, books: dict[str, BookSnapshot], as_of_utc: datetime) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for row in self.store.open_shadow_quote_intents():
+            token_id = str(row.get("selected_token_id") or "")
+            reason = shadow_cancel_reason(row, books.get(token_id), as_of_utc)
+            if reason is None:
+                continue
+            state = LiveQuoteState.SHADOW_EXPIRED if reason == "fair_valid_until" else LiveQuoteState.SHADOW_CANCELLED
+            self.store.update_live_quote_intent_state(
+                str(row["quote_id"]),
+                state=state,
+                cancel_reason=reason,
+                raw_patch={
+                    "shadow_cancel": {
+                        "reason": reason,
+                        "checked_at": as_of_utc.astimezone(timezone.utc).isoformat(),
+                        "token_id": token_id,
+                        "book_present": token_id in books,
+                    }
+                },
+            )
+            counts[reason] = counts.get(reason, 0) + 1
+        return counts
 
     def _quote_lifecycle_features(
         self,
