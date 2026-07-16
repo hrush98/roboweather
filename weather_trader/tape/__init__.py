@@ -1,5 +1,7 @@
 """Policy-independent market-tape collection and replay primitives."""
 
+from weather_trader.tape.books import BookReconstructor, ReconstructedBook
+
 from weather_trader.tape.contracts import (
     BookCheckpoint,
     CollectorMetric,
@@ -14,6 +16,7 @@ from weather_trader.tape.contracts import (
 
 __all__ = [
     "BookCheckpoint",
+    "BookReconstructor",
     "CollectorMetric",
     "CollectorSession",
     "CoverageInterval",
@@ -21,5 +24,6 @@ __all__ = [
     "MarketTapeEvent",
     "ReplayInput",
     "ReplayOutput",
+    "ReconstructedBook",
     "TokenRegistryEntry",
 ]

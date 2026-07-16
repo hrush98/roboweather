@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 
 from weather_trader.tape.contracts import (
+    BookCheckpoint,
     CollectorMetric,
     CollectorSession,
     CoverageInterval,
@@ -145,6 +146,21 @@ class TapeCatalog:
 
             create index if not exists idx_tape_metrics_session_time
                 on tape_collector_metrics(session_id, captured_at_utc);
+
+            create table if not exists tape_book_checkpoints (
+                checkpoint_id text primary key,
+                session_id text not null,
+                token_id text not null,
+                event_id text not null,
+                event_offset integer not null,
+                captured_at_utc text not null,
+                reconstruction_hash text not null,
+                coverage_state text not null,
+                raw_json text not null
+            );
+
+            create index if not exists idx_tape_checkpoints_token_event
+                on tape_book_checkpoints(token_id, event_offset);
             """
         )
         self.connection.commit()
@@ -433,6 +449,23 @@ class TapeCatalog:
                 ),
             )
         return int(cursor.lastrowid)
+
+    def record_checkpoint(self, checkpoint: BookCheckpoint) -> None:
+        payload = contract_to_dict(checkpoint)
+        with self.connection:
+            self.connection.execute(
+                """
+                insert or replace into tape_book_checkpoints (
+                    checkpoint_id, session_id, token_id, event_id, event_offset,
+                    captured_at_utc, reconstruction_hash, coverage_state, raw_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    checkpoint.checkpoint_id, checkpoint.session_id, checkpoint.token_id,
+                    checkpoint.event_id, checkpoint.event_offset, checkpoint.captured_at_utc,
+                    checkpoint.reconstruction_hash, checkpoint.coverage_state.value, _json(payload),
+                ),
+            )
 
 
 def _json(value: object) -> str:

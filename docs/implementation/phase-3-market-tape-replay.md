@@ -274,6 +274,13 @@ Implementation status, 2026-07-16:
 
 Exit: deterministic book replay passes fixtures and recorded-session spot checks.
 
+Implementation status, 2026-07-16:
+
+- Added deterministic token-level full-book reconstruction and absolute-size `BUY`/`SELL` price-level deltas with canonical SHA-256 state hashes and stable bid/ask ordering.
+- Reconstruction accepts a `RESYNCING` full book as the new baseline, invalidates non-valid deltas, refuses deltas before a full book, and cannot become valid again without another full book.
+- Added catalog-persisted book checkpoints and `scripts/rebuild_market_tape_books.py` for repeatable parser rebuilds from checksummed raw segments. Rebuilding the 674-event host probe twice produced the same 616 token checkpoints.
+- Slice 3 remains open for cross-partition arbitrary-timestamp lookup, periodic checkpoint scheduling on long sessions, malformed live-event accounting, and broader recorded-session spot checks.
+
 ### Slice 4: Causal Decision Join
 
 - Link research decisions by token and quote-ready time.
@@ -316,6 +323,7 @@ Exit: the report answers whether base-case fill-conditioned PnL is positive with
 
 ## Decision Log
 
+- 2026-07-16: Started Slice 3 with deterministic full-book/delta reconstruction and persisted state hashes. Rebuilt all 616 initial books in the bounded host segment twice; kept arbitrary-time and long-session checkpoint gates open.
 - 2026-07-16: Hardened Slice 2 with UTC rotation/cataloging, resource telemetry, bounded exponential reconnects, explicit gap invalidation, strict health verification, and zero-event failure. A 616-token live probe passed; kept complete-lifecycle capacity and unattended supervision gates open.
 - 2026-07-16: Validated the first repository-backed live all-universe recorder probe: 616 tokens, 50 feed messages, 714 token events, exact replay, and bounded queue use. Kept lifecycle and retention gates open.
 - 2026-07-16: Recorded operator confirmation that the Phase 3 collector is built and running. Kept the acceptance checklist open until representative resource budgets, deterministic replay, valid coverage, and fill/markout evidence are documented.
