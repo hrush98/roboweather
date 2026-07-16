@@ -21,7 +21,7 @@ forecast signal
 
 ## Current Phase
 
-The Phase 3 market-tape recorder now has repository-validated rotation, reconnect/gap semantics, resource telemetry, strict health checks, and deterministic arbitrary-time book reconstruction. Complete-lifecycle capacity evidence and causal decision/fill replay remain open. Price Sheet V2a can continue independently; V2b will consume only valid Phase 3 tape windows. Funded trading remains paused.
+The Phase 3 market-tape recorder now has repository-validated rotation, reconnect/gap semantics, resource telemetry, strict health checks, deterministic arbitrary-time book reconstruction, and a generic latency-aware causal decision join. Complete-lifecycle capacity evidence, real decision integration, and fill replay remain open. Price Sheet V2a can continue independently; V2b will consume only valid Phase 3 tape windows. Funded trading remains paused.
 
 Canonical records:
 

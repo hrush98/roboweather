@@ -292,6 +292,13 @@ Implementation status, 2026-07-16:
 
 Exit: a random decision can be reconstructed from observation availability through quote termination.
 
+Implementation status, 2026-07-16:
+
+- Added immutable decision timing and tape-join contracts with observation source/receipt time, model decision start/end, hypothesis activation, explicit latency, quote readiness, first visible token event, coverage verdict, and reconstruction hash.
+- Added a fail-closed causal join that rejects time-travel timestamp ordering and pre-activation decisions, applies the configured latency arm, selects the first token event at or after quote readiness, and requires one continuous `VALID` coverage interval from the configured pre-signal window through that event.
+- Added persisted join rows and `scripts/join_market_tape_decision.py` for versioned JSON decision records. Synthetic cross-time fixtures prove valid joins and known coverage breaks.
+- Slice 4 remains open until the generic contract is mapped to an actual research/Price Sheet V2 decision export and a recorded decision is reconstructed through its quote termination boundary.
+
 ### Slice 5: Fill Bounds And Markouts
 
 - Correct trade-direction classification.
@@ -326,6 +333,7 @@ Exit: the report answers whether base-case fill-conditioned PnL is positive with
 
 ## Decision Log
 
+- 2026-07-16: Started Slice 4 with an immutable, latency-aware causal decision join and continuous pre-signal coverage gate. Kept the slice open pending a real decision-export integration and recorded decision replay.
 - 2026-07-16: Completed the Slice 3 repository exit gate after online checkpointing produced 616 valid token books with zero reconstruction errors and arbitrary-time reconstruction passed on the captured segment. Kept long-run recorder capacity separate and open.
 - 2026-07-16: Started Slice 3 with deterministic full-book/delta reconstruction and persisted state hashes. Rebuilt all 616 initial books in the bounded host segment twice; kept arbitrary-time and long-session checkpoint gates open.
 - 2026-07-16: Hardened Slice 2 with UTC rotation/cataloging, resource telemetry, bounded exponential reconnects, explicit gap invalidation, strict health verification, and zero-event failure. A 616-token live probe passed; kept complete-lifecycle capacity and unattended supervision gates open.

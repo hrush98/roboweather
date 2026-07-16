@@ -8,6 +8,7 @@ from weather_trader.tape.contracts import (
     BookCheckpoint,
     CollectorMetric,
     CollectorSession,
+    DecisionTapeJoin,
     CoverageInterval,
     SubscriptionGeneration,
     TokenOutcome,
@@ -170,6 +171,22 @@ class TapeCatalog:
                 receipt_sequence integer not null,
                 captured_at_utc text not null,
                 reason text not null
+            );
+
+            create table if not exists tape_decision_joins (
+                decision_id text not null,
+                hypothesis_version text not null,
+                token_id text not null,
+                session_id text not null,
+                quote_ready_at_utc text not null,
+                first_visible_event_id text,
+                first_visible_event_at_utc text,
+                coverage_valid integer not null,
+                invalid_reason text,
+                pre_signal_seconds real not null,
+                reconstruction_hash text,
+                raw_json text not null,
+                primary key (decision_id, hypothesis_version)
             );
             """
         )
@@ -497,6 +514,26 @@ class TapeCatalog:
                 (session_id, token_id, event_id, receipt_sequence, captured_at_utc, reason),
             )
         return int(cursor.lastrowid)
+
+    def record_decision_join(self, item: DecisionTapeJoin) -> None:
+        payload = contract_to_dict(item)
+        with self.connection:
+            self.connection.execute(
+                """
+                insert or replace into tape_decision_joins (
+                    decision_id, hypothesis_version, token_id, session_id,
+                    quote_ready_at_utc, first_visible_event_id,
+                    first_visible_event_at_utc, coverage_valid, invalid_reason,
+                    pre_signal_seconds, reconstruction_hash, raw_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item.decision_id, item.hypothesis_version, item.token_id, item.session_id,
+                    item.quote_ready_at_utc, item.first_visible_event_id,
+                    item.first_visible_event_at_utc, int(item.coverage_valid), item.invalid_reason,
+                    item.pre_signal_seconds, item.reconstruction_hash, _json(payload),
+                ),
+            )
 
 
 def _json(value: object) -> str:

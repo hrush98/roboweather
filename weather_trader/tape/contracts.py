@@ -34,6 +34,40 @@ class ReplaySide(StringEnum):
     SELL = "SELL"
 
 
+@dataclass(frozen=True)
+class DecisionTiming:
+    decision_id: str
+    hypothesis_version: str
+    activation_timestamp: str
+    token_id: str
+    observation_source_timestamp: str
+    observation_received_at_utc: str
+    decision_started_at_utc: str
+    decision_finished_at_utc: str
+    latency_ms: int = 0
+
+    def __post_init__(self) -> None:
+        _require(self.decision_id, "decision_id")
+        _require(self.token_id, "token_id")
+        if self.latency_ms < 0:
+            raise ValueError("latency_ms must be non-negative")
+
+
+@dataclass(frozen=True)
+class DecisionTapeJoin:
+    decision_id: str
+    hypothesis_version: str
+    token_id: str
+    session_id: str
+    quote_ready_at_utc: str
+    first_visible_event_id: str | None
+    first_visible_event_at_utc: str | None
+    coverage_valid: bool
+    invalid_reason: str | None
+    pre_signal_seconds: float
+    reconstruction_hash: str | None
+
+
 class FillScenario(StringEnum):
     UNFILLED = "UNFILLED"
     PARTIAL = "PARTIAL"

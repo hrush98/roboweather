@@ -4,6 +4,7 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-07-16
 
+- Started the Phase 3 causal decision join with immutable observation/decision timing, hypothesis activation, configurable latency, first-visible-event selection, continuous pre-signal coverage proof, persisted reconstruction references, and a strict JSON decision join command. Real research/Price Sheet V2 decision mapping remains open.
 - Completed the Phase 3 deterministic-book repository gate: the collector now validates books online, schedules initial/periodic checkpoints, catalogs reconstruction errors, invalidates malformed coverage, and supports arbitrary receipt-time/event reconstruction across ordered partitions. A 616-token live probe persisted 616 checkpoints with zero reconstruction errors and passed strict health.
 - Started Phase 3 deterministic book reconstruction with full-book baselines, absolute-size L2 deltas, gap-safe invalidation, canonical state hashes, cataloged checkpoints, and a raw-segment rebuild command. The bounded live segment reproducibly rebuilt 616 token checkpoints.
 - Hardened the Phase 3 active-token recorder with hourly UTC raw-segment rotation and partition cataloging, bounded exponential reconnects, explicit gap/resync coverage, persisted lag/queue/RSS/disk telemetry, zero-event failure, and a strict catalog/segment health command. A bounded 616-token host probe captured 674 events and passed health verification; complete-lifecycle capacity remains open.

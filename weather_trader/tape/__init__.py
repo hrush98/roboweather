@@ -8,11 +8,14 @@ from weather_trader.tape.contracts import (
     CollectorSession,
     CoverageInterval,
     CoverageState,
+    DecisionTapeJoin,
+    DecisionTiming,
     MarketTapeEvent,
     ReplayInput,
     ReplayOutput,
     TokenRegistryEntry,
 )
+from weather_trader.tape.joins import join_decision_to_tape
 
 __all__ = [
     "BookCheckpoint",
@@ -21,10 +24,13 @@ __all__ = [
     "CollectorSession",
     "CoverageInterval",
     "CoverageState",
+    "DecisionTapeJoin",
+    "DecisionTiming",
     "MarketTapeEvent",
     "ReplayInput",
     "ReplayOutput",
     "ReconstructedBook",
     "reconstruct_at",
+    "join_decision_to_tape",
     "TokenRegistryEntry",
 ]
