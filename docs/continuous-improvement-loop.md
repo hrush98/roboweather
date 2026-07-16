@@ -217,6 +217,7 @@ Use this mapping:
 | Forecast edge | HRRR inland late disagreement overlay | Promising research/canary candidate; needs more resolved inland sample. |
 | Calibration | Station/side/regime calibration report | Needed. |
 | Execution | Live fill attribution vs replay EV | Needed. |
+| Execution data | [Shared weather market tape](hypotheses/2026-07-16-shared-weather-market-tape.md) | Proposed after research-loop memory stabilization; collect each token once and reuse it across models and policies. |
 | Retrospective automation | `scripts/trading_retrospective_report.py` | Implemented for manual Sunday/Monday weekly review. |
 
 ## Closing A Hypothesis
