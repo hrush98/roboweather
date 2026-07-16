@@ -1,6 +1,6 @@
 # Phase 3 Market Tape And Replay Implementation Plan
 
-Status: Operator reports collector built and running; repository acceptance evidence remains in progress
+Status: Recorder vertical slice validated; repository acceptance evidence remains in progress
 
 Last updated: 2026-07-16
 
@@ -242,7 +242,9 @@ Implementation status, 2026-07-16:
 - Added immutable contracts for token registry entries, collector sessions, subscription generations, coverage intervals, raw event envelopes, book checkpoints, and replay inputs/outputs under `weather_trader/tape/`.
 - Added checksummed append-only JSONL segments with byte-offset stable event IDs, exact raw-payload replay, and fail-closed handling for truncated or modified records.
 - Added `scripts/benchmark_market_tape.py` to measure raw/gzip bytes per message, compression, append latency/throughput, replay throughput, and exact round-trip behavior on captured representative WebSocket JSONL.
-- Focused deterministic fixtures pass. Slice 1 remains open until representative live samples are captured, resource budgets are reviewed, and rotation/retention defaults are selected from those measurements.
+- A bounded live probe captured 50 WebSocket messages / 714 token events across 616 policy-independent tokens. The 1.81 MB checksummed segment round-tripped exactly, compressed to 15.4% of raw size, replayed at about 19.7k events/second, and had 0.23 ms median append latency on the host.
+- The live probe established an explicit 8 MiB WebSocket-frame ceiling after the 616-token initial snapshot exceeded the client library's 1 MiB default. Queue high-water was 492 events against the provisional 10,000-event bound.
+- Slice 1 remains open for a complete lifecycle/daily-growth measurement and final rotation/retention review; the short sample validates the format but does not establish long-run capacity.
 
 ### Slice 2: Active-Token Recorder
 
@@ -252,6 +254,13 @@ Implementation status, 2026-07-16:
 - Add receipt-lag, gap, queue-depth, memory, and disk telemetry.
 
 Exit: a complete dry-run market lifecycle stays inside resource budgets with known coverage.
+
+Implementation status, 2026-07-16:
+
+- Added a separate SQLite tape catalog for token registry entries, collector sessions, immutable subscription generations/membership, and token coverage intervals.
+- Added policy-independent all-scope discovery that converts active weather markets into sibling YES/NO token records before policy selection. Complete refreshes retire missing tokens; incomplete refreshes preserve the last known universe.
+- Added opt-in `scripts/run_market_tape.py` collection with a bounded queue, dynamic generation refresh, fail-closed transport errors, checksummed raw writes, and `RESYNCING`/`VALID`/`CLOSED` coverage transitions. A token cannot become valid before its initial full-book message.
+- The first repository-backed live probe subscribed to 616 tokens and persisted catalog/coverage state. Slice 2 remains open for hourly rotation, durable restart supervision, reconnect backoff, lag/memory/disk telemetry, complete-lifecycle collection, and an operational health command.
 
 ### Slice 3: Book Reconstruction
 
@@ -304,6 +313,7 @@ Exit: the report answers whether base-case fill-conditioned PnL is positive with
 
 ## Decision Log
 
+- 2026-07-16: Validated the first repository-backed live all-universe recorder probe: 616 tokens, 50 feed messages, 714 token events, exact replay, and bounded queue use. Kept lifecycle and retention gates open.
 - 2026-07-16: Recorded operator confirmation that the Phase 3 collector is built and running. Kept the acceptance checklist open until representative resource budgets, deterministic replay, valid coverage, and fill/markout evidence are documented.
 - 2026-07-16: Started Slice 1 with a separate `weather_trader.tape` boundary. The active segment format is checksummed canonical JSONL with stable byte-offset IDs; gzip is measured as a finalized-segment candidate but is not yet a locked retention choice.
 - 2026-07-16: Phase 3 approved after confirmation that the research-loop memory issue is resolved. Split the economic hypothesis from this implementation plan and made the shared tape the current execution-rebuild phase.

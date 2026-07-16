@@ -45,7 +45,7 @@ class FillScenario(StringEnum):
 class TokenRegistryEntry:
     token_id: str
     market_id: str
-    condition_id: str
+    condition_id: str | None
     outcome: TokenOutcome
     station: str
     market_date: str
@@ -57,6 +57,7 @@ class TokenRegistryEntry:
     upper_bound: float | None = None
     sibling_token_id: str | None = None
     sibling_market_id: str | None = None
+    market_end_at_utc: str | None = None
     active_until_utc: str | None = None
     subscription_state: str = "PENDING"
     last_health_status: str | None = None

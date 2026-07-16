@@ -7,10 +7,13 @@ import argparse
 import gzip
 import json
 import statistics
+import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from weather_trader.tape.contracts import MarketTapeEvent
 from weather_trader.tape.storage import RawSegmentWriter, iter_segment

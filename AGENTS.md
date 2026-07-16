@@ -91,6 +91,14 @@
   - Add `--since-timestamp ISO_TS` for a specific dry-run session, and `--candidate-id LIVE_CANDIDATE_ID` to inspect a known row.
 - A passing legacy health report means only that candidate-scoped plumbing rows can be reconstructed. It does not prove pre-signal coverage, continuous book validity, correct trade direction, hypothetical fills, or profitability.
 
+## Phase 3 market-tape development workflow
+
+- The shared recorder is opt-in and separate from both research and live ledgers. Do not point it at either production SQLite database.
+- While lifecycle gates remain open, use a bounded temporary probe:
+  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/run_market_tape.py --catalog /tmp/roboweather_market_tape_catalog.sqlite --raw-dir /tmp/roboweather_market_tape_raw --max-messages 50 --max-seconds 60 --refresh-seconds 30`
+- A zero-message successful exit is a failure. Require nonzero messages/events, a subscription generation, `RESYNCING` followed by `VALID` coverage for full-book tokens, and exact segment replay.
+- Queue, frame, partition, and retention values remain provisional until complete-lifecycle resource measurement passes. Do not run this recorder as an unattended production service yet.
+
 ## Continuous improvement workflow
 
 - Use `docs/continuous-improvement-loop.md` for the recursive improvement process. New strategy, sizing, model, risk, or execution hypotheses should get a record under `docs/hypotheses/` when they may affect live behavior or future promotion decisions.

@@ -1,0 +1,377 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from pathlib import Path
+
+from weather_trader.tape.contracts import (
+    CollectorSession,
+    CoverageInterval,
+    SubscriptionGeneration,
+    TokenOutcome,
+    TokenRegistryEntry,
+    contract_to_dict,
+)
+
+
+class TapeCatalog:
+    """Compact metadata catalog kept separate from raw market-tape segments."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.connection = sqlite3.connect(path, timeout=30.0)
+        self.connection.row_factory = sqlite3.Row
+        self.connection.execute("pragma foreign_keys = ON")
+        self.connection.execute("pragma journal_mode = WAL")
+        self.connection.execute("pragma busy_timeout = 30000")
+        self._initialize()
+
+    def close(self) -> None:
+        self.connection.close()
+
+    def __enter__(self) -> TapeCatalog:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def _initialize(self) -> None:
+        self.connection.executescript(
+            """
+            create table if not exists tape_tokens (
+                token_id text primary key,
+                market_id text not null,
+                condition_id text,
+                outcome text not null,
+                station text not null,
+                market_date text not null,
+                market_family text not null,
+                lower_bound real,
+                upper_bound real,
+                sibling_token_id text,
+                sibling_market_id text,
+                market_end_at_utc text,
+                discovered_at_utc text not null,
+                active_from_utc text not null,
+                active_until_utc text,
+                resolution_source text not null,
+                subscription_state text not null,
+                last_health_status text,
+                raw_json text not null
+            );
+
+            create index if not exists idx_tape_tokens_active
+                on tape_tokens(active_until_utc, market_date, station);
+
+            create table if not exists tape_collector_sessions (
+                session_id text primary key,
+                started_at_utc text not null,
+                started_monotonic_ns integer not null,
+                collector_version text not null,
+                hostname text not null,
+                finished_at_utc text,
+                finish_reason text,
+                raw_json text not null
+            );
+
+            create table if not exists tape_subscription_generations (
+                session_id text not null,
+                generation integer not null,
+                effective_at_utc text not null,
+                reason text not null,
+                raw_json text not null,
+                primary key (session_id, generation),
+                foreign key (session_id) references tape_collector_sessions(session_id)
+            );
+
+            create table if not exists tape_subscription_members (
+                session_id text not null,
+                generation integer not null,
+                token_id text not null,
+                primary key (session_id, generation, token_id),
+                foreign key (session_id, generation)
+                    references tape_subscription_generations(session_id, generation),
+                foreign key (token_id) references tape_tokens(token_id)
+            );
+
+            create table if not exists tape_coverage_intervals (
+                id integer primary key autoincrement,
+                session_id text not null,
+                token_id text not null,
+                state text not null,
+                started_at_utc text not null,
+                ended_at_utc text,
+                subscription_generation integer not null,
+                reason text,
+                gap_id text,
+                raw_json text not null
+            );
+
+            create index if not exists idx_tape_coverage_token_time
+                on tape_coverage_intervals(token_id, started_at_utc, ended_at_utc);
+            """
+        )
+        self.connection.commit()
+
+    def upsert_tokens(self, entries: list[TokenRegistryEntry]) -> int:
+        if not entries:
+            return 0
+        with self.connection:
+            for entry in entries:
+                payload = contract_to_dict(entry)
+                self.connection.execute(
+                    """
+                    insert into tape_tokens (
+                        token_id, market_id, condition_id, outcome, station,
+                        market_date, market_family, lower_bound, upper_bound,
+                        sibling_token_id, sibling_market_id, market_end_at_utc,
+                        discovered_at_utc, active_from_utc, active_until_utc,
+                        resolution_source, subscription_state, last_health_status,
+                        raw_json
+                    ) values (
+                        :token_id, :market_id, :condition_id, :outcome, :station,
+                        :market_date, :market_family, :lower_bound, :upper_bound,
+                        :sibling_token_id, :sibling_market_id, :market_end_at_utc,
+                        :discovered_at_utc, :active_from_utc, :active_until_utc,
+                        :resolution_source, :subscription_state, :last_health_status,
+                        :raw_json
+                    )
+                    on conflict(token_id) do update set
+                        market_id = excluded.market_id,
+                        condition_id = excluded.condition_id,
+                        outcome = excluded.outcome,
+                        station = excluded.station,
+                        market_date = excluded.market_date,
+                        market_family = excluded.market_family,
+                        lower_bound = excluded.lower_bound,
+                        upper_bound = excluded.upper_bound,
+                        sibling_token_id = excluded.sibling_token_id,
+                        sibling_market_id = excluded.sibling_market_id,
+                        market_end_at_utc = excluded.market_end_at_utc,
+                        resolution_source = excluded.resolution_source,
+                        active_until_utc = excluded.active_until_utc,
+                        subscription_state = excluded.subscription_state,
+                        last_health_status = excluded.last_health_status,
+                        raw_json = excluded.raw_json
+                    """,
+                    {**payload, "raw_json": _json(payload)},
+                )
+        return len(entries)
+
+    def active_tokens(self) -> list[TokenRegistryEntry]:
+        rows = self.connection.execute(
+            "select * from tape_tokens where active_until_utc is null order by token_id"
+        ).fetchall()
+        return [_token_from_row(row) for row in rows]
+
+    def set_subscription_state(self, token_ids: tuple[str, ...], state: str) -> None:
+        if not token_ids:
+            return
+        placeholders = ",".join("?" for _ in token_ids)
+        with self.connection:
+            self.connection.execute(
+                f"update tape_tokens set subscription_state = ? where token_id in ({placeholders})",
+                (state, *token_ids),
+            )
+
+    def retire_missing_tokens(self, active_token_ids: tuple[str, ...], *, retired_at_utc: str) -> int:
+        normalized = tuple(sorted(set(active_token_ids)))
+        with self.connection:
+            if normalized:
+                placeholders = ",".join("?" for _ in normalized)
+                cursor = self.connection.execute(
+                    f"""
+                    update tape_tokens
+                    set active_until_utc = ?, subscription_state = 'RETIRED'
+                    where active_until_utc is null and token_id not in ({placeholders})
+                    """,
+                    (retired_at_utc, *normalized),
+                )
+            else:
+                cursor = self.connection.execute(
+                    """
+                    update tape_tokens
+                    set active_until_utc = ?, subscription_state = 'RETIRED'
+                    where active_until_utc is null
+                    """,
+                    (retired_at_utc,),
+                )
+        return int(cursor.rowcount)
+
+    def start_session(self, session: CollectorSession) -> None:
+        payload = contract_to_dict(session)
+        with self.connection:
+            self.connection.execute(
+                """
+                insert into tape_collector_sessions (
+                    session_id, started_at_utc, started_monotonic_ns,
+                    collector_version, hostname, finished_at_utc, finish_reason,
+                    raw_json
+                ) values (
+                    :session_id, :started_at_utc, :started_monotonic_ns,
+                    :collector_version, :hostname, :finished_at_utc, :finish_reason,
+                    :raw_json
+                )
+                """,
+                {**payload, "raw_json": _json(payload)},
+            )
+
+    def finish_session(self, session_id: str, *, finished_at_utc: str, reason: str) -> None:
+        with self.connection:
+            row = self.connection.execute(
+                "select raw_json from tape_collector_sessions where session_id = ?", (session_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(session_id)
+            payload = json.loads(row["raw_json"])
+            payload.update({"finished_at_utc": finished_at_utc, "finish_reason": reason})
+            self.connection.execute(
+                """
+                update tape_collector_sessions
+                set finished_at_utc = ?, finish_reason = ?, raw_json = ?
+                where session_id = ?
+                """,
+                (finished_at_utc, reason, _json(payload), session_id),
+            )
+
+    def latest_subscription(self, session_id: str) -> SubscriptionGeneration | None:
+        row = self.connection.execute(
+            """
+            select raw_json from tape_subscription_generations
+            where session_id = ? order by generation desc limit 1
+            """,
+            (session_id,),
+        ).fetchone()
+        return _subscription_from_json(row["raw_json"]) if row else None
+
+    def reconcile_subscription(
+        self,
+        session_id: str,
+        *,
+        token_ids: tuple[str, ...],
+        effective_at_utc: str,
+        reason: str,
+    ) -> SubscriptionGeneration | None:
+        normalized = tuple(sorted(set(token_ids)))
+        if not normalized:
+            raise ValueError("cannot create an empty subscription generation")
+        previous = self.latest_subscription(session_id)
+        if previous is not None and previous.token_ids == normalized:
+            return None
+        generation = 1 if previous is None else previous.generation + 1
+        item = SubscriptionGeneration(
+            session_id=session_id,
+            generation=generation,
+            effective_at_utc=effective_at_utc,
+            token_ids=normalized,
+            reason=reason,
+        )
+        payload = contract_to_dict(item)
+        with self.connection:
+            self.connection.execute(
+                """
+                insert into tape_subscription_generations (
+                    session_id, generation, effective_at_utc, reason, raw_json
+                ) values (?, ?, ?, ?, ?)
+                """,
+                (session_id, generation, effective_at_utc, reason, _json(payload)),
+            )
+            self.connection.executemany(
+                """
+                insert into tape_subscription_members (session_id, generation, token_id)
+                values (?, ?, ?)
+                """,
+                ((session_id, generation, token_id) for token_id in normalized),
+            )
+        self.set_subscription_state(normalized, "SUBSCRIBED")
+        return item
+
+    def insert_coverage_interval(self, interval: CoverageInterval) -> int:
+        payload = contract_to_dict(interval)
+        with self.connection:
+            cursor = self.connection.execute(
+                """
+                insert into tape_coverage_intervals (
+                    session_id, token_id, state, started_at_utc, ended_at_utc,
+                    subscription_generation, reason, gap_id, raw_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    interval.session_id,
+                    interval.token_id,
+                    interval.state.value,
+                    interval.started_at_utc,
+                    interval.ended_at_utc,
+                    interval.subscription_generation,
+                    interval.reason,
+                    interval.gap_id,
+                    _json(payload),
+                ),
+            )
+        return int(cursor.lastrowid)
+
+    def transition_coverage(self, interval: CoverageInterval) -> int:
+        """Close the prior open interval and append the new token state atomically."""
+        payload = contract_to_dict(interval)
+        with self.connection:
+            self.connection.execute(
+                """
+                update tape_coverage_intervals set ended_at_utc = ?
+                where session_id = ? and token_id = ? and ended_at_utc is null
+                """,
+                (interval.started_at_utc, interval.session_id, interval.token_id),
+            )
+            cursor = self.connection.execute(
+                """
+                insert into tape_coverage_intervals (
+                    session_id, token_id, state, started_at_utc, ended_at_utc,
+                    subscription_generation, reason, gap_id, raw_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    interval.session_id,
+                    interval.token_id,
+                    interval.state.value,
+                    interval.started_at_utc,
+                    interval.ended_at_utc,
+                    interval.subscription_generation,
+                    interval.reason,
+                    interval.gap_id,
+                    _json(payload),
+                ),
+            )
+        return int(cursor.lastrowid)
+
+
+def _json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _token_from_row(row: sqlite3.Row) -> TokenRegistryEntry:
+    return TokenRegistryEntry(
+        token_id=row["token_id"],
+        market_id=row["market_id"],
+        condition_id=row["condition_id"],
+        outcome=TokenOutcome(row["outcome"]),
+        station=row["station"],
+        market_date=row["market_date"],
+        market_family=row["market_family"],
+        lower_bound=row["lower_bound"],
+        upper_bound=row["upper_bound"],
+        sibling_token_id=row["sibling_token_id"],
+        sibling_market_id=row["sibling_market_id"],
+        market_end_at_utc=row["market_end_at_utc"],
+        discovered_at_utc=row["discovered_at_utc"],
+        active_from_utc=row["active_from_utc"],
+        active_until_utc=row["active_until_utc"],
+        resolution_source=row["resolution_source"],
+        subscription_state=row["subscription_state"],
+        last_health_status=row["last_health_status"],
+    )
+
+
+def _subscription_from_json(value: str) -> SubscriptionGeneration:
+    payload = json.loads(value)
+    payload["token_ids"] = tuple(payload["token_ids"])
+    return SubscriptionGeneration(**payload)
