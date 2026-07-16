@@ -11,6 +11,7 @@ from weather_trader.tape.catalog import TapeCatalog
 from weather_trader.tape.collector import collect_market_tape
 from weather_trader.tape.contracts import CollectorSession, TokenOutcome
 from weather_trader.tape.discovery import TapeDiscoveryResult, TapeDiscoveryService, _tokens_from_markets
+from weather_trader.tape.health import evaluate_tape_health
 from weather_trader.tape.subscriptions import SubscriptionRegistry
 from weather_trader.tape.storage import iter_segment
 
@@ -182,6 +183,7 @@ def test_collector_propagates_transport_failure_and_closes_session(tmp_path: Pat
                 discovery=FakeTapeDiscovery(_tokens_from_markets([market()])),
                 transport=FailingTransport(),
                 max_seconds=1,
+                max_reconnect_attempts=0,
             )
         )
 
@@ -190,6 +192,62 @@ def test_collector_propagates_transport_failure_and_closes_session(tmp_path: Pat
     ).fetchone()
     assert row["finish_reason"] == "error"
     assert row["finished_at_utc"] is not None
+    catalog.close()
+
+
+def test_collector_fails_closed_when_bounded_session_captures_no_events(tmp_path: Path) -> None:
+    catalog = TapeCatalog(tmp_path / "catalog.sqlite")
+
+    with pytest.raises(RuntimeError, match="zero token events"):
+        asyncio.run(
+            collect_market_tape(
+                catalog,
+                raw_directory=tmp_path / "raw",
+                discovery=FakeTapeDiscovery(_tokens_from_markets([market()])),
+                transport=SilentTransport(),
+                max_seconds=0.01,
+                max_reconnect_attempts=0,
+            )
+        )
+
+    assert catalog.connection.execute(
+        "select finish_reason from tape_collector_sessions"
+    ).fetchone()[0] == "error"
+    catalog.close()
+
+
+def test_collector_reconnects_through_explicit_gap_and_health_verifies_segments(tmp_path: Path) -> None:
+    catalog = TapeCatalog(tmp_path / "catalog.sqlite")
+    transport = RecoveringTransport()
+    stats = asyncio.run(
+        collect_market_tape(
+            catalog,
+            raw_directory=tmp_path / "raw",
+            discovery=FakeTapeDiscovery(_tokens_from_markets([market()])),
+            transport=transport,
+            max_messages=1,
+            reconnect_initial_seconds=0,
+            max_reconnect_attempts=1,
+            telemetry_seconds=0,
+        )
+    )
+
+    states = [
+        row[0]
+        for row in catalog.connection.execute(
+            "select state from tape_coverage_intervals where token_id = 'market-1-yes' order by id"
+        )
+    ]
+    report = evaluate_tape_health(catalog)
+
+    assert stats.reconnects == 1
+    assert states == ["RESYNCING", "GAPPED", "RECONNECTING", "RESYNCING", "VALID", "CLOSED"]
+    assert stats.segment_paths
+    assert catalog.connection.execute("select count(*) from tape_raw_partitions").fetchone()[0] == 1
+    assert catalog.connection.execute("select count(*) from tape_collector_metrics").fetchone()[0] >= 1
+    assert report.healthy is True
+    assert report.events == 1
+    assert report.partitions == 1
     catalog.close()
 
 
@@ -228,3 +286,27 @@ class FailingTransport:
         if False:
             yield {}
         raise RuntimeError("socket failed")
+
+
+class RecoveringTransport:
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    async def stream(self, token_ids):
+        self.attempts += 1
+        if self.attempts == 1:
+            raise RuntimeError("transient socket failure")
+        yield {
+            "event_type": "book",
+            "asset_id": "market-1-yes",
+            "market": "market-1",
+            "bids": [],
+            "asks": [],
+        }
+
+
+class SilentTransport:
+    async def stream(self, token_ids):
+        await asyncio.sleep(1)
+        if False:
+            yield {}

@@ -96,7 +96,10 @@
 - The shared recorder is opt-in and separate from both research and live ledgers. Do not point it at either production SQLite database.
 - While lifecycle gates remain open, use a bounded temporary probe:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/run_market_tape.py --catalog /tmp/roboweather_market_tape_catalog.sqlite --raw-dir /tmp/roboweather_market_tape_raw --max-messages 50 --max-seconds 60 --refresh-seconds 30`
-- A zero-message successful exit is a failure. Require nonzero messages/events, a subscription generation, `RESYNCING` followed by `VALID` coverage for full-book tokens, and exact segment replay.
+- Follow every probe with the strict catalog/segment check:
+  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/market_tape_health.py --catalog /tmp/roboweather_market_tape_catalog.sqlite`
+- The recorder now fails closed on zero token events. Require nonzero messages/events, a subscription generation, `RESYNCING` followed by `VALID` coverage for full-book tokens, cataloged raw partitions, fresh telemetry, and exact segment replay.
+- Unexpected disconnects must appear as `GAPPED -> RECONNECTING -> RESYNCING`; replay must not bridge those intervals, and a token returns to `VALID` only after a new full book.
 - Queue, frame, partition, and retention values remain provisional until complete-lifecycle resource measurement passes. Do not run this recorder as an unattended production service yet.
 
 ## Continuous improvement workflow

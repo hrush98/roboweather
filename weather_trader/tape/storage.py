@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, Iterator
 
@@ -17,6 +18,7 @@ class SegmentCorruptionError(ValueError):
 @dataclass(frozen=True)
 class SegmentStats:
     path: Path
+    partition_id: str
     events: int
     bytes_written: int
     first_event_id: str | None
@@ -78,6 +80,7 @@ class RawSegmentWriter:
             self._handle.close()
         return SegmentStats(
             path=self.path,
+            partition_id=self.partition_id,
             events=self._events,
             bytes_written=self.path.stat().st_size,
             first_event_id=self._first_event_id,
@@ -89,6 +92,58 @@ class RawSegmentWriter:
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+
+class RotatingRawSegmentWriter:
+    """Rotate raw segments on UTC boundaries derived from event receipt time."""
+
+    def __init__(
+        self,
+        directory: Path,
+        *,
+        session_id: str,
+        rotation_seconds: int = 3600,
+        fsync_on_append: bool = False,
+    ) -> None:
+        if rotation_seconds < 1:
+            raise ValueError("rotation_seconds must be positive")
+        self.directory = directory
+        self.session_id = session_id
+        self.rotation_seconds = rotation_seconds
+        self.fsync_on_append = fsync_on_append
+        self._writer: RawSegmentWriter | None = None
+        self._closed: list[SegmentStats] = []
+
+    @property
+    def current_path(self) -> Path | None:
+        return self._writer.path if self._writer is not None else None
+
+    @property
+    def bytes_written(self) -> int:
+        closed = sum(item.bytes_written for item in self._closed)
+        current = self._writer.path.stat().st_size if self._writer is not None else 0
+        return closed + current
+
+    def append(self, event: MarketTapeEvent) -> tuple[MarketTapeEvent, SegmentStats | None]:
+        partition_id = _partition_id(event.received_at_utc, self.rotation_seconds)
+        rotated: SegmentStats | None = None
+        if self._writer is None or self._writer.partition_id != partition_id:
+            if self._writer is not None:
+                rotated = self._writer.close()
+                self._closed.append(rotated)
+            self._writer = RawSegmentWriter(
+                self.directory,
+                session_id=self.session_id,
+                partition_id=partition_id,
+                fsync_on_append=self.fsync_on_append,
+            )
+        return self._writer.append(event), rotated
+
+    def close(self) -> tuple[SegmentStats, ...]:
+        if self._writer is not None:
+            self._closed.append(self._writer.close())
+            self._writer = None
+        return tuple(self._closed)
 
 
 def iter_segment(path: Path) -> Iterator[MarketTapeEvent]:
@@ -124,3 +179,12 @@ def _encode_event(event: MarketTapeEvent) -> bytes:
 
 def _canonical_json(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def _partition_id(received_at_utc: str, rotation_seconds: int) -> str:
+    parsed = datetime.fromisoformat(received_at_utc.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("received_at_utc must be timezone-aware")
+    epoch_bucket = int(parsed.timestamp()) // rotation_seconds * rotation_seconds
+    bucket = datetime.fromtimestamp(epoch_bucket, tz=timezone.utc)
+    return bucket.strftime("%Y%m%dT%H%M%SZ")

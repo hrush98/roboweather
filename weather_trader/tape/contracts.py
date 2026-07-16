@@ -85,6 +85,35 @@ class CollectorSession:
 
 
 @dataclass(frozen=True)
+class CollectorMetric:
+    session_id: str
+    captured_at_utc: str
+    messages: int
+    events: int
+    queue_depth: int
+    queue_capacity: int
+    queue_high_water: int
+    rss_bytes: int
+    raw_disk_bytes: int
+    receipt_lag_ms: float | None
+    reconnect_attempt: int
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "messages",
+            "events",
+            "queue_depth",
+            "queue_capacity",
+            "queue_high_water",
+            "rss_bytes",
+            "raw_disk_bytes",
+            "reconnect_attempt",
+        ):
+            if getattr(self, field_name) < 0:
+                raise ValueError(f"{field_name} must be non-negative")
+
+
+@dataclass(frozen=True)
 class SubscriptionGeneration:
     session_id: str
     generation: int

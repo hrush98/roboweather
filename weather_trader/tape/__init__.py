@@ -2,6 +2,7 @@
 
 from weather_trader.tape.contracts import (
     BookCheckpoint,
+    CollectorMetric,
     CollectorSession,
     CoverageInterval,
     CoverageState,
@@ -13,6 +14,7 @@ from weather_trader.tape.contracts import (
 
 __all__ = [
     "BookCheckpoint",
+    "CollectorMetric",
     "CollectorSession",
     "CoverageInterval",
     "CoverageState",

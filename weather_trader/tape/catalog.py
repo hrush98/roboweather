@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 
 from weather_trader.tape.contracts import (
+    CollectorMetric,
     CollectorSession,
     CoverageInterval,
     SubscriptionGeneration,
@@ -12,6 +13,7 @@ from weather_trader.tape.contracts import (
     TokenRegistryEntry,
     contract_to_dict,
 )
+from weather_trader.tape.storage import SegmentStats
 
 
 class TapeCatalog:
@@ -110,6 +112,39 @@ class TapeCatalog:
 
             create index if not exists idx_tape_coverage_token_time
                 on tape_coverage_intervals(token_id, started_at_utc, ended_at_utc);
+
+            create table if not exists tape_raw_partitions (
+                session_id text not null,
+                partition_id text not null,
+                path text not null,
+                events integer not null,
+                bytes_written integer not null,
+                first_event_id text,
+                last_event_id text,
+                closed_at_utc text not null,
+                primary key (session_id, partition_id),
+                foreign key (session_id) references tape_collector_sessions(session_id)
+            );
+
+            create table if not exists tape_collector_metrics (
+                id integer primary key autoincrement,
+                session_id text not null,
+                captured_at_utc text not null,
+                messages integer not null,
+                events integer not null,
+                queue_depth integer not null,
+                queue_capacity integer not null,
+                queue_high_water integer not null,
+                rss_bytes integer not null,
+                raw_disk_bytes integer not null,
+                receipt_lag_ms real,
+                reconnect_attempt integer not null,
+                raw_json text not null,
+                foreign key (session_id) references tape_collector_sessions(session_id)
+            );
+
+            create index if not exists idx_tape_metrics_session_time
+                on tape_collector_metrics(session_id, captured_at_utc);
             """
         )
         self.connection.commit()
@@ -338,6 +373,62 @@ class TapeCatalog:
                     interval.subscription_generation,
                     interval.reason,
                     interval.gap_id,
+                    _json(payload),
+                ),
+            )
+        return int(cursor.lastrowid)
+
+    def record_partition(self, session_id: str, stats: SegmentStats, *, closed_at_utc: str) -> None:
+        with self.connection:
+            self.connection.execute(
+                """
+                insert into tape_raw_partitions (
+                    session_id, partition_id, path, events, bytes_written,
+                    first_event_id, last_event_id, closed_at_utc
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(session_id, partition_id) do update set
+                    path = excluded.path,
+                    events = excluded.events,
+                    bytes_written = excluded.bytes_written,
+                    first_event_id = excluded.first_event_id,
+                    last_event_id = excluded.last_event_id,
+                    closed_at_utc = excluded.closed_at_utc
+                """,
+                (
+                    session_id,
+                    stats.partition_id,
+                    str(stats.path),
+                    stats.events,
+                    stats.bytes_written,
+                    stats.first_event_id,
+                    stats.last_event_id,
+                    closed_at_utc,
+                ),
+            )
+
+    def record_metric(self, metric: CollectorMetric) -> int:
+        payload = contract_to_dict(metric)
+        with self.connection:
+            cursor = self.connection.execute(
+                """
+                insert into tape_collector_metrics (
+                    session_id, captured_at_utc, messages, events, queue_depth,
+                    queue_capacity, queue_high_water, rss_bytes, raw_disk_bytes,
+                    receipt_lag_ms, reconnect_attempt, raw_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    metric.session_id,
+                    metric.captured_at_utc,
+                    metric.messages,
+                    metric.events,
+                    metric.queue_depth,
+                    metric.queue_capacity,
+                    metric.queue_high_water,
+                    metric.rss_bytes,
+                    metric.raw_disk_bytes,
+                    metric.receipt_lag_ms,
+                    metric.reconnect_attempt,
                     _json(payload),
                 ),
             )

@@ -4,6 +4,7 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-07-16
 
+- Hardened the Phase 3 active-token recorder with hourly UTC raw-segment rotation and partition cataloging, bounded exponential reconnects, explicit gap/resync coverage, persisted lag/queue/RSS/disk telemetry, zero-event failure, and a strict catalog/segment health command. A bounded 616-token host probe captured 674 events and passed health verification; complete-lifecycle capacity remains open.
 - Added the first repository-backed Phase 3 active-token recorder vertical slice: separate tape catalog, policy-independent all-weather token registry, immutable subscription generations, conservative token retirement, bounded WebSocket queue/frame limits, raw segment writes, and `RESYNCING`/`VALID`/`CLOSED` coverage transitions. A bounded host probe subscribed to 616 tokens and captured 714 token events with exact replay; complete-lifecycle supervision and retention gates remain open.
 - Added the Price Sheet V2 implementation contract. V2a builds walk-forward, market-aware conservative outcome pricing; V2b can only reduce price/size or skip using valid Phase 3 tape features, then compares passive and stable-taker arms before Phase 4.
 - Recorded operator confirmation that the Phase 3 collector is built and running while keeping its resource, coverage, deterministic replay, and fill-label acceptance evidence open. Price Sheet V2a is now the current implementation critical path.

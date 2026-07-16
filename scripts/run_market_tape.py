@@ -24,6 +24,11 @@ def main() -> None:
     parser.add_argument("--market-limit", type=int, default=50000)
     parser.add_argument("--max-messages", type=int)
     parser.add_argument("--max-seconds", type=float)
+    parser.add_argument("--rotation-seconds", type=int, default=3600)
+    parser.add_argument("--telemetry-seconds", type=float, default=30.0)
+    parser.add_argument("--max-reconnect-attempts", type=int, default=8)
+    parser.add_argument("--reconnect-initial-seconds", type=float, default=1.0)
+    parser.add_argument("--reconnect-max-seconds", type=float, default=30.0)
     args = parser.parse_args()
     with TapeCatalog(args.catalog.expanduser()) as catalog:
         stats = asyncio.run(
@@ -35,9 +40,19 @@ def main() -> None:
                 market_limit=args.market_limit,
                 max_messages=args.max_messages,
                 max_seconds=args.max_seconds,
+                rotation_seconds=args.rotation_seconds,
+                telemetry_seconds=args.telemetry_seconds,
+                max_reconnect_attempts=args.max_reconnect_attempts,
+                reconnect_initial_seconds=args.reconnect_initial_seconds,
+                reconnect_max_seconds=args.reconnect_max_seconds,
             )
         )
-    print(json.dumps({**stats.__dict__, "segment_path": str(stats.segment_path) if stats.segment_path else None}, indent=2))
+    payload = {
+        **stats.__dict__,
+        "segment_path": str(stats.segment_path) if stats.segment_path else None,
+        "segment_paths": [str(path) for path in stats.segment_paths],
+    }
+    print(json.dumps(payload, indent=2))
 
 
 if __name__ == "__main__":

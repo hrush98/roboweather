@@ -260,7 +260,10 @@ Implementation status, 2026-07-16:
 - Added a separate SQLite tape catalog for token registry entries, collector sessions, immutable subscription generations/membership, and token coverage intervals.
 - Added policy-independent all-scope discovery that converts active weather markets into sibling YES/NO token records before policy selection. Complete refreshes retire missing tokens; incomplete refreshes preserve the last known universe.
 - Added opt-in `scripts/run_market_tape.py` collection with a bounded queue, dynamic generation refresh, fail-closed transport errors, checksummed raw writes, and `RESYNCING`/`VALID`/`CLOSED` coverage transitions. A token cannot become valid before its initial full-book message.
-- The first repository-backed live probe subscribed to 616 tokens and persisted catalog/coverage state. Slice 2 remains open for hourly rotation, durable restart supervision, reconnect backoff, lag/memory/disk telemetry, complete-lifecycle collection, and an operational health command.
+- Added receipt-time UTC segment rotation (hourly by default), durable partition catalog rows, exponential bounded reconnects, explicit `GAPPED -> RECONNECTING -> RESYNCING` coverage, and fail-closed zero-event sessions. No reconnect can restore `VALID` without a fresh full book.
+- Added persisted queue depth/high-water, RSS, raw disk bytes, receipt lag, and reconnect telemetry plus strict `scripts/market_tape_health.py` verification of the latest session, resource budgets, cataloged files, checksums, and event counts.
+- A second repository-backed live probe subscribed to 616 tokens and captured 30 messages / 674 token events in 17.8 seconds. It wrote one cataloged 1.79 MB UTC partition, ended at 103 MiB RSS (108 MiB observed peak), used 679 / 10,000 queue slots, reported 484 ms final receipt lag, and passed the strict health command with all 616 tokens reaching `VALID` before terminal `CLOSED`.
+- Slice 2 remains open for durable host supervision and a complete market-lifecycle/daily-growth run. The bounded probe validates restart-readable storage and lifecycle behavior, not long-run capacity or retention.
 
 ### Slice 3: Book Reconstruction
 
@@ -313,6 +316,7 @@ Exit: the report answers whether base-case fill-conditioned PnL is positive with
 
 ## Decision Log
 
+- 2026-07-16: Hardened Slice 2 with UTC rotation/cataloging, resource telemetry, bounded exponential reconnects, explicit gap invalidation, strict health verification, and zero-event failure. A 616-token live probe passed; kept complete-lifecycle capacity and unattended supervision gates open.
 - 2026-07-16: Validated the first repository-backed live all-universe recorder probe: 616 tokens, 50 feed messages, 714 token events, exact replay, and bounded queue use. Kept lifecycle and retention gates open.
 - 2026-07-16: Recorded operator confirmation that the Phase 3 collector is built and running. Kept the acceptance checklist open until representative resource budgets, deterministic replay, valid coverage, and fill/markout evidence are documented.
 - 2026-07-16: Started Slice 1 with a separate `weather_trader.tape` boundary. The active segment format is checksummed canonical JSONL with stable byte-offset IDs; gzip is measured as a finalized-segment candidate but is not yet a locked retention choice.

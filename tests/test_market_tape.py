@@ -7,7 +7,12 @@ import pytest
 
 from scripts.benchmark_market_tape import benchmark
 from weather_trader.tape.contracts import CoverageState, MarketTapeEvent
-from weather_trader.tape.storage import RawSegmentWriter, SegmentCorruptionError, iter_segment
+from weather_trader.tape.storage import (
+    RawSegmentWriter,
+    RotatingRawSegmentWriter,
+    SegmentCorruptionError,
+    iter_segment,
+)
 
 
 def make_event(sequence: int, payload: dict[str, object] | None = None) -> MarketTapeEvent:
@@ -91,3 +96,24 @@ def test_benchmark_reports_exact_replay_and_compression(tmp_path: Path) -> None:
     assert result["round_trip_exact"] is True
     assert result["raw_bytes"] > 0
     assert 0 < result["gzip_ratio"] < 1
+
+
+def test_rotating_writer_uses_receipt_time_and_preserves_each_partition(tmp_path: Path) -> None:
+    writer = RotatingRawSegmentWriter(
+        tmp_path,
+        session_id="session-1",
+        rotation_seconds=3600,
+    )
+    first, rotated = writer.append(make_event(1))
+    second, rotated = writer.append(
+        replace(
+            make_event(2),
+            received_at_utc="2026-07-16T13:00:00+00:00",
+        )
+    )
+    stats = writer.close()
+
+    assert rotated is not None
+    assert [item.partition_id for item in stats] == ["20260716T120000Z", "20260716T130000Z"]
+    assert list(iter_segment(stats[0].path)) == [first]
+    assert list(iter_segment(stats[1].path)) == [second]

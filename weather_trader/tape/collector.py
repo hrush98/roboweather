@@ -13,6 +13,7 @@ from typing import Any, Protocol
 
 from weather_trader.tape.catalog import TapeCatalog
 from weather_trader.tape.contracts import (
+    CollectorMetric,
     CollectorSession,
     CoverageInterval,
     CoverageState,
@@ -20,7 +21,7 @@ from weather_trader.tape.contracts import (
     SubscriptionGeneration,
 )
 from weather_trader.tape.discovery import TapeDiscoveryService
-from weather_trader.tape.storage import RawSegmentWriter
+from weather_trader.tape.storage import RotatingRawSegmentWriter
 from weather_trader.tape.subscriptions import SubscriptionRegistry
 
 
@@ -73,6 +74,8 @@ class TapeCollectionStats:
     subscribed_tokens: int
     queue_high_water: int
     segment_path: Path | None
+    segment_paths: tuple[Path, ...]
+    reconnects: int
     started_at_utc: str
     finished_at_utc: str
 
@@ -88,6 +91,11 @@ async def collect_market_tape(
     market_limit: int = 50000,
     max_messages: int | None = None,
     max_seconds: float | None = None,
+    rotation_seconds: int = 3600,
+    telemetry_seconds: float = 30.0,
+    max_reconnect_attempts: int = 8,
+    reconnect_initial_seconds: float = 1.0,
+    reconnect_max_seconds: float = 30.0,
 ) -> TapeCollectionStats:
     if queue_size < 1:
         raise ValueError("queue_size must be positive")
@@ -104,9 +112,15 @@ async def collect_market_tape(
     registry = SubscriptionRegistry(catalog, discovery or TapeDiscoveryService())
     transport = transport or PolymarketTapeTransport()
     deadline = time.monotonic() + max_seconds if max_seconds is not None else None
-    partition_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H")
-    writer: RawSegmentWriter | None = None
+    if max_reconnect_attempts < 0:
+        raise ValueError("max_reconnect_attempts must be non-negative")
+    writer = RotatingRawSegmentWriter(
+        raw_directory,
+        session_id=session_id,
+        rotation_seconds=rotation_seconds,
+    )
     messages = events = generations = high_water = 0
+    reconnects = 0
     subscribed: tuple[str, ...] = ()
     latest_generation_number = 0
     receipt_sequence = 0
@@ -147,26 +161,56 @@ async def collect_market_tape(
                         reason="subscription_generation_started",
                     )
                 )
-            if writer is None:
-                writer = RawSegmentWriter(
-                    raw_directory,
-                    session_id=session_id,
-                    partition_id=partition_id,
-                )
             remaining_messages = None if max_messages is None else max_messages - messages
-            collected = await _collect_generation(
-                transport,
-                generation,
-                writer,
-                catalog,
-                token_to_market,
-                coverage,
-                refresh_seconds=refresh_seconds,
-                queue_size=queue_size,
-                deadline=deadline,
-                max_messages=remaining_messages,
-                initial_receipt_sequence=receipt_sequence,
-            )
+            try:
+                collected = await _collect_generation(
+                    transport,
+                    generation,
+                    writer,
+                    catalog,
+                    token_to_market,
+                    coverage,
+                    refresh_seconds=refresh_seconds,
+                    telemetry_seconds=telemetry_seconds,
+                    queue_size=queue_size,
+                    deadline=deadline,
+                    max_messages=remaining_messages,
+                    initial_messages=messages,
+                    initial_receipt_sequence=receipt_sequence,
+                    reconnect_attempt=reconnects,
+                )
+            except Exception:
+                _transition_tokens(
+                    catalog,
+                    session_id,
+                    subscribed,
+                    coverage,
+                    generation.generation,
+                    CoverageState.GAPPED,
+                    reason="transport_error",
+                    gap_id=uuid.uuid4().hex,
+                )
+                if reconnects >= max_reconnect_attempts:
+                    raise
+                reconnects += 1
+                await _reconnect_delay(
+                    reconnects,
+                    initial_seconds=reconnect_initial_seconds,
+                    maximum_seconds=reconnect_max_seconds,
+                    deadline=deadline,
+                )
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise
+                _transition_tokens(
+                    catalog,
+                    session_id,
+                    subscribed,
+                    coverage,
+                    generation.generation,
+                    CoverageState.RECONNECTING,
+                    reason=f"transport_retry_{reconnects}",
+                )
+                continue
             messages += collected.messages
             events += collected.events
             high_water = max(high_water, collected.queue_high_water)
@@ -177,20 +221,38 @@ async def collect_market_tape(
             if collected.termination == "deadline":
                 finish_reason = "max_seconds"
                 break
-            reconnect_at = _utc_now()
-            for token_id in subscribed:
-                coverage[token_id] = CoverageState.RECONNECTING
-                catalog.transition_coverage(
-                    CoverageInterval(
-                        session_id=session_id,
-                        token_id=token_id,
-                        state=CoverageState.RECONNECTING,
-                        started_at_utc=reconnect_at,
-                        ended_at_utc=None,
-                        subscription_generation=generation.generation,
-                        reason="subscription_refresh_or_stream_end",
-                    )
+            gap_reason = "scheduled_subscription_refresh" if collected.termination == "refresh" else "stream_end"
+            _transition_tokens(
+                catalog,
+                session_id,
+                subscribed,
+                coverage,
+                generation.generation,
+                CoverageState.GAPPED,
+                reason=gap_reason,
+                gap_id=uuid.uuid4().hex,
+            )
+            if collected.termination == "stream_end":
+                if reconnects >= max_reconnect_attempts:
+                    raise RuntimeError("market tape stream ended and reconnect budget was exhausted")
+                reconnects += 1
+                await _reconnect_delay(
+                    reconnects,
+                    initial_seconds=reconnect_initial_seconds,
+                    maximum_seconds=reconnect_max_seconds,
+                    deadline=deadline,
                 )
+            _transition_tokens(
+                catalog,
+                session_id,
+                subscribed,
+                coverage,
+                generation.generation,
+                CoverageState.RECONNECTING,
+                reason=f"{gap_reason}_reconnect",
+            )
+        if events == 0:
+            raise RuntimeError("market tape session captured zero token events")
     except Exception:
         finish_reason = "error"
         raise
@@ -209,7 +271,11 @@ async def collect_market_tape(
                 )
             )
         catalog.finish_session(session_id, finished_at_utc=finished_at, reason=finish_reason)
-        segment_path = writer.close().path if writer is not None else None
+        segment_stats = writer.close()
+        for item in segment_stats:
+            catalog.record_partition(session_id, item, closed_at_utc=finished_at)
+        segment_paths = tuple(item.path for item in segment_stats)
+        segment_path = segment_paths[-1] if segment_paths else None
     return TapeCollectionStats(
         session_id=session_id,
         messages=messages,
@@ -218,6 +284,8 @@ async def collect_market_tape(
         subscribed_tokens=len(subscribed),
         queue_high_water=high_water,
         segment_path=segment_path,
+        segment_paths=segment_paths,
+        reconnects=reconnects,
         started_at_utc=started_at,
         finished_at_utc=finished_at,
     )
@@ -234,16 +302,19 @@ class _GenerationStats:
 async def _collect_generation(
     transport: MarketTapeTransport,
     generation: SubscriptionGeneration,
-    writer: RawSegmentWriter,
+    writer: RotatingRawSegmentWriter,
     catalog: TapeCatalog,
     token_to_market: dict[str, str],
     coverage: dict[str, CoverageState],
     *,
     refresh_seconds: float,
+    telemetry_seconds: float,
     queue_size: int,
     deadline: float | None,
     max_messages: int | None,
+    initial_messages: int,
     initial_receipt_sequence: int,
+    reconnect_attempt: int,
 ) -> _GenerationStats:
     queue: asyncio.Queue[tuple[dict[str, Any] | list[Any], str, int]] = asyncio.Queue(maxsize=queue_size)
     stream = transport.stream(generation.token_ids)
@@ -262,6 +333,8 @@ async def _collect_generation(
     if deadline is not None:
         end_at = min(end_at, deadline)
     termination = "refresh"
+    last_receipt_lag_ms: float | None = None
+    next_telemetry = time.monotonic() + telemetry_seconds
     try:
         while True:
             if max_messages is not None and messages >= max_messages:
@@ -276,12 +349,18 @@ async def _collect_generation(
                 termination = "stream_end"
                 break
             try:
-                message, received_at, monotonic_ns = await asyncio.wait_for(queue.get(), timeout=remaining)
+                message, received_at, monotonic_ns = await asyncio.wait_for(
+                    queue.get(), timeout=min(remaining, 1.0)
+                )
             except asyncio.TimeoutError:
                 if producer.done():
                     await producer
-                termination = "deadline" if deadline is not None and time.monotonic() >= deadline else "refresh"
-                break
+                    termination = "stream_end"
+                    break
+                if time.monotonic() >= end_at:
+                    termination = "deadline" if deadline is not None and time.monotonic() >= deadline else "refresh"
+                    break
+                continue
             messages += 1
             high_water = max(high_water, 1, queue.qsize())
             for unit in _event_units(message):
@@ -291,7 +370,7 @@ async def _collect_generation(
                 event_type = _event_type(unit)
                 state = coverage.get(token_id, CoverageState.RESYNCING)
                 events += 1
-                writer.append(
+                _, rotated = writer.append(
                     MarketTapeEvent(
                         collector_session_id=generation.session_id,
                         token_id=token_id,
@@ -306,6 +385,9 @@ async def _collect_generation(
                         coverage_state=state,
                     )
                 )
+                if rotated is not None:
+                    catalog.record_partition(generation.session_id, rotated, closed_at_utc=received_at)
+                last_receipt_lag_ms = _receipt_lag_ms(_feed_timestamp(unit), received_at)
                 if event_type == "book" and state is not CoverageState.VALID:
                     coverage[token_id] = CoverageState.VALID
                     catalog.transition_coverage(
@@ -320,10 +402,36 @@ async def _collect_generation(
                         )
                     )
             queue.task_done()
+            if telemetry_seconds <= 0 or time.monotonic() >= next_telemetry:
+                _record_metric(
+                    catalog,
+                    writer,
+                    session_id=generation.session_id,
+                    messages=initial_messages + messages,
+                    events=initial_receipt_sequence + events,
+                    queue_depth=queue.qsize(),
+                    queue_capacity=queue_size,
+                    queue_high_water=high_water,
+                    receipt_lag_ms=last_receipt_lag_ms,
+                    reconnect_attempt=reconnect_attempt,
+                )
+                next_telemetry = time.monotonic() + telemetry_seconds
     finally:
         if not producer.done():
             producer.cancel()
         await asyncio.gather(producer, return_exceptions=True)
+        _record_metric(
+            catalog,
+            writer,
+            session_id=generation.session_id,
+            messages=initial_messages + messages,
+            events=initial_receipt_sequence + events,
+            queue_depth=queue.qsize(),
+            queue_capacity=queue_size,
+            queue_high_water=high_water,
+            receipt_lag_ms=last_receipt_lag_ms,
+            reconnect_attempt=reconnect_attempt,
+        )
     return _GenerationStats(messages, events, high_water, termination)
 
 
@@ -363,6 +471,105 @@ def _feed_timestamp(message: dict[str, Any]) -> str | None:
 
 def _text(value: Any) -> str | None:
     return str(value) if value is not None else None
+
+
+def _transition_tokens(
+    catalog: TapeCatalog,
+    session_id: str,
+    token_ids: tuple[str, ...],
+    coverage: dict[str, CoverageState],
+    generation: int,
+    state: CoverageState,
+    *,
+    reason: str,
+    gap_id: str | None = None,
+) -> None:
+    transitioned_at = _utc_now()
+    for token_id in token_ids:
+        coverage[token_id] = state
+        catalog.transition_coverage(
+            CoverageInterval(
+                session_id=session_id,
+                token_id=token_id,
+                state=state,
+                started_at_utc=transitioned_at,
+                ended_at_utc=None,
+                subscription_generation=generation,
+                reason=reason,
+                gap_id=gap_id,
+            )
+        )
+
+
+async def _reconnect_delay(
+    attempt: int,
+    *,
+    initial_seconds: float,
+    maximum_seconds: float,
+    deadline: float | None,
+) -> None:
+    delay = min(maximum_seconds, initial_seconds * (2 ** max(0, attempt - 1)))
+    if deadline is not None:
+        delay = min(delay, max(0.0, deadline - time.monotonic()))
+    if delay > 0:
+        await asyncio.sleep(delay)
+
+
+def _record_metric(
+    catalog: TapeCatalog,
+    writer: RotatingRawSegmentWriter,
+    *,
+    session_id: str,
+    messages: int,
+    events: int,
+    queue_depth: int,
+    queue_capacity: int,
+    queue_high_water: int,
+    receipt_lag_ms: float | None,
+    reconnect_attempt: int,
+) -> None:
+    catalog.record_metric(
+        CollectorMetric(
+            session_id=session_id,
+            captured_at_utc=_utc_now(),
+            messages=messages,
+            events=events,
+            queue_depth=queue_depth,
+            queue_capacity=queue_capacity,
+            queue_high_water=queue_high_water,
+            rss_bytes=_rss_bytes(),
+            raw_disk_bytes=writer.bytes_written,
+            receipt_lag_ms=receipt_lag_ms,
+            reconnect_attempt=reconnect_attempt,
+        )
+    )
+
+
+def _receipt_lag_ms(feed_timestamp: str | None, received_at_utc: str) -> float | None:
+    if feed_timestamp is None:
+        return None
+    try:
+        if feed_timestamp.replace(".", "", 1).isdigit():
+            value = float(feed_timestamp)
+            if value > 10_000_000_000:
+                value /= 1000.0
+            feed = datetime.fromtimestamp(value, tz=timezone.utc)
+        else:
+            feed = datetime.fromisoformat(feed_timestamp.replace("Z", "+00:00"))
+            if feed.tzinfo is None:
+                return None
+        received = datetime.fromisoformat(received_at_utc.replace("Z", "+00:00"))
+    except (OverflowError, ValueError):
+        return None
+    return max(0.0, (received - feed).total_seconds() * 1000.0)
+
+
+def _rss_bytes() -> int:
+    try:
+        fields = Path("/proc/self/statm").read_text().split()
+        return int(fields[1]) * 4096
+    except (IndexError, OSError, ValueError):
+        return 0
 
 
 def _utc_now() -> str:
