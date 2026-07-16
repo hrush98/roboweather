@@ -1,5 +1,7 @@
 # 2026-07-06 Adverse Selection And Execution Rebuild
 
+Historical design record. Current assessment, phase status, and implementation gates are maintained in `docs/current-trading-system-audit.md`, `docs/execution-rebuild-roadmap.md`, and `docs/implementation/phase-3-market-tape-replay.md`. Those living documents supersede stale implementation-status statements below.
+
 ## Status
 
 Funded live trading should remain paused. The next phase is not another replay-filter tweak; it is an execution-intelligence rebuild that treats fill/no-fill as part of the signal.
@@ -296,7 +298,7 @@ Exit gate: dry-run/shadow quotes can be reconstructed and cancelled correctly, w
 
 This is the next build target for data collection. It is not funded trading and it should not require registering a large set of live strategies.
 
-Implementation status, 2026-07-06: source support now targets the full collection milestone, but any given run must still pass the strict health report before it counts as steady-state data. The scoped Phase 1 sheet fans out a bounded 24-spec shadow grid per candidate using `$50` baseline and `$100` target-capacity intended notional, with stable `quote_spec_id` values, direct `live_quote_intents` columns for spec/rule metadata, `would_post` flags, top/depth context, lifecycle states, and markout hook metadata for `10s`, `30s`, `2m`, `10m`, next weather update, close, and settlement. `scripts/collect_candidate_clob_events.py` subscribes the market CLOB feed to current candidate token IDs and stores normalized events. `scripts/label_shadow_quote_outcomes.py` persists conservative/base/optimistic fill labels, queue estimates, adverse-move flags, cancel triggers, and markouts into `live_shadow_quote_outcomes`. `scripts/shadow_collection_report.py` now fails/flags missing token coverage, missing CLOB feed coverage, only tiny-size coverage, and missing shadow outcome labels. This remains dry-run/shadow infrastructure only; no funded CLOB quote placement or broad live strategy registration was added.
+Implementation status, 2026-07-16: the candidate-scoped quote grid, collector, labeler, and health report remain useful plumbing prototypes, but they do not meet the shared-tape evidence standard. Phase 3 now requires policy-independent pre-signal collection, deterministic book reconstruction, gap-invalidated coverage, corrected trade/fill semantics, and forward hypothesis versions. See the living Phase 3 implementation plan.
 
 Keep these concepts separate:
 
@@ -394,7 +396,7 @@ Exit gate: shadow quote replay reports fill-conditioned EV and markouts by quote
 
 Only after shadow labels are working.
 
-Do not run `$5` or `$10` quote canaries for this phase. They are not representative of the execution problem we need to solve and should not be treated as plumbing, capacity, or promotion evidence. If a tactic cannot pass shadow and funded checks at roughly the size we need to trade, it is not useful for this system.
+Minimum-risk funded orders may be used after shadow reconstruction passes to validate order lifecycle plumbing and replay fidelity. They are not representative capacity tests and confer no promotion authority. If a tactic cannot later pass funded checks at roughly the size we need to trade, it is not useful for this system.
 
 Capacity evidence must be size-specific:
 

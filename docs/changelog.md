@@ -6,7 +6,9 @@ Keep this file up to date for notable data, model, and trading changes.
 
 - Fixed unbounded native memory growth in long-running HRRR collection by explicitly closing every `pygrib`/ecCodes file handle after decoding. Added a bounded 512-entry station/cycle/forecast-hour cache so six-minute research cycles reuse immutable HRRR point forecasts instead of repeatedly downloading and decoding the same files.
 - Added research-cycle runtime telemetry to `engine_state.raw_json`, including RSS after discovery, books, weather, and model persistence plus HRRR point-cache entries/hits/misses. Cycle logs now print the same metrics for post-restart validation.
-- Proposed a shared token-level weather market tape as the next execution-data project after memory stabilization, allowing one deduplicated CLOB stream to support retrospective replay across models and quote policies.
+- Confirmed the research-loop memory prerequisite is resolved and approved the shared token-level weather market tape as Phase 3 of the execution rebuild.
+- Added living canonical documents for the current trading-system audit and execution roadmap, plus a separate Phase 3 market-tape implementation contract. Dated hypotheses now remain the economic `why`, while implementation plans own architecture, sprint slices, and acceptance tests.
+- Reclassified the existing candidate-token collector and shadow fill labels as plumbing prototypes only, reconciled the failed current price-sheet gate, and separated minimum-risk canary plumbing validation from `$50/$100` capacity evidence.
 
 ## 2026-07-06
 

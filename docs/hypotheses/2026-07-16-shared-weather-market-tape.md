@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed. Queue this work after the research-loop memory growth is understood and bounded.
+Approved infrastructure hypothesis. Ready for Phase 3 implementation. The research-loop memory-growth prerequisite is resolved; funded trading remains paused.
+
+Implementation details and sprint acceptance belong in `docs/implementation/phase-3-market-tape-replay.md`. Current sequencing and promotion gates belong in `docs/execution-rebuild-roadmap.md`.
 
 ## Hypothesis
 
@@ -31,6 +33,14 @@ Do not emit and persist every quote grid for every model snapshot. Store the reu
 - Model/source: all current and future research model families
 - Execution: non-funded market-data collection and counterfactual quote replay
 - Policy/sleeve name: infrastructure shared across policies
+
+## Non-Goals
+
+- The tape does not create forecast alpha or repair an unprofitable price sheet.
+- Public L2 data does not establish exact passive queue position.
+- Exploratory replay over many quote rules is not forward confirmation.
+- Existing candidate-scoped shadow labels are not promotion evidence.
+- This phase does not restart funded trading or build a learned quote policy.
 
 ## Collection And Retention Requirements
 
@@ -63,16 +73,19 @@ Do not emit and persist every quote grid for every model snapshot. Store the reu
 
 ## Gates Added Or Required
 
-- Resolve and cap current research-loop memory growth before adding another continuous collector.
+- Completed: resolve and cap research-loop memory growth before adding another continuous collector.
 - Correct and test shadow trade-direction, queue, cancellation, and book-touch labeling.
 - Add collector health checks for subscription coverage, feed gaps, local receipt lag, and storage growth.
 - Require an immutable hypothesis version and activation timestamp for forward-confirmation reports.
-- Keep funded trading paused until shadow evidence and any approved real canary pass fill-conditioned gates.
+- Keep funded trading paused until shadow evidence and controlled real canaries pass fill-conditioned gates.
+- Permit minimum-risk funded orders only for replay/plumbing validation after shadow reconstruction passes; they provide no capacity or promotion evidence.
+- Require direct `$50` and `$100` validation for claims at those sizes.
 
 ## Review Trigger
 
-Review after the research loop has a measured stable memory ceiling and before implementing the next shadow-execution collection phase.
+Review at each Phase 3 implementation exit gate and again before any private user-channel or funded canary work begins.
 
 ## Decision Log
 
 - 2026-07-16: Recorded the shared-market-tape design so memory stabilization can be addressed first without losing the execution-data plan.
+- 2026-07-16: Confirmed the memory issue is resolved, approved the hypothesis for Phase 3 implementation, and split implementation details into `docs/implementation/phase-3-market-tape-replay.md`.

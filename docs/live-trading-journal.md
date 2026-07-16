@@ -6,15 +6,17 @@ Git history remains the source of truth for code changes. This journal is the so
 
 ## Current Live State
 
-Updated: 2026-07-06
+Updated: 2026-07-16
 
-Execution status: funded live trading paused pending the execution-first gates documented in `docs/hypotheses/2026-07-06-execution-first-phase.md`. The policies below describe the last configured live stack, not approval to restart funded execution.
+Execution status: funded live trading paused pending the gates in `docs/current-trading-system-audit.md` and `docs/execution-rebuild-roadmap.md`. The policies below describe the last configured live stack, not approval to restart funded execution. The original phase decision remains in `docs/hypotheses/2026-07-06-execution-first-phase.md` as a historical record.
 
-Phase 1 adverse-selection status: the scoped US high-temperature consensus no-tiny BUY_NO price sheet now exists in source and is persisted to `live_price_sheets`, with read-only replay available through `scripts/phase1_price_sheet_report.py`. The first active-DB sanity check was positive but thin (15 all-history resolved sheets at +0.059 R/R; 7 last-30-day resolved sheets at +0.044 R/R), so funded trading remains paused until passive shadow fills, cancellation labels, and filled-subset quote PnL pass later gates.
+Current assessment and phase sequencing are maintained in `docs/current-trading-system-audit.md` and `docs/execution-rebuild-roadmap.md`.
 
-Phase 2 adverse-selection status: scoped price sheets now generate persisted post-only GTD shadow quotes in `live_quote_intents`. These are dry-run/shadow records only: they prove quote construction, post-only price clamping, candidate/position linkage, and expiry/cancel bookkeeping, but they do not place funded orders.
+Phase 1 adverse-selection status: the scoped US high-temperature consensus no-tiny BUY_NO price sheet exists in source, but its updated July review failed the theoretical gate: `-0.007 R/R` all-history, `-0.020` last 30 days, and `-1.000` on its only July 9-14 row. Redesign the price sheet around walk-forward calibration, a market reference, and stronger signal policies before any shadow-to-funded progression.
 
-Steady-state shadow collection status: the scoped sheet now emits a bounded 24-spec useful-size shadow grid per candidate, with `$50` baseline and `$100` target-capacity intended notional, stable spec ids, rule metadata, top/depth context, `would_post` flags, lifecycle states, and markout hooks. The non-funded collection workflow is now: run the dry-run live cycle, run `scripts/collect_candidate_clob_events.py` for current candidate tokens, run `scripts/label_shadow_quote_outcomes.py`, then require `scripts/shadow_collection_report.py` to pass without missing token/feed/useful-size/outcome coverage. This is still collection infrastructure, not approval to restart live trading.
+Phase 2 adverse-selection status: scoped price sheets generate persisted post-only GTD shadow quote intents. This remains a candidate-scoped plumbing prototype. The current collector starts from policy-candidate tokens and existing label semantics are not approved as fill or profitability evidence.
+
+Phase 3 status: the shared active-universe weather market tape is approved for implementation now that the research-loop memory issue is resolved. The tape must subscribe before candidate generation, reconstruct valid book intervals, distinguish trades from placements/cancellations, and support deterministic causal quote replay. The active implementation contract is `docs/implementation/phase-3-market-tape-replay.md`.
 
 ### Last configured policies
 
@@ -130,6 +132,14 @@ FAK retries address temporary book/depth/order-version issues. When those still 
 The 360-second TTL is a deliberate compromise: weather does not normally reprice enough in six minutes to invalidate the original edge, but the order should not remain open after the cycle context has aged. The fallback now ladders the leftover notional into $25 chunks, stepped down by one cent per child order, so a $60 remainder posts as $25, $25, and $10 rather than one large passive order.
 
 ## Journal
+
+### 2026-07-16
+
+- Confirmed the research-loop memory-growth blocker is resolved.
+- Reconciled the July 15 collection review into the living system audit. The fresh configured portfolio and existing Phase 1 price sheet are not restart candidates.
+- Approved Phase 3 shared market-tape implementation while keeping funded trading paused.
+- Reclassified the existing candidate-token collector and shadow fill labels as plumbing prototypes only; they are not promotion evidence.
+- Separated minimum-risk real-order plumbing validation from later `$50/$100` capacity validation. Tiny plumbing tests authorize no strategy promotion or size claim.
 
 ### 2026-07-06
 
