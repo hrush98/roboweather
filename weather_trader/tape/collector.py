@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from weather_trader.tape.catalog import TapeCatalog
+from weather_trader.tape.books import BookReconstructor
 from weather_trader.tape.contracts import (
     CollectorMetric,
     CollectorSession,
@@ -96,6 +97,7 @@ async def collect_market_tape(
     max_reconnect_attempts: int = 8,
     reconnect_initial_seconds: float = 1.0,
     reconnect_max_seconds: float = 30.0,
+    checkpoint_every: int = 1000,
 ) -> TapeCollectionStats:
     if queue_size < 1:
         raise ValueError("queue_size must be positive")
@@ -114,6 +116,8 @@ async def collect_market_tape(
     deadline = time.monotonic() + max_seconds if max_seconds is not None else None
     if max_reconnect_attempts < 0:
         raise ValueError("max_reconnect_attempts must be non-negative")
+    if checkpoint_every < 1:
+        raise ValueError("checkpoint_every must be positive")
     writer = RotatingRawSegmentWriter(
         raw_directory,
         session_id=session_id,
@@ -125,6 +129,8 @@ async def collect_market_tape(
     latest_generation_number = 0
     receipt_sequence = 0
     coverage: dict[str, CoverageState] = {}
+    book_reconstructor = BookReconstructor()
+    token_event_counts: dict[str, int] = {}
     token_to_market: dict[str, str] = {}
     finish_reason = "completed"
     try:
@@ -178,6 +184,9 @@ async def collect_market_tape(
                     initial_messages=messages,
                     initial_receipt_sequence=receipt_sequence,
                     reconnect_attempt=reconnects,
+                    book_reconstructor=book_reconstructor,
+                    token_event_counts=token_event_counts,
+                    checkpoint_every=checkpoint_every,
                 )
             except Exception:
                 _transition_tokens(
@@ -315,6 +324,9 @@ async def _collect_generation(
     initial_messages: int,
     initial_receipt_sequence: int,
     reconnect_attempt: int,
+    book_reconstructor: BookReconstructor,
+    token_event_counts: dict[str, int],
+    checkpoint_every: int,
 ) -> _GenerationStats:
     queue: asyncio.Queue[tuple[dict[str, Any] | list[Any], str, int]] = asyncio.Queue(maxsize=queue_size)
     stream = transport.stream(generation.token_ids)
@@ -370,7 +382,7 @@ async def _collect_generation(
                 event_type = _event_type(unit)
                 state = coverage.get(token_id, CoverageState.RESYNCING)
                 events += 1
-                _, rotated = writer.append(
+                stored, rotated = writer.append(
                     MarketTapeEvent(
                         collector_session_id=generation.session_id,
                         token_id=token_id,
@@ -387,8 +399,35 @@ async def _collect_generation(
                 )
                 if rotated is not None:
                     catalog.record_partition(generation.session_id, rotated, closed_at_utc=received_at)
+                token_event_counts[token_id] = token_event_counts.get(token_id, 0) + 1
+                book = book_reconstructor.apply(stored)
+                if not book.valid:
+                    catalog.record_reconstruction_error(
+                        session_id=generation.session_id,
+                        token_id=token_id,
+                        event_id=stored.stable_event_id,
+                        receipt_sequence=stored.receipt_sequence,
+                        captured_at_utc=received_at,
+                        reason=book.invalid_reason or "unknown_reconstruction_error",
+                    )
+                    if state is CoverageState.VALID:
+                        coverage[token_id] = CoverageState.GAPPED
+                        catalog.transition_coverage(
+                            CoverageInterval(
+                                session_id=generation.session_id,
+                                token_id=token_id,
+                                state=CoverageState.GAPPED,
+                                started_at_utc=received_at,
+                                ended_at_utc=None,
+                                subscription_generation=generation.generation,
+                                reason=book.invalid_reason,
+                                gap_id=uuid.uuid4().hex,
+                            )
+                        )
+                elif event_type == "book" or token_event_counts[token_id] % checkpoint_every == 0:
+                    catalog.record_checkpoint(book_reconstructor.checkpoint(stored))
                 last_receipt_lag_ms = _receipt_lag_ms(_feed_timestamp(unit), received_at)
-                if event_type == "book" and state is not CoverageState.VALID:
+                if event_type == "book" and book.valid and state is not CoverageState.VALID:
                     coverage[token_id] = CoverageState.VALID
                     catalog.transition_coverage(
                         CoverageInterval(

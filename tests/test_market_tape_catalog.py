@@ -169,6 +169,7 @@ def test_collector_records_bounded_generation_and_requires_full_book_for_valid_c
         )
     ]
     assert states == ["RESYNCING", "VALID", "CLOSED"]
+    assert catalog.connection.execute("select count(*) from tape_book_checkpoints").fetchone()[0] == 1
     catalog.close()
 
 
@@ -248,6 +249,35 @@ def test_collector_reconnects_through_explicit_gap_and_health_verifies_segments(
     assert report.healthy is True
     assert report.events == 1
     assert report.partitions == 1
+    catalog.close()
+
+
+def test_malformed_book_is_accounted_and_never_marks_coverage_valid(tmp_path: Path) -> None:
+    catalog = TapeCatalog(tmp_path / "catalog.sqlite")
+    stats = asyncio.run(
+        collect_market_tape(
+            catalog,
+            raw_directory=tmp_path / "raw",
+            discovery=FakeTapeDiscovery(_tokens_from_markets([market()])),
+            transport=FakeTransport(
+                [{"event_type": "book", "asset_id": "market-1-yes", "bids": []}]
+            ),
+            max_messages=1,
+        )
+    )
+    states = [
+        row[0]
+        for row in catalog.connection.execute(
+            "select state from tape_coverage_intervals where token_id = 'market-1-yes' order by id"
+        )
+    ]
+    report = evaluate_tape_health(catalog)
+
+    assert stats.events == 1
+    assert states == ["RESYNCING", "CLOSED"]
+    assert report.reconstruction_errors == 1
+    assert report.healthy is False
+    assert "reconstruction_errors" in report.failures
     catalog.close()
 
 

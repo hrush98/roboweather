@@ -1,6 +1,6 @@
 # Phase 3 Market Tape And Replay Implementation Plan
 
-Status: Recorder vertical slice validated; repository acceptance evidence remains in progress
+Status: Recorder lifecycle path and deterministic book reconstruction validated; replay acceptance remains in progress
 
 Last updated: 2026-07-16
 
@@ -279,7 +279,10 @@ Implementation status, 2026-07-16:
 - Added deterministic token-level full-book reconstruction and absolute-size `BUY`/`SELL` price-level deltas with canonical SHA-256 state hashes and stable bid/ask ordering.
 - Reconstruction accepts a `RESYNCING` full book as the new baseline, invalidates non-valid deltas, refuses deltas before a full book, and cannot become valid again without another full book.
 - Added catalog-persisted book checkpoints and `scripts/rebuild_market_tape_books.py` for repeatable parser rebuilds from checksummed raw segments. Rebuilding the 674-event host probe twice produced the same 616 token checkpoints.
-- Slice 3 remains open for cross-partition arbitrary-timestamp lookup, periodic checkpoint scheduling on long sessions, malformed live-event accounting, and broader recorded-session spot checks.
+- Added inclusive arbitrary receipt-time or stable-event reconstruction across causally ordered partitions, with strict rejection of mixed sessions, missing boundaries, and non-monotonic receipt sequences.
+- Integrated initial and periodic checkpoints into the live collector. Malformed books never mark coverage valid; malformed deltas invalidate formerly valid coverage, persist reconstruction errors, and fail the strict health report.
+- A follow-up live probe captured 644 events across 616 tokens, persisted 616 online initial-book checkpoints with zero reconstruction errors, and passed health verification. A real token book was then reconstructed at an arbitrary receipt timestamp with stable hash `cbb49f672ce3c8743e457a93950ef522973a8a31544157c6991fc7df16e2a341`.
+- Slice 3 exit gate is complete. Long-session capacity and complete-lifecycle collection remain separate Slice 1/2 acceptance items.
 
 ### Slice 4: Causal Decision Join
 
@@ -323,6 +326,7 @@ Exit: the report answers whether base-case fill-conditioned PnL is positive with
 
 ## Decision Log
 
+- 2026-07-16: Completed the Slice 3 repository exit gate after online checkpointing produced 616 valid token books with zero reconstruction errors and arbitrary-time reconstruction passed on the captured segment. Kept long-run recorder capacity separate and open.
 - 2026-07-16: Started Slice 3 with deterministic full-book/delta reconstruction and persisted state hashes. Rebuilt all 616 initial books in the bounded host segment twice; kept arbitrary-time and long-session checkpoint gates open.
 - 2026-07-16: Hardened Slice 2 with UTC rotation/cataloging, resource telemetry, bounded exponential reconnects, explicit gap invalidation, strict health verification, and zero-event failure. A 616-token live probe passed; kept complete-lifecycle capacity and unattended supervision gates open.
 - 2026-07-16: Validated the first repository-backed live all-universe recorder probe: 616 tokens, 50 feed messages, 714 token events, exact replay, and bounded queue use. Kept lifecycle and retention gates open.

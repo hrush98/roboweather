@@ -21,7 +21,7 @@ forecast signal
 
 ## Current Phase
 
-The Phase 3 market-tape recorder vertical slice now has repository-validated rotation, reconnect/gap semantics, resource telemetry, and strict health checks. Complete-lifecycle capacity evidence and deterministic book replay remain open. Price Sheet V2a can continue independently; V2b will consume only valid Phase 3 tape windows. Funded trading remains paused.
+The Phase 3 market-tape recorder now has repository-validated rotation, reconnect/gap semantics, resource telemetry, strict health checks, and deterministic arbitrary-time book reconstruction. Complete-lifecycle capacity evidence and causal decision/fill replay remain open. Price Sheet V2a can continue independently; V2b will consume only valid Phase 3 tape windows. Funded trading remains paused.
 
 Canonical records:
 
@@ -38,7 +38,7 @@ Canonical records:
 | 0. Whole-chain instrumentation | Link candidates, decisions, orders, fills, and settlement. | Prototype complete | Exact live candidate-to-settlement reconstruction exists. |
 | 1. Quoteable fair/price sheet | Convert model output into a conservative maximum price. | V2a current implementation priority | Positive walk-forward quoted-price EV without extreme uncalibrated fairs. |
 | 2. Shadow quote construction | Generate auditable quote intents and cancellation metadata. | Plumbing prototype complete | Deterministic intent construction tests pass. No profitability claim. |
-| 3. Shared market tape and replay | Collect pre-signal active-universe market events and replay quote tactics causally. | Recorder lifecycle slice validated; long-run collection and replay remain open | Tape validity, deterministic book replay, conservative fill bounds, and forward shadow reporting pass. |
+| 3. Shared market tape and replay | Collect pre-signal active-universe market events and replay quote tactics causally. | Recorder/book slices validated; long-run collection and decision/fill replay remain open | Tape validity, deterministic book replay, conservative fill bounds, and forward shadow reporting pass. |
 | 4. Funded validation | Validate replay fidelity and useful-size fill-conditioned PnL with controlled real orders. | Blocked on validated V2a + V2b configuration | Plumbing canary passes, then `$50` and `$100` size-specific evidence passes. |
 | 5. Learned quote policy and sizing | Select quote/skip/size from calibrated signal and microstructure state. | Future | Sufficient clean Phase 3/4 data and stable out-of-sample improvement. |
 

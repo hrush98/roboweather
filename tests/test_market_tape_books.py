@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from weather_trader.tape.books import BookReconstructor, reconstruct_segment
+from weather_trader.tape.books import BookReconstructor, reconstruct_at, reconstruct_segment
 from weather_trader.tape.catalog import TapeCatalog
 from weather_trader.tape.contracts import CollectorSession, CoverageState, MarketTapeEvent
 from weather_trader.tape.storage import RawSegmentWriter
@@ -101,3 +101,51 @@ def test_segment_reconstruction_and_checkpoint_persistence(tmp_path: Path) -> No
     assert row["reconstruction_hash"] == reconstructed.reconstruction_hash
     assert row["event_id"] == stored.stable_event_id
     catalog.close()
+
+
+def test_reconstruct_at_timestamp_and_event_across_partitions(tmp_path: Path) -> None:
+    first_writer = RawSegmentWriter(tmp_path, session_id="session-1", partition_id="20260716T12")
+    initial = first_writer.append(
+        replace(
+            make_event(1),
+            raw_payload={
+                "event_type": "book",
+                "bids": [{"price": "0.4", "size": "10"}],
+                "asks": [{"price": "0.6", "size": "8"}],
+            },
+        )
+    )
+    first_path = first_writer.close().path
+    second_writer = RawSegmentWriter(tmp_path, session_id="session-1", partition_id="20260716T13")
+    changed = second_writer.append(
+        replace(
+            make_event(2),
+            received_at_utc="2026-07-16T13:00:00+00:00",
+            raw_payload={
+                "price_change": {"side": "BUY", "price": "0.4", "size": "12"}
+            },
+        )
+    )
+    second_path = second_writer.close().path
+
+    before_change = reconstruct_at(
+        [second_path, first_path],
+        token_id="token-1",
+        received_at_or_before="2026-07-16T12:59:59+00:00",
+    )
+    at_change = reconstruct_at(
+        [first_path, second_path], token_id="token-1", event_id=changed.stable_event_id
+    )
+
+    assert before_change.event_id == initial.stable_event_id
+    assert before_change.bids == ((0.4, 10.0),)
+    assert at_change.bids == ((0.4, 12.0),)
+
+
+def test_reconstruct_at_rejects_missing_boundary() -> None:
+    try:
+        reconstruct_at([], token_id="token-1", event_id="missing")
+    except LookupError as exc:
+        assert "event boundary not found" in str(exc)
+    else:
+        raise AssertionError("missing event boundary should fail closed")

@@ -29,6 +29,7 @@ def main() -> None:
     parser.add_argument("--max-reconnect-attempts", type=int, default=8)
     parser.add_argument("--reconnect-initial-seconds", type=float, default=1.0)
     parser.add_argument("--reconnect-max-seconds", type=float, default=30.0)
+    parser.add_argument("--checkpoint-every", type=int, default=1000)
     args = parser.parse_args()
     with TapeCatalog(args.catalog.expanduser()) as catalog:
         stats = asyncio.run(
@@ -45,6 +46,7 @@ def main() -> None:
                 max_reconnect_attempts=args.max_reconnect_attempts,
                 reconnect_initial_seconds=args.reconnect_initial_seconds,
                 reconnect_max_seconds=args.reconnect_max_seconds,
+                checkpoint_every=args.checkpoint_every,
             )
         )
     payload = {

@@ -20,6 +20,7 @@ class TapeHealthReport:
     queue_capacity: int
     rss_bytes: int
     receipt_lag_ms: float | None
+    reconstruction_errors: int
     coverage_counts: dict[str, int]
     failures: tuple[str, ...]
 
@@ -37,7 +38,7 @@ def evaluate_tape_health(
         "select * from tape_collector_sessions order by started_at_utc desc limit 1"
     ).fetchone()
     if session is None:
-        return TapeHealthReport(False, None, None, 0, 0, 0, 0, 0, 0, None, {}, ("no_sessions",))
+        return TapeHealthReport(False, None, None, 0, 0, 0, 0, 0, 0, None, 0, {}, ("no_sessions",))
 
     session_id = str(session["session_id"])
     metric = catalog.connection.execute(
@@ -56,10 +57,17 @@ def evaluate_tape_health(
         (session_id,),
     ).fetchall()
     coverage_counts = {str(row["state"]): int(row["count"]) for row in coverage_rows}
+    reconstruction_errors = int(
+        catalog.connection.execute(
+            "select count(*) from tape_reconstruction_errors where session_id = ?", (session_id,)
+        ).fetchone()[0]
+    )
     failures: list[str] = []
     finish_reason = session["finish_reason"]
     if finish_reason == "error":
         failures.append("session_finished_with_error")
+    if reconstruction_errors:
+        failures.append("reconstruction_errors")
     if metric is None:
         failures.append("missing_telemetry")
         events = raw_disk_bytes = queue_high_water = queue_capacity = rss_bytes = 0
@@ -108,6 +116,7 @@ def evaluate_tape_health(
         queue_capacity=queue_capacity,
         rss_bytes=rss_bytes,
         receipt_lag_ms=float(receipt_lag_ms) if receipt_lag_ms is not None else None,
+        reconstruction_errors=reconstruction_errors,
         coverage_counts=coverage_counts,
         failures=tuple(failures),
     )

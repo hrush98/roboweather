@@ -161,6 +161,16 @@ class TapeCatalog:
 
             create index if not exists idx_tape_checkpoints_token_event
                 on tape_book_checkpoints(token_id, event_offset);
+
+            create table if not exists tape_reconstruction_errors (
+                id integer primary key autoincrement,
+                session_id text not null,
+                token_id text not null,
+                event_id text,
+                receipt_sequence integer not null,
+                captured_at_utc text not null,
+                reason text not null
+            );
             """
         )
         self.connection.commit()
@@ -466,6 +476,27 @@ class TapeCatalog:
                     checkpoint.reconstruction_hash, checkpoint.coverage_state.value, _json(payload),
                 ),
             )
+
+    def record_reconstruction_error(
+        self,
+        *,
+        session_id: str,
+        token_id: str,
+        event_id: str | None,
+        receipt_sequence: int,
+        captured_at_utc: str,
+        reason: str,
+    ) -> int:
+        with self.connection:
+            cursor = self.connection.execute(
+                """
+                insert into tape_reconstruction_errors (
+                    session_id, token_id, event_id, receipt_sequence, captured_at_utc, reason
+                ) values (?, ?, ?, ?, ?, ?)
+                """,
+                (session_id, token_id, event_id, receipt_sequence, captured_at_utc, reason),
+            )
+        return int(cursor.lastrowid)
 
 
 def _json(value: object) -> str:

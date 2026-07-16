@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -119,6 +120,45 @@ def reconstruct_segment(path: Path) -> dict[str, ReconstructedBook]:
     return latest
 
 
+def reconstruct_at(
+    paths: list[Path] | tuple[Path, ...],
+    *,
+    token_id: str,
+    received_at_or_before: str | None = None,
+    event_id: str | None = None,
+) -> ReconstructedBook:
+    """Reconstruct one token across ordered partitions at an inclusive causal boundary."""
+    if (received_at_or_before is None) == (event_id is None):
+        raise ValueError("provide exactly one reconstruction boundary")
+    boundary = _parse_utc(received_at_or_before) if received_at_or_before else None
+    reconstructor = BookReconstructor()
+    latest: ReconstructedBook | None = None
+    session_id: str | None = None
+    prior_sequence = 0
+    found_event_id = False
+    for path in sorted(paths):
+        for event in iter_segment(path):
+            if session_id is None:
+                session_id = event.collector_session_id
+            elif event.collector_session_id != session_id:
+                raise ValueError("cross-session reconstruction is not supported")
+            if event.receipt_sequence <= prior_sequence:
+                raise ValueError("segments are not in causal receipt-sequence order")
+            prior_sequence = event.receipt_sequence
+            if boundary is not None and _parse_utc(event.received_at_utc) > boundary:
+                return _require_reconstruction(latest, token_id)
+            if event.token_id == token_id:
+                latest = reconstructor.apply(event)
+            if event_id is not None and event.stable_event_id == event_id:
+                found_event_id = True
+                break
+        if found_event_id:
+            break
+    if event_id is not None and not found_event_id:
+        raise LookupError(f"event boundary not found: {event_id}")
+    return _require_reconstruction(latest, token_id)
+
+
 def _levels(payload: object, key: str) -> dict[Decimal, Decimal]:
     if not isinstance(payload, dict) or not isinstance(payload.get(key), list):
         return {}
@@ -149,3 +189,18 @@ def _book_hash(bids: dict[Decimal, Decimal], asks: dict[Decimal, Decimal]) -> st
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(canonical).hexdigest()
+
+
+def _parse_utc(value: str | None) -> datetime:
+    if value is None:
+        raise ValueError("timestamp is required")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("timestamp must be timezone-aware")
+    return parsed.astimezone(timezone.utc)
+
+
+def _require_reconstruction(book: ReconstructedBook | None, token_id: str) -> ReconstructedBook:
+    if book is None:
+        raise LookupError(f"no events for token at boundary: {token_id}")
+    return book
