@@ -329,6 +329,7 @@ class EngineState:
     orders_submitted: int
     skipped: int
     errors: list[str] = field(default_factory=list)
+    runtime_metrics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

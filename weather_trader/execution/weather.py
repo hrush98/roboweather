@@ -81,6 +81,13 @@ class WeatherFeatureService:
         self._cache: dict[tuple[str, object], StationWeatherState] = {}
         self._cache_fetched_at: dict[tuple[str, object], datetime] = {}
 
+    def runtime_metrics(self) -> dict[str, object]:
+        cache_stats = getattr(self.hrrr_client, "cache_stats", None)
+        return {
+            "weather_cache_entries": len(self._cache),
+            "hrrr_point_cache": cache_stats() if callable(cache_stats) else {},
+        }
+
     def get_state(self, station_id: str, as_of_utc: datetime) -> StationWeatherState:
         station = get_station(station_id)
         zone = ZoneInfo(station.timezone)

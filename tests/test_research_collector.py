@@ -278,6 +278,8 @@ def test_research_collector_records_discovery_timeout_without_crashing(tmp_path)
     assert row["mode"] == "research"
     assert row["discovered_markets"] == 0
     assert "gamma stalled" in row["raw_json"]
+    assert '"rss_kib_by_stage"' in row["raw_json"]
+    assert '"cycle_duration_seconds"' in row["raw_json"]
 
 
 def test_research_collector_warns_when_books_are_missing(tmp_path) -> None:

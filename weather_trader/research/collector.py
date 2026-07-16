@@ -89,6 +89,8 @@ class ResearchCollector:
         ]
 
     def run_once(self, as_of_utc: datetime | None = None) -> ResearchCycleResult:
+        cycle_started = time.perf_counter()
+        rss_by_stage = {"start": _current_rss_kib()}
         now = as_of_utc or datetime.now(timezone.utc)
         errors: list[str] = []
         snapshots_written = 0
@@ -98,6 +100,7 @@ class ResearchCollector:
             markets = same_day_markets(self.discovery.discover(limit=self.config.market_limit, market_scope=self.config.market_scope), now)
             errors.extend(getattr(self.discovery, "last_warnings", []))
         except requests.RequestException as exc:
+            rss_by_stage["after_discovery"] = _current_rss_kib()
             errors.append(f"discovery: {exc}")
             engine_state = EngineState(
                 timestamp=utc_now_iso(),
@@ -107,9 +110,15 @@ class ResearchCollector:
                 orders_submitted=0,
                 skipped=0,
                 errors=errors,
+                runtime_metrics=_runtime_metrics(
+                    rss_by_stage=rss_by_stage,
+                    cycle_started=cycle_started,
+                    weather_service=self.weather_service,
+                ),
             )
             self.store.insert_engine_state(engine_state)
             return ResearchCycleResult(engine_state=engine_state, snapshots_written=0)
+        rss_by_stage["after_discovery"] = _current_rss_kib()
         for market in markets:
             self.store.upsert_market(market)
 
@@ -128,8 +137,10 @@ class ResearchCollector:
             errors.append(f"book_coverage_partial: requested={len(token_ids)} returned={len(books)}")
         for book in books.values():
             self.store.insert_book_snapshot(book)
+        rss_by_stage["after_books"] = _current_rss_kib()
 
         weather_by_station = self._fetch_weather_by_station(markets, now, errors)
+        rss_by_stage["after_weather"] = _current_rss_kib()
         markets_by_group: dict[tuple[str, date | None, str], list[MarketSnapshot]] = {}
         for market in markets:
             markets_by_group.setdefault(group_key(market), []).append(market)
@@ -200,6 +211,7 @@ class ResearchCollector:
                 except Exception as exc:
                     errors.append(f"model:{engine.model_name}:group:{station_id}:{market_date}: {exc}")
 
+        rss_by_stage["after_models"] = _current_rss_kib()
         engine_state = EngineState(
             timestamp=utc_now_iso(),
             mode="research",
@@ -208,6 +220,11 @@ class ResearchCollector:
             orders_submitted=0,
             skipped=skipped,
             errors=errors,
+            runtime_metrics=_runtime_metrics(
+                rss_by_stage=rss_by_stage,
+                cycle_started=cycle_started,
+                weather_service=self.weather_service,
+            ),
         )
         self.store.insert_engine_state(engine_state)
         return ResearchCycleResult(engine_state=engine_state, snapshots_written=snapshots_written)
@@ -289,6 +306,12 @@ class ScopedWeatherFeatureService:
         if _station_scope(station_id) == "global":
             return self.global_service.get_state(station_id, as_of_utc)
         return self.us_service.get_state(station_id, as_of_utc)
+
+    def runtime_metrics(self) -> dict[str, object]:
+        return {
+            "us": self.us_service.runtime_metrics(),
+            "global": self.global_service.runtime_metrics(),
+        }
 
 
 def _model_supports_station(model_name: str, station_id: str) -> bool:
@@ -526,6 +549,30 @@ def _time_in_window(value: day_time, start: day_time, end: day_time) -> bool:
     return value >= start or value <= end
 
 
+def _current_rss_kib() -> int | None:
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def _runtime_metrics(
+    *,
+    rss_by_stage: dict[str, int | None],
+    cycle_started: float,
+    weather_service: object,
+) -> dict[str, object]:
+    weather_metrics = getattr(weather_service, "runtime_metrics", None)
+    return {
+        "rss_kib_by_stage": rss_by_stage,
+        "cycle_duration_seconds": round(time.perf_counter() - cycle_started, 3),
+        "weather": weather_metrics() if callable(weather_metrics) else {},
+    }
+
+
 def run_research_loop(
     store: ExecutionStore,
     model_paths: list[Path],
@@ -557,6 +604,7 @@ def run_research_loop(
                     "snapshots_written": result.snapshots_written,
                     "policy_positions_written": policy_positions_written,
                     "paper_policy": None if paper_policy_result is None else paper_policy_result.__dict__,
+                    "runtime_metrics": result.engine_state.runtime_metrics,
                     "errors": result.engine_state.errors[:5],
                 },
                 flush=True,

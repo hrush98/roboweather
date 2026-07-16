@@ -2,6 +2,12 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-07-16
+
+- Fixed unbounded native memory growth in long-running HRRR collection by explicitly closing every `pygrib`/ecCodes file handle after decoding. Added a bounded 512-entry station/cycle/forecast-hour cache so six-minute research cycles reuse immutable HRRR point forecasts instead of repeatedly downloading and decoding the same files.
+- Added research-cycle runtime telemetry to `engine_state.raw_json`, including RSS after discovery, books, weather, and model persistence plus HRRR point-cache entries/hits/misses. Cycle logs now print the same metrics for post-restart validation.
+- Proposed a shared token-level weather market tape as the next execution-data project after memory stabilization, allowing one deduplicated CLOB stream to support retrospective replay across models and quote policies.
+
 ## 2026-07-06
 
 - Closed the steady-state shadow collection implementation gaps: the shadow grid now uses `$50/$100` intended notional instead of tiny quote sizes, quote intents persist initial depth/queue context, `scripts/collect_candidate_clob_events.py` subscribes the CLOB market feed to current candidate tokens, `scripts/label_shadow_quote_outcomes.py` persists conservative/base/optimistic fill labels and markouts, and `scripts/shadow_collection_report.py` now fails on missing token/feed/useful-size/outcome coverage.

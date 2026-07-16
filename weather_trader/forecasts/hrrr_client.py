@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -22,6 +23,14 @@ class HRRRClient:
     max_forecast_hour: int = 18
     neighborhood_degrees: float = 0.6
     cycle_lag_hours: int = 1
+    point_cache_max_entries: int = 512
+    _point_cache: OrderedDict[tuple[str, datetime, int], dict[str, float]] = field(
+        default_factory=OrderedDict,
+        init=False,
+        repr=False,
+    )
+    _point_cache_hits: int = field(default=0, init=False, repr=False)
+    _point_cache_misses: int = field(default=0, init=False, repr=False)
 
     def fetch_remaining_day_features(
         self,
@@ -103,38 +112,61 @@ class HRRRClient:
         }
 
     def fetch_point_forecast(self, station: Station, cycle_utc: datetime, forecast_hour: int) -> dict[str, float]:
+        cache_key = (station.station, cycle_utc, forecast_hour)
+        cached = self._point_cache.get(cache_key)
+        if cached is not None:
+            self._point_cache.move_to_end(cache_key)
+            self._point_cache_hits += 1
+            return dict(cached)
+
+        self._point_cache_misses += 1
         payload = self._download_subset(station=station, cycle_utc=cycle_utc, forecast_hour=forecast_hour)
         import pygrib
 
         with NamedTemporaryFile(suffix=".grib2") as handle:
             handle.write(payload)
             handle.flush()
-            messages = list(pygrib.open(handle.name))
-        parsed = {"forecast_hour": forecast_hour}
-        for message in messages:
-            data, lats, lons = message.data()
-            lat_idx, lon_idx = _nearest_index(lats, lons, station.latitude, station.longitude)
-            value = float(data[lat_idx, lon_idx])
-            name = message.shortName.lower()
-            level = int(message.level)
-            if name == "2t" or (name == "tmp" and level == 2):
-                parsed["tmpf"] = _kelvin_to_f(value)
-            elif name in {"2d", "dpt", "dewpoint"} or (name == "dpt" and level == 2):
-                parsed["dwpf"] = _kelvin_to_f(value)
-            elif name in {"2r", "r", "rh"}:
-                parsed["rh"] = value
-            elif name == "10u":
-                parsed["u10"] = value
-            elif name == "10v":
-                parsed["v10"] = value
-            elif name in {"gust", "gusts"}:
-                parsed["gust_mph"] = value * 2.23694
-            elif name in {"tcc", "tcdc"}:
-                parsed["tcdc"] = value
-            elif name in {"dswrf", "sdswrf"}:
-                parsed["dswrf"] = value
+            messages = pygrib.open(handle.name)
+            try:
+                parsed = {"forecast_hour": forecast_hour}
+                for message in messages:
+                    data, lats, lons = message.data()
+                    lat_idx, lon_idx = _nearest_index(lats, lons, station.latitude, station.longitude)
+                    value = float(data[lat_idx, lon_idx])
+                    name = message.shortName.lower()
+                    level = int(message.level)
+                    if name == "2t" or (name == "tmp" and level == 2):
+                        parsed["tmpf"] = _kelvin_to_f(value)
+                    elif name in {"2d", "dpt", "dewpoint"} or (name == "dpt" and level == 2):
+                        parsed["dwpf"] = _kelvin_to_f(value)
+                    elif name in {"2r", "r", "rh"}:
+                        parsed["rh"] = value
+                    elif name == "10u":
+                        parsed["u10"] = value
+                    elif name == "10v":
+                        parsed["v10"] = value
+                    elif name in {"gust", "gusts"}:
+                        parsed["gust_mph"] = value * 2.23694
+                    elif name in {"tcc", "tcdc"}:
+                        parsed["tcdc"] = value
+                    elif name in {"dswrf", "sdswrf"}:
+                        parsed["dswrf"] = value
+            finally:
+                messages.close()
         parsed["wind_speed_mph"] = float(np.hypot(parsed.get("u10", np.nan), parsed.get("v10", np.nan)) * 2.23694)
+        if self.point_cache_max_entries > 0:
+            self._point_cache[cache_key] = dict(parsed)
+            while len(self._point_cache) > self.point_cache_max_entries:
+                self._point_cache.popitem(last=False)
         return parsed
+
+    def cache_stats(self) -> dict[str, int]:
+        return {
+            "entries": len(self._point_cache),
+            "max_entries": self.point_cache_max_entries,
+            "hits": self._point_cache_hits,
+            "misses": self._point_cache_misses,
+        }
 
     def _download_subset(self, station: Station, cycle_utc: datetime, forecast_hour: int) -> bytes:
         params = {
