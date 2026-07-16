@@ -4,6 +4,8 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-07-16
 
+- Added the Price Sheet V2 implementation contract. V2a builds walk-forward, market-aware conservative outcome pricing; V2b can only reduce price/size or skip using valid Phase 3 tape features, then compares passive and stable-taker arms before Phase 4.
+- Recorded operator confirmation that the Phase 3 collector is built and running while keeping its resource, coverage, deterministic replay, and fill-label acceptance evidence open. Price Sheet V2a is now the current implementation critical path.
 - Started Phase 3 Slice 1 with policy-independent market-tape contracts, checksummed append-only raw JSONL segments, stable byte-offset event IDs, strict truncated/corrupt-record rejection, deterministic round-trip fixtures, and a representative-message storage/compression benchmark CLI. Format and retention defaults remain provisional until captured live samples establish resource budgets.
 - Fixed unbounded native memory growth in long-running HRRR collection by explicitly closing every `pygrib`/ecCodes file handle after decoding. Added a bounded 512-entry station/cycle/forecast-hour cache so six-minute research cycles reuse immutable HRRR point forecasts instead of repeatedly downloading and decoding the same files.
 - Added research-cycle runtime telemetry to `engine_state.raw_json`, including RSS after discovery, books, weather, and model persistence plus HRRR point-cache entries/hits/misses. Cycle logs now print the same metrics for post-restart validation.

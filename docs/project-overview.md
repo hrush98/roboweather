@@ -20,7 +20,7 @@ Update living documents in place. Do not create a new standalone audit report wh
 
 ## Current Mode
 
-Funded trading is paused. RoboWeather is in Phase 3 of the execution rebuild: shared active-universe market-tape collection and deterministic quote replay. The active research loop remains the signal and outcome source of truth; the market tape will become the execution-evidence source of truth after its validity gates pass.
+Funded trading is paused. The Phase 3 shared active-universe market-tape collector is reported built and running, with replay and validity evidence accumulating. Price Sheet V2a is the current implementation priority; V2b will consume valid tape windows. The active research loop remains the signal and outcome source of truth, while the validated market tape becomes the execution-evidence source of truth.
 
 The research loop:
 

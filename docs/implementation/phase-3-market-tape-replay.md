@@ -1,6 +1,6 @@
 # Phase 3 Market Tape And Replay Implementation Plan
 
-Status: Slice 1 in progress
+Status: Operator reports collector built and running; repository acceptance evidence remains in progress
 
 Last updated: 2026-07-16
 
@@ -9,6 +9,8 @@ Last updated: 2026-07-16
 Build one causal, token-level weather market tape that can replay taker and passive quote tactics without requiring every model, price, size, TTL, and cancellation combination to be materialized in real time.
 
 This document is the implementation contract. The economic rationale and falsification criteria live in `docs/hypotheses/2026-07-16-shared-weather-market-tape.md`; phase sequencing lives in `docs/execution-rebuild-roadmap.md`.
+
+The current pricing consumer is specified in `docs/implementation/price-sheet-v2.md`. V2a can proceed independently; V2b must use only tape windows that pass this document's validity contracts.
 
 ## Non-Goals
 
@@ -302,5 +304,6 @@ Exit: the report answers whether base-case fill-conditioned PnL is positive with
 
 ## Decision Log
 
+- 2026-07-16: Recorded operator confirmation that the Phase 3 collector is built and running. Kept the acceptance checklist open until representative resource budgets, deterministic replay, valid coverage, and fill/markout evidence are documented.
 - 2026-07-16: Started Slice 1 with a separate `weather_trader.tape` boundary. The active segment format is checksummed canonical JSONL with stable byte-offset IDs; gzip is measured as a finalized-segment candidate but is not yet a locked retention choice.
 - 2026-07-16: Phase 3 approved after confirmation that the research-loop memory issue is resolved. Split the economic hypothesis from this implementation plan and made the shared tape the current execution-rebuild phase.

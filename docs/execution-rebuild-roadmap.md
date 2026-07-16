@@ -21,13 +21,14 @@ forecast signal
 
 ## Current Phase
 
-Phase 3, shared market tape and deterministic replay, is approved for implementation. The research-loop memory prerequisite is complete. Funded trading remains paused.
+The Phase 3 market-tape collector is reported built and running, with acceptance evidence and replay coverage accumulating. The current implementation critical path is the reopened Phase 1 pricing gate: Price Sheet V2a. V2b will consume valid Phase 3 tape windows as they become available. Funded trading remains paused.
 
 Canonical records:
 
 - Current assessment: `docs/current-trading-system-audit.md`
 - Economic hypothesis: `docs/hypotheses/2026-07-16-shared-weather-market-tape.md`
-- Active implementation plan: `docs/implementation/phase-3-market-tape-replay.md`
+- Tape implementation/acceptance: `docs/implementation/phase-3-market-tape-replay.md`
+- Active pricing implementation: `docs/implementation/price-sheet-v2.md`
 - Funded operating state: `docs/live-trading-journal.md`
 
 ## Phase Status
@@ -35,11 +36,27 @@ Canonical records:
 | Phase | Purpose | Status | Exit condition |
 | --- | --- | --- | --- |
 | 0. Whole-chain instrumentation | Link candidates, decisions, orders, fills, and settlement. | Prototype complete | Exact live candidate-to-settlement reconstruction exists. |
-| 1. Quoteable fair/price sheet | Convert model output into a conservative maximum price. | Gate failed; redesign required | Positive walk-forward quoted-price EV without extreme uncalibrated fairs. |
+| 1. Quoteable fair/price sheet | Convert model output into a conservative maximum price. | V2a current implementation priority | Positive walk-forward quoted-price EV without extreme uncalibrated fairs. |
 | 2. Shadow quote construction | Generate auditable quote intents and cancellation metadata. | Plumbing prototype complete | Deterministic intent construction tests pass. No profitability claim. |
-| 3. Shared market tape and replay | Collect pre-signal active-universe market events and replay quote tactics causally. | Current implementation phase | Tape validity, deterministic book replay, conservative fill bounds, and forward shadow reporting pass. |
-| 4. Funded validation | Validate replay fidelity and useful-size fill-conditioned PnL with controlled real orders. | Blocked on Phase 3 and revised Phase 1 | Plumbing canary passes, then `$50` and `$100` size-specific evidence passes. |
+| 3. Shared market tape and replay | Collect pre-signal active-universe market events and replay quote tactics causally. | Collector running; acceptance/replay evidence accumulating | Tape validity, deterministic book replay, conservative fill bounds, and forward shadow reporting pass. |
+| 4. Funded validation | Validate replay fidelity and useful-size fill-conditioned PnL with controlled real orders. | Blocked on validated V2a + V2b configuration | Plumbing canary passes, then `$50` and `$100` size-specific evidence passes. |
 | 5. Learned quote policy and sizing | Select quote/skip/size from calibrated signal and microstructure state. | Future | Sufficient clean Phase 3/4 data and stable out-of-sample improvement. |
+
+## Price Sheet V2 Workstreams
+
+1. V2a outcome pricing is the immediate critical path:
+   - freeze the initial late HRRR signal definitions;
+   - build causal fit and evaluation datasets;
+   - run expanding-window calibration with a decision-time market reference;
+   - produce a conservative outcome fair and maximum economic quote price;
+   - require positive out-of-fold theoretical quoted-price EV before shadow promotion.
+2. V2b execution overlay starts on valid Phase 3 windows:
+   - materialize decision-time book, queue, flow, latency, and coverage features;
+   - reduce V2a price/size or skip based on toxicity and capacity;
+   - compare frozen passive and stable-taker arms;
+   - require positive base-case fill-conditioned EV before requesting Phase 4.
+
+The detailed contracts, module boundaries, slices, tests, and acceptance gates are in `docs/implementation/price-sheet-v2.md`.
 
 ## Phase 3 Workstreams
 
@@ -81,7 +98,7 @@ Normal sizing does not follow from an arbitrary count of fills. Counts are smoke
 - Continue broad causal prediction snapshots and official outcome resolution.
 - Freeze the late HRRR-rich tuned dynamic and HRRR-v2 dynamic signal definitions for forward shadow evaluation.
 - Keep the two-of-four late agreement rule exploratory until its exact definition and activation time are recorded.
-- Redesign the fair-value layer around walk-forward calibration and market-aware shrinkage.
+- Implement Price Sheet V2a around walk-forward calibration and market-aware shrinkage.
 - Do not add funded strategies or expand normal risk caps.
 
 ## Roadmap Update Protocol

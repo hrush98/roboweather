@@ -148,7 +148,7 @@ Known failure modes that should be checked during review:
 
 ## Current Phase
 
-As of 2026-07-16, RoboWeather is in Phase 3 of the execution rebuild: shared active-universe market-tape collection and deterministic quote replay. The research-loop memory prerequisite is resolved. Funded live trading remains paused.
+As of 2026-07-16, the Phase 3 shared market-tape collector is reported built and running, with deterministic replay and acceptance evidence accumulating. Price Sheet V2a is the current implementation priority; V2b consumes only valid tape windows. The research-loop memory prerequisite is resolved, and funded live trading remains paused.
 
 Current phase status and acceptance gates are canonical in `docs/execution-rebuild-roadmap.md` and `docs/implementation/phase-3-market-tape-replay.md`. The current financial and systems verdict is `docs/current-trading-system-audit.md`.
 
@@ -229,8 +229,8 @@ Use this mapping:
 | System governance | Living audit and execution roadmap | Implemented in `docs/current-trading-system-audit.md` and `docs/execution-rebuild-roadmap.md`. |
 | Policy selection | Cap-aware portfolio replay gate | Implemented in `scripts/portfolio_promotion_report.py`. |
 | Forecast edge | Freeze late HRRR-rich tuned dynamic and HRRR-v2 dynamic definitions | Forward shadow hypotheses only; six-date evidence is not promotion evidence. |
-| Calibration | Redesign quoteable fair/price sheet | Current scoped sheet failed the updated theoretical gate. |
-| Execution data | [Shared weather market tape](hypotheses/2026-07-16-shared-weather-market-tape.md) | Approved current phase; implementation plan in `docs/implementation/phase-3-market-tape-replay.md`. |
+| Calibration | [Price Sheet V2a/V2b](implementation/price-sheet-v2.md) | V2a is the current implementation priority; V2b consumes validated tape windows. |
+| Execution data | [Shared weather market tape](hypotheses/2026-07-16-shared-weather-market-tape.md) | Collector reported running; acceptance/replay evidence continues under `docs/implementation/phase-3-market-tape-replay.md`. |
 | Execution truth | Correct fill, queue, cancellation, gap, and markout labels | Required in Phase 3 before using shadow outcomes as financial evidence. |
 | Funded validation | Plumbing canary, then `$50/$100` capacity tests | Blocked on Phase 3 and revised price-sheet gates. |
 | Portfolio risk | Market-date/regime concentration controls | Needed before normal sizing. |

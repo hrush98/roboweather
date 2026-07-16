@@ -10,7 +10,7 @@ Last reviewed: 2026-07-16
 
 RoboWeather is an execution-first research system with funded trading paused. The immediate objective is to determine whether promising weather signals can be converted into positive fill-conditioned PnL at useful size.
 
-The shared weather market tape is the correct next infrastructure project. It can remove policy-specific collection bias and make causal taker/passive replay possible. It does not itself prove forecast alpha, exact passive fills, capacity, or profitability.
+The shared weather market tape is reported built and running, with acceptance and replay evidence accumulating. It can remove policy-specific collection bias and make causal taker/passive replay possible, but it does not itself prove forecast alpha, exact passive fills, capacity, or profitability. The immediate implementation priority is Price Sheet V2a; V2b will consume valid tape windows.
 
 Current confidence by layer:
 
@@ -20,8 +20,9 @@ Current confidence by layer:
 | Current configured portfolio | Failed the fresh July 9-14 cap-aware replay. | Do not restart it. |
 | New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
 | Fair-value/price sheet | Existing scoped price sheet failed its updated theoretical gate. | Redesign around walk-forward calibration and market-aware shrinkage. |
+| Phase 3 shared tape | Collector reported operational; replay validity and evidence gates are still accumulating. | Keep collecting and validate coverage/replay contracts. |
 | Existing candidate-token shadow collector | Useful plumbing prototype, but candidate-scoped and not a continuous causal market tape. | Do not use its fill labels as promotion evidence. |
-| Fillability and adverse selection | Still unresolved. Public L2 data can provide bounds, not exact hypothetical queue position. | Build the shared tape, validate replay, then run controlled real-order canaries. |
+| Fillability and adverse selection | Still unresolved. Public L2 data can provide bounds, not exact hypothetical queue position. | Validate shared-tape replay, then run controlled real-order canaries. |
 | Funded readiness | No exact signal + quote policy + size has passed current fill-conditioned gates. | Keep funded trading paused. |
 
 ## Evidence Snapshot
@@ -65,10 +66,10 @@ Evidence source: `reports/research-collection-analysis-2026-07-15.md`. That file
 1. Keep funded trading paused.
 2. Continue broad research snapshots and outcome resolution.
 3. Stop adding model families merely to expand the leaderboard. New models need demonstrably different predictions or incremental information.
-4. Implement the shared active-universe market tape as Phase 3 of the execution rebuild.
+4. Keep the shared active-universe market tape running and complete its acceptance/replay evidence gates.
 5. Treat the current candidate-token collector and shadow labeler as a prototype only.
 6. Keep the late HRRR-rich tuned dynamic and HRRR-v2 dynamic policies as the primary forward signal hypotheses. Keep the two-of-four agreement rule exploratory until frozen and replayed behind portfolio caps.
-7. Redesign the price sheet before shadow-to-funded promotion. Start from walk-forward calibrated probabilities and a market reference, with explicit uncertainty and toxicity haircuts.
+7. Implement `docs/implementation/price-sheet-v2.md`: V2a walk-forward outcome pricing now, then V2b execution reductions/skips on valid tape windows.
 8. Evaluate passive price-making and a separately tagged stable-taker control from the same tape.
 
 ## Promotion Standard
@@ -109,3 +110,4 @@ Update the body of this document when the current assessment changes. Append one
 ## Audit Log
 
 - 2026-07-16: Created the living audit from the July 15 research collection review and the market-tape systems audit. Confirmed the research memory-growth prerequisite is resolved and approved Phase 3 market-tape implementation while keeping funded trading paused.
+- 2026-07-16: Recorded operator confirmation that Phase 3 is built and running, with exit evidence still accumulating. Made Price Sheet V2a the current implementation priority and approved the V2b tape-overlay plan.

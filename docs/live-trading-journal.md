@@ -12,11 +12,11 @@ Execution status: funded live trading paused pending the gates in `docs/current-
 
 Current assessment and phase sequencing are maintained in `docs/current-trading-system-audit.md` and `docs/execution-rebuild-roadmap.md`.
 
-Phase 1 adverse-selection status: the scoped US high-temperature consensus no-tiny BUY_NO price sheet exists in source, but its updated July review failed the theoretical gate: `-0.007 R/R` all-history, `-0.020` last 30 days, and `-1.000` on its only July 9-14 row. Redesign the price sheet around walk-forward calibration, a market reference, and stronger signal policies before any shadow-to-funded progression.
+Phase 1 adverse-selection status: the scoped US high-temperature consensus no-tiny BUY_NO price sheet exists in source, but its updated July review failed the theoretical gate: `-0.007 R/R` all-history, `-0.020` last 30 days, and `-1.000` on its only July 9-14 row. Price Sheet V2a is now the current implementation priority; V2b will add execution reductions/skips from validated tape data. The contract is `docs/implementation/price-sheet-v2.md`.
 
 Phase 2 adverse-selection status: scoped price sheets generate persisted post-only GTD shadow quote intents. This remains a candidate-scoped plumbing prototype. The current collector starts from policy-candidate tokens and existing label semantics are not approved as fill or profitability evidence.
 
-Phase 3 status: the shared active-universe weather market tape is approved for implementation now that the research-loop memory issue is resolved. The tape must subscribe before candidate generation, reconstruct valid book intervals, distinguish trades from placements/cancellations, and support deterministic causal quote replay. The active implementation contract is `docs/implementation/phase-3-market-tape-replay.md`.
+Phase 3 status: the shared active-universe weather market tape is reported built and running. Collection should continue while coverage, deterministic replay, trade/fill semantics, and forward-evidence exit gates accumulate. Operational status is not profitability evidence. The implementation/acceptance contract is `docs/implementation/phase-3-market-tape-replay.md`.
 
 ### Last configured policies
 
@@ -140,6 +140,7 @@ The 360-second TTL is a deliberate compromise: weather does not normally reprice
 - Approved Phase 3 shared market-tape implementation while keeping funded trading paused.
 - Reclassified the existing candidate-token collector and shadow fill labels as plumbing prototypes only; they are not promotion evidence.
 - Separated minimum-risk real-order plumbing validation from later `$50/$100` capacity validation. Tiny plumbing tests authorize no strategy promotion or size claim.
+- Recorded that Phase 3 is built and running, with acceptance evidence still accumulating. Approved Price Sheet V2a as the current implementation workstream and V2b as the execution overlay consuming valid tape windows.
 
 ### 2026-07-06
 

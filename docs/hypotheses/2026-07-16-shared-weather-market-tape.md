@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved infrastructure hypothesis. Ready for Phase 3 implementation. The research-loop memory-growth prerequisite is resolved; funded trading remains paused.
+Operational collection hypothesis. The Phase 3 collector is reported built and running; replay, validity, and acceptance evidence continues to accumulate. The research-loop memory-growth prerequisite is resolved, and funded trading remains paused.
 
 Implementation details and sprint acceptance belong in `docs/implementation/phase-3-market-tape-replay.md`. Current sequencing and promotion gates belong in `docs/execution-rebuild-roadmap.md`.
 
@@ -89,3 +89,4 @@ Review at each Phase 3 implementation exit gate and again before any private use
 
 - 2026-07-16: Recorded the shared-market-tape design so memory stabilization can be addressed first without losing the execution-data plan.
 - 2026-07-16: Confirmed the memory issue is resolved, approved the hypothesis for Phase 3 implementation, and split implementation details into `docs/implementation/phase-3-market-tape-replay.md`.
+- 2026-07-16: Recorded operator confirmation that the collector is built and running. The tape remains execution evidence rather than profitability evidence; valid tape windows feed the Price Sheet V2b plan in `docs/implementation/price-sheet-v2.md`.
