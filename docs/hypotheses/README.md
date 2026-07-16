@@ -4,6 +4,10 @@ Use this directory for structured trading, model, execution, sizing, and risk hy
 
 A hypothesis record is the place to write down what we believe, why we believe it, what would prove it wrong, and which gates must pass before it changes live behavior.
 
+A hypothesis is the economic or behavioral **why**, not the feature implementation plan. When a hypothesis is approved for a non-trivial build, create or update a living plan under `docs/implementation/` for architecture, module boundaries, sprint slices, and acceptance tests. Link the two documents rather than expanding the hypothesis into a project plan.
+
+Current system-wide conclusions belong in `docs/current-trading-system-audit.md`; phase sequencing belongs in `docs/execution-rebuild-roadmap.md`.
+
 ## Filename Format
 
 ```text

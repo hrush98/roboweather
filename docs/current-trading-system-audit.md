@@ -1,0 +1,111 @@
+# Current Trading System Audit
+
+This is the living financial and systems audit for RoboWeather. Update this document in place when new evidence changes the assessment. Do not create a new narrative audit report for each review.
+
+Generated or ad hoc analysis may live under `reports/`, but durable conclusions, open risks, and decisions belong here. The current implementation sequence belongs in `docs/execution-rebuild-roadmap.md`; funded operating state belongs in `docs/live-trading-journal.md`.
+
+Last reviewed: 2026-07-16
+
+## Current Verdict
+
+RoboWeather is an execution-first research system with funded trading paused. The immediate objective is to determine whether promising weather signals can be converted into positive fill-conditioned PnL at useful size.
+
+The shared weather market tape is the correct next infrastructure project. It can remove policy-specific collection bias and make causal taker/passive replay possible. It does not itself prove forecast alpha, exact passive fills, capacity, or profitability.
+
+Current confidence by layer:
+
+| Layer | Assessment | Decision |
+| --- | --- | --- |
+| Research collection | Broad snapshot collection is useful and operational. The previous memory-growth blocker is resolved. | Continue collection. |
+| Current configured portfolio | Failed the fresh July 9-14 cap-aware replay. | Do not restart it. |
+| New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
+| Fair-value/price sheet | Existing scoped price sheet failed its updated theoretical gate. | Redesign around walk-forward calibration and market-aware shrinkage. |
+| Existing candidate-token shadow collector | Useful plumbing prototype, but candidate-scoped and not a continuous causal market tape. | Do not use its fill labels as promotion evidence. |
+| Fillability and adverse selection | Still unresolved. Public L2 data can provide bounds, not exact hypothetical queue position. | Build the shared tape, validate replay, then run controlled real-order canaries. |
+| Funded readiness | No exact signal + quote policy + size has passed current fill-conditioned gates. | Keep funded trading paused. |
+
+## Evidence Snapshot
+
+The July 15 collection review used a read-only backup containing more than one million prediction snapshots and evaluated the fresh July 9-14 window.
+
+Durable conclusions from that review:
+
+- The fresh cap-aware portfolio lost `$428.45` on `$2,089.05` risk, or `-0.205 R/R`. The no-depth upper bound was also negative, so displayed depth was not the primary explanation.
+- The existing Phase 1 price sheet fell to `-0.007 R/R` all-history, `-0.020` over the last 30 days, and `-1.000` on its only fresh-window row.
+- HRRR-rich tuned dynamic late and HRRR-v2 dynamic late were the most stable new standardized signal candidates, but their strongest fresh evidence covers only six weather dates.
+- Broad recent model fairs remained overconfident. New price sheets should use walk-forward empirical calibration or market-aware shrinkage rather than raw model fairs.
+- Static ask depth was useful for triage but did not establish actual or passive fillability.
+- The METAR+HRRR tuned-dynamic artifact was behaviorally identical to its HRRR-rich counterpart in the fresh window and must not be counted as independent confirmation.
+
+Evidence source: `reports/research-collection-analysis-2026-07-15.md`. That file is an ad hoc analysis artifact; the conclusions above are canonical here.
+
+## What Is Working
+
+- Broad causal prediction snapshots preserve the opportunity universe better than materialized policy tables.
+- Raw-snapshot replay, cap-aware portfolio ordering, and whole-chain attribution have exposed several previously hidden selection and overlap errors.
+- Funded trading is paused rather than allowing positive historical replay to override negative current or fill-conditioned evidence.
+- The documentation already distinguishes selected replay, filled replay, actual PnL, and venue settlement.
+- The new market-tape hypothesis correctly moves collection from model/policy-specific rows to a reusable token-level event stream.
+
+## Open Risks And Required Gates
+
+| Priority | Risk | Why it matters | Required gate |
+| ---: | --- | --- | --- |
+| 1 | False or incomplete fill labels | Price changes, book touches, or gapped feeds can be mistaken for fills. | Trade-direction tests, deterministic replay fixtures, book reconstruction, and gap-invalidated coverage intervals. |
+| 2 | Signal miscalibration | A fillable negative-EV quote still loses money. | Positive recent walk-forward quoted-price EV using calibrated or shrunk fairs. |
+| 3 | Adverse fill selection | Filled rows have historically underperformed missed rows. | Positive filled-subset EV and non-toxic markouts for the exact quote rule. |
+| 4 | Small correlated samples | Stations, models, and sleeves often express the same weather-date risk. | Evaluate effective sample by market date/regime and use uncertainty bounds, not raw snapshot counts. |
+| 5 | Settlement mismatch | Research weather truth can differ from Polymarket settlement. | Venue-authoritative settlement linkage for every promoted market family. |
+| 6 | Capacity | Positive tiny fills do not prove `$50-$100` tradability. | Direct fill/miss evidence at the intended size. |
+| 7 | Portfolio concentration | Regional or model-common errors can hit several positions together. | Market-date/regime stress limits and incremental portfolio replay. |
+| 8 | Operational integrity | Gaps, clock drift, lag, backpressure, or storage growth can invalidate replay. | Collector health budget and invalid-data rules that fail closed. |
+
+## Current Decisions
+
+1. Keep funded trading paused.
+2. Continue broad research snapshots and outcome resolution.
+3. Stop adding model families merely to expand the leaderboard. New models need demonstrably different predictions or incremental information.
+4. Implement the shared active-universe market tape as Phase 3 of the execution rebuild.
+5. Treat the current candidate-token collector and shadow labeler as a prototype only.
+6. Keep the late HRRR-rich tuned dynamic and HRRR-v2 dynamic policies as the primary forward signal hypotheses. Keep the two-of-four agreement rule exploratory until frozen and replayed behind portfolio caps.
+7. Redesign the price sheet before shadow-to-funded promotion. Start from walk-forward calibrated probabilities and a market reference, with explicit uncertainty and toxicity haircuts.
+8. Evaluate passive price-making and a separately tagged stable-taker control from the same tape.
+
+## Promotion Standard
+
+The promotable unit is:
+
+```text
+signal policy + fair-value version + quote rule + cancellation rule + size
+```
+
+Normal funded sizing requires all of the following:
+
+- current-window and all-loaded selected replay are positive;
+- quoted-price replay is positive after calibration, costs, and haircuts;
+- continuous valid tape coverage exists from before decision through quote termination;
+- conservative/base shadow fills are positive; optimistic-only profitability is insufficient;
+- actual filled and filled-at-quote PnL are positive for controlled canaries;
+- filled rows do not materially underperform comparable missed rows;
+- post-fill markouts are not persistently toxic;
+- Polymarket settlement is authoritative and linked;
+- the result survives portfolio caps and market-date/regime concentration checks;
+- the tested size has direct evidence.
+
+Small funded orders may validate plumbing and replay fidelity, but they confer no capacity or promotion authority. `$50` and `$100` capacity claims require evidence at those sizes.
+
+## Kill And Pivot Rules
+
+- Kill a quote tactic when base-case filled EV is negative even though selected replay is positive.
+- Kill a signal sleeve when recent selected replay is negative before execution.
+- If passive execution is negative but the stable-taker control is positive, retain only the taker mechanism that passed.
+- If passive and stable-taker execution are both negative, stop that sleeve or venue instead of adding more retrospective filters.
+- Do not scale a result that depends on optimistic queue assumptions, extreme raw fairs, settlement mismatches, or a few correlated weather dates.
+
+## Audit Update Protocol
+
+Update the body of this document when the current assessment changes. Append one short entry below describing the evidence that caused the change; keep detailed generated tables in reproducible reports or scripts.
+
+## Audit Log
+
+- 2026-07-16: Created the living audit from the July 15 research collection review and the market-tape systems audit. Confirmed the research memory-growth prerequisite is resolved and approved Phase 3 market-tape implementation while keeping funded trading paused.

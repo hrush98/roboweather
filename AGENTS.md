@@ -12,6 +12,19 @@
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python`
   - Example: `/home/maxrush/miniconda3/envs/roboweather/bin/python -m pytest tests/test_live_execution.py`
 
+## Documentation architecture
+
+- Prefer a small set of living canonical documents over new one-off narrative reports:
+  - `docs/current-trading-system-audit.md`: current financial/systems verdict, durable evidence, open risks, and promotion blockers. Update the body in place and append a short audit-log entry.
+  - `docs/execution-rebuild-roadmap.md`: current phase sequence, status, and exit gates.
+  - `docs/implementation/`: active feature/sprint implementation contracts and acceptance checklists.
+  - `docs/hypotheses/`: dated economic or trading ideas, evidence requirements, falsification, and decision history. Keep the hypothesis separate from its implementation plan.
+  - `docs/live-trading-journal.md`: current funded state, sizing, risk, execution rules, and material live lessons only.
+  - `docs/changelog.md`: chronological completed system and workflow changes only.
+  - `reports/`: generated or ad hoc evidence. Reports are not canonical conclusions and remain uncommitted unless explicitly requested.
+- When analysis changes the system assessment, update `docs/current-trading-system-audit.md`. Update the roadmap only if phase status, sequencing, or gates changed; update the live journal only if funded state or live operating assumptions changed.
+- Do not create a new dated narrative audit when the conclusion can be incorporated into the living audit. Preserve detailed tables in a reproducible report or script and copy only durable conclusions into the canonical documents.
+
 ## Research SQLite analysis workflow
 
 - Prefer the active local research database for current analysis:
@@ -63,9 +76,11 @@
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/portfolio_promotion_report.py --db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite`
   - Add `--start-date YYYY-MM-DD` for recent-only reviews. Use `--no-depth` only for an upper-bound capacity diagnostic, not promotion evidence.
 
-## Shadow collection workflow
+## Legacy candidate-scoped shadow collection workflow
 
-- Steady-state adverse-selection collection is shadow-only. Do not register the bounded quote specs as live funded strategies, and do not infer live promotion from quote intent rows alone.
+- The current candidate-scoped collector is a plumbing prototype, not the Phase 3 shared market tape. It begins from policy-candidate tokens after candidate generation and its existing shadow labels are not promotion evidence.
+- Phase 3 design and acceptance are canonical in `docs/implementation/phase-3-market-tape-replay.md`. New collection work should follow that plan rather than expanding the candidate-scoped collector into another policy-specific data path.
+- Do not register the bounded quote specs as live funded strategies, and do not infer live promotion from quote intent or existing shadow outcome rows.
 - Current collection sequence for a dry-run session:
   - Run the live dry-run cycle so current candidate rows, price sheets, and `$50/$100` shadow quote intents are persisted.
   - Run CLOB candidate-token collection: `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/collect_candidate_clob_events.py --db /home/maxrush/.local/state/roboweather/live_trading.sqlite --max-seconds 900`
@@ -74,7 +89,7 @@
 - Use the live ledger health report to verify that current dry-run/live cycles can reconstruct candidates through price sheets, emitted useful-size quote specs, lifecycle states, book/feed coverage, persisted labels, and pending/available markout windows:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/shadow_collection_report.py --db /home/maxrush/.local/state/roboweather/live_trading.sqlite`
   - Add `--since-timestamp ISO_TS` for a specific dry-run session, and `--candidate-id LIVE_CANDIDATE_ID` to inspect a known row.
-- Healthy collection means the report shows policy candidates with token coverage, quote intents at both `$50` and `$100`, CLOB feed events, book snapshots, and shadow outcome labels. The report intentionally exits nonzero for missing token/feed/useful-size/outcome coverage unless `--no-fail` is supplied. It is an operational reconstruction gate, not a profitability gate.
+- A passing legacy health report means only that candidate-scoped plumbing rows can be reconstructed. It does not prove pre-signal coverage, continuous book validity, correct trade direction, hypothetical fills, or profitability.
 
 ## Continuous improvement workflow
 

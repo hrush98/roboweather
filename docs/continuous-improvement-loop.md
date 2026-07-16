@@ -6,22 +6,28 @@ The goal is recursive improvement: every meaningful live or research lesson shou
 
 ## Storage Model
 
-Use three layers, each with a different job:
+Use these canonical layers, each with a different job:
 
 | Layer | Location | Purpose |
 | --- | --- | --- |
+| Current audit | `docs/current-trading-system-audit.md` | Living financial/systems verdict, durable evidence, open risks, and current promotion blockers. |
+| Current roadmap | `docs/execution-rebuild-roadmap.md` | Living phase sequence, status, and exit gates. |
 | Live state and rationale | `docs/live-trading-journal.md` | What is live now, why it is live, current sizing/risk/execution rules, and material live lessons. |
 | Hypothesis and decision records | `docs/hypotheses/` | Proposed strategy, sizing, model, execution, or risk changes before or during evaluation. |
+| Implementation plans | `docs/implementation/` | Active feature architecture, sprint slices, and acceptance tests after a hypothesis is approved. |
 | Gates | Code/tests/scripts/docs, listed in this file | Durable checks that prevent known bad decisions from recurring. |
+| Generated evidence | `reports/` | Reproducible or ad hoc tables and analysis; never the canonical conclusion. |
 
 Do not put every hypothesis directly into the live trading journal. The journal should stay focused on live state and material lessons. Use `docs/hypotheses/` for structured hypotheses and decision records; link the relevant record from the journal when a hypothesis becomes live or materially changes live assumptions.
+
+Do not create a new one-off narrative audit for every review. Update the living audit and preserve detailed tables in a report or script. When an approved hypothesis becomes a build, keep its economic rationale in the hypothesis and move its engineering plan to `docs/implementation/`.
 
 ## Improvement Loop
 
 The required loop is:
 
 ```text
-Hypothesis -> Replay -> Live Canary -> Settlement Review -> Lesson -> Gate
+Hypothesis -> Causal Replay -> Controlled Canary -> Settlement Review -> Lesson -> Gate
 ```
 
 Each step should answer a different question:
@@ -29,8 +35,8 @@ Each step should answer a different question:
 | Step | Question |
 | --- | --- |
 | Hypothesis | What mechanism do we believe creates EV? |
-| Replay | Did it add EV after current stack order, caps, and depth? |
-| Live Canary | Does the signal survive actual market timing, fills, and settlement mechanics? |
+| Causal Replay | Did it add EV after current stack order, caps, causal market state, and conservative fill assumptions? |
+| Controlled Canary | Does the signal survive actual market timing, authoritative order lifecycle, fills, and settlement mechanics? |
 | Settlement Review | Was the miss or win due to forecast, policy selection, execution, risk caps, or settlement mismatch? |
 | Lesson | What should we change or remember? |
 | Gate | How do we make sure we do not repeat the error? |
@@ -114,6 +120,8 @@ Use `--start-date YYYY-MM-DD` for a recent-window review. Use `--no-depth` only 
 
 7. Update `docs/changelog.md` for meaningful system or workflow changes.
 
+8. Reconcile the conclusion into `docs/current-trading-system-audit.md`. Update `docs/execution-rebuild-roadmap.md` if phase status, sequence, or exit gates changed.
+
 ## Failure Mode Register
 
 Known failure modes that should be checked during review:
@@ -126,6 +134,8 @@ Known failure modes that should be checked during review:
 | Same station/date or bucket/side overconcentration | Apply station/date, station/date/side, exact bucket/side caps. |
 | Book-depth replay mismatch | Use recorded ask-sweep fillable fields; treat `--no-depth` as upper bound only. |
 | Snapshot depth treated as deterministic execution | Require fill-conditioned evidence from selected, filled, and unfilled live candidates before funded promotion. |
+| Candidate-scoped event collection treated as a causal market tape | Require policy-independent pre-signal token coverage under the Phase 3 implementation plan. |
+| Price changes or book touches treated as executed flow | Authoritative trade-direction tests and deterministic tape replay; fail closed on ambiguous or gapped intervals. |
 | Adverse live fill selection | Run the whole-chain truth report and reject or pause sleeves where filled-subset replay materially underperforms unfilled selected replay. |
 | Station allow-list leakage | Add tests around policy specs and live strategy plans. |
 | Market-family leakage | Assert `HIGH_TEMP` vs `LOW_TEMP` filters in tests and replay specs. |
@@ -138,7 +148,9 @@ Known failure modes that should be checked during review:
 
 ## Current Phase
 
-As of 2026-07-06, RoboWeather is in an execution-first phase. Funded live trading should remain paused except for explicitly approved tiny smoke tests. The operating record is `docs/hypotheses/2026-07-06-execution-first-phase.md`.
+As of 2026-07-16, RoboWeather is in Phase 3 of the execution rebuild: shared active-universe market-tape collection and deterministic quote replay. The research-loop memory prerequisite is resolved. Funded live trading remains paused.
+
+Current phase status and acceptance gates are canonical in `docs/execution-rebuild-roadmap.md` and `docs/implementation/phase-3-market-tape-replay.md`. The current financial and systems verdict is `docs/current-trading-system-audit.md`.
 
 Before any new funded sleeve, promotion, or size-up:
 
@@ -147,6 +159,8 @@ Before any new funded sleeve, promotion, or size-up:
 3. The filled subset must not materially underperform the unfilled selected subset.
 4. Any replay capacity claim must be downgraded by observed fill behavior or a documented fill-probability model.
 5. If the recent raw replay is negative, the sleeve stays stopped regardless of execution improvements.
+6. Existing candidate-scoped shadow labels do not count as fill evidence until their semantics are rebuilt and validated against the shared tape.
+7. Minimum-risk funded orders may validate plumbing after shadow reconstruction passes, but normal promotion requires direct useful-size evidence.
 
 ## Scheduled Review Cadence
 
@@ -212,12 +226,14 @@ Use this mapping:
 
 | EV lever | Item | Status |
 | --- | --- | --- |
+| System governance | Living audit and execution roadmap | Implemented in `docs/current-trading-system-audit.md` and `docs/execution-rebuild-roadmap.md`. |
 | Policy selection | Cap-aware portfolio replay gate | Implemented in `scripts/portfolio_promotion_report.py`. |
-| Sizing | Global low MVP `$25 -> $50` | Live default updated after positive portfolio replay. |
-| Forecast edge | HRRR inland late disagreement overlay | Promising research/canary candidate; needs more resolved inland sample. |
-| Calibration | Station/side/regime calibration report | Needed. |
-| Execution | Live fill attribution vs replay EV | Needed. |
-| Execution data | [Shared weather market tape](hypotheses/2026-07-16-shared-weather-market-tape.md) | Proposed after research-loop memory stabilization; collect each token once and reuse it across models and policies. |
+| Forecast edge | Freeze late HRRR-rich tuned dynamic and HRRR-v2 dynamic definitions | Forward shadow hypotheses only; six-date evidence is not promotion evidence. |
+| Calibration | Redesign quoteable fair/price sheet | Current scoped sheet failed the updated theoretical gate. |
+| Execution data | [Shared weather market tape](hypotheses/2026-07-16-shared-weather-market-tape.md) | Approved current phase; implementation plan in `docs/implementation/phase-3-market-tape-replay.md`. |
+| Execution truth | Correct fill, queue, cancellation, gap, and markout labels | Required in Phase 3 before using shadow outcomes as financial evidence. |
+| Funded validation | Plumbing canary, then `$50/$100` capacity tests | Blocked on Phase 3 and revised price-sheet gates. |
+| Portfolio risk | Market-date/regime concentration controls | Needed before normal sizing. |
 | Retrospective automation | `scripts/trading_retrospective_report.py` | Implemented for manual Sunday/Monday weekly review. |
 
 ## Closing A Hypothesis

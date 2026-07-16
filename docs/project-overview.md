@@ -1,10 +1,28 @@
 # Project Overview
 
-RoboWeather is a research-first system for U.S. same-day daily-high temperature markets. The current priority is discovering robust policy rules from live-collected forecasts, market prices, and official station outcomes before committing to live execution.
+RoboWeather is a research-first weather prediction-market system. The current priority is determining whether promising forecast signals can be converted into positive fill-conditioned PnL through causal market-data collection, conservative pricing, and controlled execution evidence.
+
+## Documentation Map
+
+Use these documents as the canonical entry points:
+
+| Question | Canonical document |
+| --- | --- |
+| What is the current financial/systems verdict? | `docs/current-trading-system-audit.md` |
+| What phase are we in and what gates come next? | `docs/execution-rebuild-roadmap.md` |
+| What is currently funded or paused? | `docs/live-trading-journal.md` |
+| Why might a strategy or infrastructure idea work? | Dated record under `docs/hypotheses/` |
+| How is the active feature being built and accepted? | Plan under `docs/implementation/` |
+| What changed chronologically? | `docs/changelog.md` |
+| Where do generated tables and ad hoc analysis go? | `reports/`, treated as non-canonical evidence |
+
+Update living documents in place. Do not create a new standalone audit report when new evidence can update the current audit, roadmap, hypothesis decision log, or live journal.
 
 ## Current Mode
 
-The active research loop is the main source of truth. It:
+Funded trading is paused. RoboWeather is in Phase 3 of the execution rebuild: shared active-universe market-tape collection and deterministic quote replay. The active research loop remains the signal and outcome source of truth; the market tape will become the execution-evidence source of truth after its validity gates pass.
+
+The research loop:
 
 - collects live prediction snapshots during the station-local entry window;
 - writes policy positions for first-eligible strategy hypotheses;
@@ -40,7 +58,8 @@ Recommended analysis sequence:
 4. Define candidate policy rules only after the broad snapshot analysis shows a stable pattern.
 5. Replay those rules into `research_policy_positions` with an explicit scope such as `station_date` for scorecards or `station_date_bucket_side_obs_delay` for opportunity-level diagnostics.
 6. Promote only a small number of explicit candidate policies to paper execution.
-7. Consider real-money execution only after paper trading validates both signal quality and execution mechanics.
+7. Treat raw replay as hypothesis evidence only.
+8. Require causal tape replay and controlled real-order validation before normal funded execution.
 
 `station_date` policy scope is a clean comparison layer: one first eligible position per station/date/family/policy. `station_date_bucket_side_obs_delay` is the broader opportunity-capture layer: one first eligible position per station/date/family/bucket/side/obs-delay/policy. Both can be rebuilt retroactively from `prediction_snapshots` for current policy families, including consensus groups when the required model snapshots exist.
 
@@ -76,7 +95,7 @@ write research and execution ledgers
 mark and settle existing positions
 ```
 
-The research ledger should remain valuable as an audit trail and analysis source, but it should not be the queue that drives live order submission. Execution should be driven by fresh in-memory candidates, with SQLite used for dedupe, state, risk, and audit history.
+The research ledger should remain valuable as an audit trail and analysis source, but it should not be the queue that drives live order submission. Execution should be driven by fresh candidates joined to causal market state, with durable storage used for dedupe, state, risk, replay, and audit history.
 
 Before real-money trading, run the integrated loop in `dry_run` or `paper_submit` mode. The rehearsal should exercise the same code path intended for live trading, with only the final submit adapter changed.
 
@@ -95,4 +114,4 @@ Before enabling live orders, require:
 - mark and settlement visibility;
 - a kill switch.
 
-Research mode remains the right default until a policy has enough resolved live evidence and the integrated execution path exists.
+Research mode remains the right default until the exact signal, fair-value version, quote/cancellation rule, and size pass the gates in `docs/current-trading-system-audit.md` and `docs/execution-rebuild-roadmap.md`.

@@ -1,5 +1,7 @@
 # Roadmap To $1000/Day EV
 
+Status: strategic capacity reference, not the current sprint roadmap. Current financial assessment and phase sequencing are maintained in `docs/current-trading-system-audit.md` and `docs/execution-rebuild-roadmap.md`. Where implementation status or gates conflict, those living documents are authoritative.
+
 This document is the strategic roadmap for scaling RoboWeather from a small live edge harvester into a portfolio engine that can plausibly reach `$1000/day` expected value.
 
 It is not the live operating journal. Use `docs/live-trading-journal.md` for the current live policy stack, sizing, risk caps, and execution lessons. Use this document for the research and engineering progression required before materially higher sizing is justified.
