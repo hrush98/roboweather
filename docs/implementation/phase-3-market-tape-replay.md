@@ -1,6 +1,6 @@
 # Phase 3 Market Tape And Replay Implementation Plan
 
-Status: Approved for implementation
+Status: Slice 1 in progress
 
 Last updated: 2026-07-16
 
@@ -235,6 +235,13 @@ Do not reuse the current candidate-token collector as the service boundary. Reus
 
 Exit: schema and resource budgets are reviewed, and a sample segment round-trips exactly.
 
+Implementation status, 2026-07-16:
+
+- Added immutable contracts for token registry entries, collector sessions, subscription generations, coverage intervals, raw event envelopes, book checkpoints, and replay inputs/outputs under `weather_trader/tape/`.
+- Added checksummed append-only JSONL segments with byte-offset stable event IDs, exact raw-payload replay, and fail-closed handling for truncated or modified records.
+- Added `scripts/benchmark_market_tape.py` to measure raw/gzip bytes per message, compression, append latency/throughput, replay throughput, and exact round-trip behavior on captured representative WebSocket JSONL.
+- Focused deterministic fixtures pass. Slice 1 remains open until representative live samples are captured, resource budgets are reviewed, and rotation/retention defaults are selected from those measurements.
+
 ### Slice 2: Active-Token Recorder
 
 - Build policy-independent weather-token discovery.
@@ -295,4 +302,5 @@ Exit: the report answers whether base-case fill-conditioned PnL is positive with
 
 ## Decision Log
 
+- 2026-07-16: Started Slice 1 with a separate `weather_trader.tape` boundary. The active segment format is checksummed canonical JSONL with stable byte-offset IDs; gzip is measured as a finalized-segment candidate but is not yet a locked retention choice.
 - 2026-07-16: Phase 3 approved after confirmation that the research-loop memory issue is resolved. Split the economic hypothesis from this implementation plan and made the shared tape the current execution-rebuild phase.
