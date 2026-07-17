@@ -1,8 +1,8 @@
 # Phase 3 Market Tape And Replay Implementation Plan
 
-Status: Recorder lifecycle path and deterministic book reconstruction validated; replay acceptance remains in progress
+Status: Recorder, deterministic book, and decision-join repository paths validated; host and replay acceptance remains in progress
 
-Last updated: 2026-07-16
+Last updated: 2026-07-17
 
 ## Feature Goal
 
@@ -292,12 +292,16 @@ Implementation status, 2026-07-16:
 
 Exit: a random decision can be reconstructed from observation availability through quote termination.
 
-Implementation status, 2026-07-16:
+Implementation status, 2026-07-17:
 
 - Added immutable decision timing and tape-join contracts with observation source/receipt time, model decision start/end, hypothesis activation, explicit latency, quote readiness, first visible token event, coverage verdict, and reconstruction hash.
 - Added a fail-closed causal join that rejects time-travel timestamp ordering and pre-activation decisions, applies the configured latency arm, selects the first token event at or after quote readiness, and requires one continuous `VALID` coverage interval from the configured pre-signal window through that event.
 - Added persisted join rows and `scripts/join_market_tape_decision.py` for versioned JSON decision records. Synthetic cross-time fixtures prove valid joins and known coverage breaks.
-- Slice 4 remains open until the generic contract is mapped to an actual research/Price Sheet V2 decision export and a recorded decision is reconstructed through its quote termination boundary.
+- Added a read-only execution-ledger adapter that maps a persisted postable price-sheet quote, its live candidate, and all source prediction snapshots into the immutable decision contract. It derives the frozen price-sheet/signal/quote-arm version, uses persisted availability timestamps, and selects observed shadow cancellation or declared GTD expiry as the quote termination boundary.
+- Corrected the quote-ready reconstruction to stop at or before quote readiness. The first later event remains an audit reference but is no longer included in the causal book hash.
+- Extended join persistence with source references, the exact coverage interval, raw-tape watermark, quote termination, last token event at/before termination, and a separate termination book hash. A join now fails closed when raw segments have not reached termination or when continuous `VALID` coverage ends early.
+- An execution-ledger integration fixture reconstructs a persisted Price Sheet V2-style quote from source observation through GTD termination, including a post-readiness book change and a session watermark at expiry. Backward-compatible catalog migration and early-cancel handling are covered.
+- Slice 4 repository implementation is complete. The exit evidence remains open until the operator runs the adapter against one real persisted quote and matching captured tape segments and records the successful reconstruction.
 
 ### Slice 5: Fill Bounds And Markouts
 
@@ -333,6 +337,7 @@ Exit: the report answers whether base-case fill-conditioned PnL is positive with
 
 ## Decision Log
 
+- 2026-07-17: Completed the Slice 4 repository path from persisted execution quote/source snapshots through a strictly causal quote-ready book and continuous termination-boundary coverage. Kept the exit evidence open for one real host quote/tape reconstruction.
 - 2026-07-16: Started Slice 4 with an immutable, latency-aware causal decision join and continuous pre-signal coverage gate. Kept the slice open pending a real decision-export integration and recorded decision replay.
 - 2026-07-16: Completed the Slice 3 repository exit gate after online checkpointing produced 616 valid token books with zero reconstruction errors and arbitrary-time reconstruction passed on the captured segment. Kept long-run recorder capacity separate and open.
 - 2026-07-16: Started Slice 3 with deterministic full-book/delta reconstruction and persisted state hashes. Rebuilt all 616 initial books in the bounded host segment twice; kept arbitrary-time and long-session checkpoint gates open.
