@@ -4,6 +4,7 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-07-17
 
+- Documented the proposed station-specific forecast-edge program. Preserved the full data-source strategy in `reports/`, added a falsifiable hypothesis and proposed implementation contract, and updated the living audit to require settlement/sensor truth reconciliation plus causal identical-coverage skill gates before WeatherNext, NBM, MADIS/upwind, or GOES features can affect pricing. No live strategy, funded state, or execution sequencing changed.
 - Completed the repository side of Phase 3 Slice 4: persisted execution-ledger price-sheet quotes now export read-only into immutable decision timing, quote-ready reconstruction excludes future events, coverage must remain continuously valid through observed cancel/GTD termination, and joins persist source/coverage/event/watermark/termination references. One real host quote/tape reconstruction remains before the slice evidence gate closes.
 
 ## 2026-07-16
