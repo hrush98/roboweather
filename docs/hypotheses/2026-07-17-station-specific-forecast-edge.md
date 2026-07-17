@@ -2,9 +2,9 @@
 
 ## Status
 
-Research. The hypothesis and implementation contract are documented; no new forecast source is approved for funded use.
+Research implementation approved. No new forecast source is approved for production pricing or funded use.
 
-The full strategic analysis is preserved in `reports/forecast-edge-data-source-strategy-2026-07-17.md`. Proposed architecture and acceptance work live in `docs/implementation/forecast-edge-data-program.md`.
+The full strategic analysis is preserved in `reports/forecast-edge-data-source-strategy-2026-07-17.md`. Approved research architecture and acceptance work live in `docs/implementation/forecast-edge-data-program.md`. Its full-market-lifecycle consumer is specified in `docs/implementation/full-market-lifecycle-trading.md`.
 
 ## Hypothesis
 
@@ -30,7 +30,7 @@ Public data are not assumed to be alpha merely because they are added. The hypot
 - Stations/regimes: current US airport stations, with inland/coastal and cloud/front regimes reported separately
 - Side: full integer outcome distribution supporting both `BUY_YES` and `BUY_NO`
 - Entry band: not a signal-selection constraint during forecast evaluation
-- Local window: separate early, morning, midday, late, and peak-passed horizons; current `10:00-15:00` local window is the initial same-day focus
+- Local window: D-1 open, D-1 revision, D0 pre-dawn, morning, midday, late, and peak-passed horizons; the current late window remains the initial pricing/execution control
 - Model/source: existing METAR/HRRR baseline plus settlement truth, WeatherNext 2, NBM, high-frequency ASOS/MADIS, upwind residuals, and GOES radiation/cloud observations
 - Policy/sleeve name: none; this is a forecast-layer hypothesis, not a live sleeve
 
@@ -91,3 +91,4 @@ Review after the settlement-source audit, after the first WeatherNext/NBM identi
 
 - 2026-07-17: Created the forecast-edge hypothesis from the data-source strategy review. Prioritized target fidelity, exact high-so-far, multi-model probabilistic guidance, spatial residuals, and observed radiation surprise; explicitly deprioritized power load and pedestrian proxies.
 - 2026-07-17: Split the proposed build and acceptance sequence into `docs/implementation/forecast-edge-data-program.md`; no production or funded-trading change was authorized.
+- 2026-07-17: Approved research implementation and extended the forecast process from first listing/D-1 through settlement. Each lifecycle horizon still requires separate causal calibration and trading evidence.

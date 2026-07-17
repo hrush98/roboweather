@@ -6,7 +6,7 @@ Current workstream: V2a outcome pricing
 
 V2b dependency: validated Phase 3 tape windows and replay features
 
-Last updated: 2026-07-16
+Last updated: 2026-07-17
 
 ## Feature Goal
 
@@ -32,6 +32,7 @@ signal policy
 - V2b consumes valid Phase 3 book/tape windows and can begin incrementally as those features are available.
 - Phase 4 funded validation remains blocked until one exact V2a + V2b configuration passes shadow replay.
 - Phase 5 learned quote policy remains out of scope; V2b starts as a conservative, interpretable overlay.
+- The approved full-market-lifecycle program will extend this contract one horizon at a time after the initial late pilot; it is specified in `docs/implementation/full-market-lifecycle-trading.md`.
 
 ## Why V1 Is Being Replaced
 
@@ -66,6 +67,22 @@ Initial trading scope:
 - no funded execution.
 
 The exact model IDs, station allow-list, decision window, strategy bucket, side, entry eligibility, dedupe key, and activation timestamp must be stored in immutable signal-spec records before forward evaluation begins.
+
+## Full-Lifecycle Extension
+
+The initial late-window pilot remains unchanged and is the immediate critical path. It becomes the control for later day-before and early-day research.
+
+An earlier horizon is not enabled by widening the pilot's clock window. Before it enters Price Sheet V2, it needs:
+
+- a frozen `lifecycle_horizon` and source-vintage/forecast-revision lineage;
+- a horizon-specific or explicitly pooled calibrator with held-out evidence;
+- a horizon-appropriate uncertainty reserve;
+- an inventory-risk reserve and aggregate capacity interaction;
+- frozen quote activation, update, cancellation, replacement, and exit rules;
+- valid market tape from first listing through quote termination;
+- a separate shadow activation and promotion decision.
+
+Potential horizons are `d1_open`, `d1_update`, `d0_predawn`, `d0_morning`, `d0_midday`, and `d0_late`. They must be added and evaluated one at a time. Passing one does not authorize the others.
 
 ## System Schematic
 
@@ -108,6 +125,7 @@ Required fields:
 - exact model artifact ID or consensus members;
 - market family, station/regime scope, side, and bucket eligibility;
 - local decision window and observation-delay rules;
+- lifecycle horizon, predecessor forecast distribution, and source-revision rule;
 - strategy bucket and edge/entry eligibility;
 - first-entry/dedupe scope;
 - outcome-label source;
@@ -143,6 +161,7 @@ execution-adjusted maximum quote price
 size/capacity limit
 TTL/GTD expiry
 cancellation rules
+inventory state and inventory-risk reserve
 eligible/skip reason
 ```
 
@@ -532,4 +551,5 @@ Required integration tests:
 
 ## Decision Log
 
+- 2026-07-17: Approved a future full-market-lifecycle extension one frozen horizon at a time. Kept the initial late pilot unchanged as the immediate critical path and required separate forecast, calibration, inventory, quote-update/cancel, exit, and tape evidence for every earlier horizon.
 - 2026-07-16: Approved a two-part Price Sheet V2 plan. V2a outcome pricing is the immediate critical path while Phase 3 tape collection runs; V2b execution overlay begins on valid tape windows and remains conservative/interpretable until Phase 4 actual-order evidence exists.

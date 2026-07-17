@@ -1,14 +1,14 @@
 # Forecast Edge Data Program Implementation Plan
 
-Status: Proposed research implementation; not approved for production pricing or funded trading
+Status: Approved for research implementation; not approved for production pricing or funded trading
 
 Last updated: 2026-07-17
 
 ## Feature Goal
 
-Build a causal, versioned forecast-research layer that estimates a coherent probability distribution for the resolution-source-reported daily high at a specific station and decision time.
+Build a causal, versioned forecast-research layer that estimates a coherent probability distribution for the resolution-source-reported daily high at a specific station from day-before/first-listing conditions through settlement.
 
-The economic rationale and falsification criteria live in `docs/hypotheses/2026-07-17-station-specific-forecast-edge.md`. The full source review is preserved in `reports/forecast-edge-data-source-strategy-2026-07-17.md`. Execution phase sequencing remains in `docs/execution-rebuild-roadmap.md`; this proposed work does not change the current Price Sheet V2a critical path.
+The economic rationale and falsification criteria live in `docs/hypotheses/2026-07-17-station-specific-forecast-edge.md`. The full source review is preserved in `reports/forecast-edge-data-source-strategy-2026-07-17.md`. The full-lifecycle consumer and horizon contract live in `docs/implementation/full-market-lifecycle-trading.md`. Execution phase sequencing remains in `docs/execution-rebuild-roadmap.md`; this approved research work does not change the current Price Sheet V2a critical path.
 
 ## Non-Goals
 
@@ -60,6 +60,8 @@ Every forecast or observation record must carry, where applicable:
 - publication/dissemination time;
 - local UTC receipt time;
 - valid time and forecast lead;
+- lifecycle horizon and station-local decision bucket;
+- predecessor source vintage or forecast distribution when the record is a revision;
 - station or grid coordinates and elevation;
 - member identifier;
 - raw field/variable name and units;
@@ -90,6 +92,7 @@ Every scored forecast must produce one normalized distribution over an integer t
 
 - forecast version and training cutoff;
 - decision timestamp and horizon/local-time bucket;
+- immutable predecessor distribution and revision magnitude;
 - latent physical-high probabilities;
 - resolution-source-reported-high probabilities;
 - expected high, quantiles, spread, and peak-already-occurred probability;
@@ -145,11 +148,11 @@ Retain ensemble members rather than only mean/max summaries. Extract a small gri
 - forecast-cycle revisions;
 - WeatherNext-versus-HRRR disagreement.
 
-Because WeatherNext is six-hourly and coarse relative to an airport maximum, learn a causal localization/diurnal correction rather than treating its nearest-grid maximum as truth.
+WeatherNext is initially a D-1/opening probabilistic prior and forecast-revision source, not a direct airport-maximum oracle. Because it is six-hourly and coarse relative to an airport maximum, learn a causal localization/diurnal correction rather than treating its nearest-grid maximum as truth.
 
 ### NBM
 
-Collect deterministic, standard-deviation, percentile, and available maximum-temperature probability products. Record operational version changes and use NBM as both a candidate input and a public probabilistic benchmark.
+Collect deterministic, standard-deviation, percentile, and available maximum-temperature probability products. Record operational version changes and use NBM as both a candidate input and a public probabilistic benchmark, especially for D-1 and D0 pre-dawn horizons.
 
 ### Exit Gate
 
@@ -328,13 +331,13 @@ Passing this gate authorizes pricing research only. It does not authorize live f
 ### Slice 1: Forecast Source Catalog
 
 - Add source-vintage contracts and separate runtime catalog/cache.
-- Implement bounded forward collectors for NBM/GLMP/RRFS metadata and selected fields.
+- Implement bounded forward collectors for WeatherNext, NBM/GLMP, HRRR/RRFS metadata, and selected fields beginning by first supported market listing.
 - Establish raw retention, version-change, and failure telemetry.
 
 ### Slice 2: WeatherNext/NBM Benchmark
 
 - Backfill WeatherNext historical members for the scoped stations/fields.
-- Materialize causal station distributions.
+- Materialize causal D-1 opening, D-1 revision, and D0 station distributions.
 - Run identical-coverage baseline and market-relative reports.
 
 ### Slice 3: Remaining-Heating Distribution
@@ -357,7 +360,7 @@ Passing this gate authorizes pricing research only. It does not authorize live f
 ### Slice 6: Price Sheet Candidate
 
 - Freeze one accepted forecast version.
-- Join it to Price Sheet V2a without changing signal selection.
+- Join it to Price Sheet V2a at one frozen lifecycle horizon without changing signal selection.
 - Re-run selected, quoted-price, and market-relative gates before any execution experiment.
 
 ## Proposed Module Boundaries
@@ -398,11 +401,20 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
 - [ ] Canonical target/high-so-far semantics decided.
 - [ ] Source-vintage contract implemented.
 - [ ] Separate runtime catalog/cache selected and tested.
+- [ ] Forecast collection begins by first supported market listing.
 - [ ] WeatherNext historical station distributions materialized.
 - [ ] NBM probabilistic baseline collected and scored.
+- [ ] D-1 opening and revision distributions pass causal horizon-specific evaluation.
 - [ ] Identical-coverage and market-relative report implemented.
 - [ ] Additional-heating distribution validated.
 - [ ] MADIS/upwind residual ablation completed.
 - [ ] GOES cloud/radiation ablation completed.
 - [ ] One forecast version passes pricing-research acceptance.
 - [ ] Price Sheet V2 integration reviewed separately.
+
+## Decision Log
+
+- 2026-07-17: Approved the forecast-data program for research implementation while keeping all new sources out of production pricing and funded trading.
+- 2026-07-17: Extended the output contract from a single intraday decision window to causally versioned D-1-through-settlement distributions and forecast revisions.
+- 2026-07-17: Positioned WeatherNext and NBM as day-before probabilistic priors, with short-range models and observations carrying more weight as the lifecycle advances.
+- 2026-07-17: Kept the late Price Sheet V2a pilot as the immediate pricing critical path and required earlier horizons to enter one at a time.

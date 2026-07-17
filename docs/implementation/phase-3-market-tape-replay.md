@@ -6,11 +6,13 @@ Last updated: 2026-07-17
 
 ## Feature Goal
 
-Build one causal, token-level weather market tape that can replay taker and passive quote tactics without requiring every model, price, size, TTL, and cancellation combination to be materialized in real time.
+Build one causal, token-level weather market tape from first listing through closure/settlement that can replay taker and passive quote tactics without requiring every model, price, size, TTL, and cancellation combination to be materialized in real time.
 
 This document is the implementation contract. The economic rationale and falsification criteria live in `docs/hypotheses/2026-07-16-shared-weather-market-tape.md`; phase sequencing lives in `docs/execution-rebuild-roadmap.md`.
 
 The current pricing consumer is specified in `docs/implementation/price-sheet-v2.md`. V2a can proceed independently; V2b must use only tape windows that pass this document's validity contracts.
+
+The lifecycle expansion consuming this tape is specified in `docs/implementation/full-market-lifecycle-trading.md`. It adds no new fill assumption: every horizon must still satisfy this document's continuous-coverage and replay gates.
 
 ## Non-Goals
 
@@ -66,10 +68,10 @@ Required fields:
 - token identifier and YES/NO outcome identity;
 - station, market date, market family, and bucket bounds;
 - sibling token/market relationships;
-- discovery timestamp, active interval, and resolution source;
+- venue listing time when available, local discovery timestamp, discovery lag, active interval, and resolution source;
 - subscription state and last health status.
 
-Token discovery must be independent of model or policy selection.
+Token discovery must be independent of model or policy selection, include future-dated active weather markets, and begin as close to first listing as the venue interfaces permit. Late discovery must be retained as a coverage limitation rather than backfilled implicitly.
 
 ### Event Envelope
 
@@ -101,6 +103,8 @@ Track intervals by token and collector session:
 - `CLOSED`.
 
 A replay may receive a fill label only when the required interval is valid from before quote availability through fill, cancellation, or expiry.
+
+Lifecycle research additionally requires the coverage ledger to distinguish first-listing coverage, late discovery, closure, and settlement. A valid short quote interval must not be reported as a complete-market-lifecycle capture.
 
 ### Decision Join
 
@@ -186,6 +190,7 @@ The broad quote grid is exploratory. Forward confirmation requires a frozen smal
 Initial arm families:
 
 - conservative post-only quote derived from the revised price sheet;
+- separately versioned D-1 open, D-1 post-update, D0 early, and D0 late-control arms when their forecast gates pass;
 - one or two safe aggressiveness offsets;
 - short and medium TTL/cancellation variants only when predeclared;
 - separately tagged stable-visible-ask taker control;
@@ -248,7 +253,7 @@ Implementation status, 2026-07-16:
 
 ### Slice 2: Active-Token Recorder
 
-- Build policy-independent weather-token discovery.
+- Build policy-independent discovery of current and future-dated active weather tokens from first listing.
 - Add dynamic subscribe/unsubscribe and reconnect supervision.
 - Persist raw segments and session/catalog metadata through a bounded queue.
 - Add receipt-lag, gap, queue-depth, memory, and disk telemetry.
@@ -322,8 +327,10 @@ Exit: the report answers whether base-case fill-conditioned PnL is positive with
 
 ## Acceptance Checklist
 
-- [ ] Policy-independent token discovery covers the supported weather universe.
+- [ ] Policy-independent token discovery covers current and future-dated supported weather markets.
+- [ ] Listing/discovery lag is measured and complete-lifecycle claims begin at actual coverage.
 - [ ] Subscription begins before candidate generation and updates dynamically.
+- [ ] Valid coverage spans at least one complete listing-to-close lifecycle per supported station family.
 - [ ] Memory, disk, queue depth, and receipt lag remain within explicit budgets.
 - [ ] Raw events survive restart and parser rebuilds.
 - [ ] Coverage gaps invalidate affected replay intervals.
@@ -337,6 +344,7 @@ Exit: the report answers whether base-case fill-conditioned PnL is positive with
 
 ## Decision Log
 
+- 2026-07-17: Extended the acceptance target to explicit first-listing-through-close/settlement collection, including future-dated weather markets, lifecycle discovery-lag reporting, and horizon-tagged forward arms. Existing fill-validity requirements remain unchanged.
 - 2026-07-17: Completed the Slice 4 repository path from persisted execution quote/source snapshots through a strictly causal quote-ready book and continuous termination-boundary coverage. Kept the exit evidence open for one real host quote/tape reconstruction.
 - 2026-07-16: Started Slice 4 with an immutable, latency-aware causal decision join and continuous pre-signal coverage gate. Kept the slice open pending a real decision-export integration and recorded decision replay.
 - 2026-07-16: Completed the Slice 3 repository exit gate after online checkpointing produced 616 valid token books with zero reconstruction errors and arbitrary-time reconstruction passed on the captured segment. Kept long-run recorder capacity separate and open.

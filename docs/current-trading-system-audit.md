@@ -8,7 +8,7 @@ Last reviewed: 2026-07-17
 
 ## Current Verdict
 
-RoboWeather is an execution-first research system with funded trading paused. The immediate objective is to determine whether promising weather signals can be converted into positive fill-conditioned PnL at useful size. A parallel forecast-edge research track is now warranted because the fresh configured portfolio failed before execution and broad recent model fairs were overconfident.
+RoboWeather is an execution-first research system with funded trading paused. The immediate objective is to determine whether promising weather signals can be converted into positive fill-conditioned PnL at useful size. A parallel forecast-edge and full-market-lifecycle research track is now approved because the fresh configured portfolio failed before execution, broad recent model fairs were overconfident, and waiting until late intraday may forfeit earlier liquidity and price-discovery opportunities.
 
 The shared weather market tape is reported built and running, with acceptance and replay evidence accumulating. It can remove policy-specific collection bias and make causal taker/passive replay possible, but it does not itself prove forecast alpha, exact passive fills, capacity, or profitability. The immediate implementation priority is Price Sheet V2a; V2b will consume valid tape windows.
 
@@ -18,6 +18,7 @@ Current confidence by layer:
 | --- | --- | --- |
 | Research collection | Broad snapshot collection is useful and operational. The previous memory-growth blocker is resolved. | Continue collection. |
 | Forecast and settlement truth | Existing METAR/HRRR point features are rich, but the IEM maximum used for research truth has not been reconciled to Weather Underground/venue settlement, and no new ensemble/spatial source has passed incremental-skill gates. | Audit target fidelity first; then test WeatherNext/NBM, spatial residuals, and observed radiation on identical causal rows. |
+| Full-market-lifecycle edge | Morning snapshots show more displayed depth than late afternoon, but current data do not establish D-1 traded volume, passive fills, round-trip capacity, or an early calibrated forecast. | Collect from first listing and test separate D-1/early arms against the frozen late control. |
 | Current configured portfolio | Failed the fresh July 9-14 cap-aware replay. | Do not restart it. |
 | New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
 | Fair-value/price sheet | Existing scoped price sheet failed its updated theoretical gate. | Redesign around walk-forward calibration and market-aware shrinkage. |
@@ -37,6 +38,7 @@ Durable conclusions from that review:
 - HRRR-rich tuned dynamic late and HRRR-v2 dynamic late were the most stable new standardized signal candidates, but their strongest fresh evidence covers only six weather dates.
 - Broad recent model fairs remained overconfident. New price sheets should use walk-forward empirical calibration or market-aware shrinkage rather than raw model fairs.
 - Static ask depth was useful for triage but did not establish actual or passive fillability.
+- A deduplicated snapshot diagnostic since June 1 found mean displayed `$50` ask-sweep fillable notional of about `$46.94` at station-local 07, `$39.61` at 12, and `$27.84` at 17; corresponding full-`$50` rates were `26.7%`, `16.4%`, and `1.1%`. This supports earlier collection but is not actual volume or fill evidence, and current snapshots do not cover D-1 adequately.
 - The METAR+HRRR tuned-dynamic artifact was behaviorally identical to its HRRR-rich counterpart in the fresh window and must not be counted as independent confirmation.
 - The current US training/resolution path defines the daily high as the maximum IEM `tmpf` report while active markets identify Weather Underground station history as their resolution source. Source equivalence is plausible but unproven near one-degree bucket boundaries.
 
@@ -50,6 +52,7 @@ Evidence source: `reports/research-collection-analysis-2026-07-15.md`. That file
 - The documentation already distinguishes selected replay, filled replay, actual PnL, and venue settlement.
 - The new market-tape hypothesis correctly moves collection from model/policy-specific rows to a reusable token-level event stream.
 - The current weather feature stack is a credible point-observation/HRRR baseline, which makes controlled source ablation possible; the next forecast gains should come from target fidelity, probabilistic ensembles, spatial residuals, and observed heating surprise rather than more model variants over the same inputs.
+- The approved lifecycle design connects forecast revisions, first-listing tape, conservative price sheets, quote cancellation/repricing, and inventory/exit replay without pretending that the current late model can simply run a day earlier.
 
 ## Open Risks And Required Gates
 
@@ -63,6 +66,7 @@ Evidence source: `reports/research-collection-analysis-2026-07-15.md`. That file
 | 6 | Capacity | Positive tiny fills do not prove `$50-$100` tradability. | Direct fill/miss evidence at the intended size. |
 | 7 | Portfolio concentration | Regional or model-common errors can hit several positions together. | Market-date/regime stress limits and incremental portfolio replay. |
 | 8 | Operational integrity | Gaps, clock drift, lag, backpressure, or storage growth can invalidate replay. | Collector health budget and invalid-data rules that fail closed. |
+| 9 | Lifecycle stale-quote and inventory risk | D-1 quotes can be adversely selected around scheduled forecast releases, while filled inventory cannot be canceled and may be costly to exit. | Horizon-specific uncertainty/inventory reserves, release-aware cancel/reprice replay, exit-versus-hold evidence, and aggregate capacity caps. |
 
 ## Current Decisions
 
@@ -74,15 +78,17 @@ Evidence source: `reports/research-collection-analysis-2026-07-15.md`. That file
 6. Keep the late HRRR-rich tuned dynamic and HRRR-v2 dynamic policies as the primary forward signal hypotheses. Keep the two-of-four agreement rule exploratory until frozen and replayed behind portfolio caps.
 7. Implement `docs/implementation/price-sheet-v2.md`: V2a walk-forward outcome pricing now, then V2b execution reductions/skips on valid tape windows.
 8. Evaluate passive price-making and a separately tagged stable-taker control from the same tape.
-9. Run the proposed forecast-edge program in parallel without changing the execution critical path: target/sensor truth audit first, then identical-coverage WeatherNext/NBM benchmarks, high-frequency spatial residuals, and GOES radiation/cloud surprise.
+9. Run the approved research-only forecast-edge program in parallel without changing the execution critical path: target/sensor truth audit first, then identical-coverage WeatherNext/NBM benchmarks, high-frequency spatial residuals, and GOES radiation/cloud surprise.
 10. Keep weather-only probability, settlement mapping, market-aware calibration, and execution adjustment separately versioned. No new forecast source enters funded pricing until it demonstrates causal incremental skill.
+11. Extend research and collection to the full market lifecycle. Treat D-1 open, D-1 revision, D0 early, intraday, and late as separate horizons; add them one at a time behind forecast, tape, quote, inventory, exit, and portfolio gates.
 
 ## Promotion Standard
 
 The promotable unit is:
 
 ```text
-signal policy + fair-value version + quote rule + cancellation rule + size
+lifecycle horizon + signal/forecast version + fair-value version
++ quote/update/cancellation/exit rule + inventory cap + size
 ```
 
 Normal funded sizing requires all of the following:
@@ -90,10 +96,12 @@ Normal funded sizing requires all of the following:
 - current-window and all-loaded selected replay are positive;
 - quoted-price replay is positive after calibration, costs, and haircuts;
 - continuous valid tape coverage exists from before decision through quote termination;
+- first-listing and D-1 claims use actual lifecycle coverage, not a later snapshot extrapolation;
 - conservative/base shadow fills are positive; optimistic-only profitability is insufficient;
 - actual filled and filled-at-quote PnL are positive for controlled canaries;
 - filled rows do not materially underperform comparable missed rows;
 - post-fill markouts are not persistently toxic;
+- early filled inventory survives forecast-release markouts and its declared exit-versus-hold rule;
 - Polymarket settlement is authoritative and linked;
 - the result survives portfolio caps and market-date/regime concentration checks;
 - the tested size has direct evidence.
@@ -117,3 +125,4 @@ Update the body of this document when the current assessment changes. Append one
 - 2026-07-16: Created the living audit from the July 15 research collection review and the market-tape systems audit. Confirmed the research memory-growth prerequisite is resolved and approved Phase 3 market-tape implementation while keeping funded trading paused.
 - 2026-07-16: Recorded operator confirmation that Phase 3 is built and running, with exit evidence still accumulating. Made Price Sheet V2a the current implementation priority and approved the V2b tape-overlay plan.
 - 2026-07-17: Added the station-specific forecast-edge research track after reviewing the existing rich METAR/HRRR feature baseline and identifying unresolved IEM-versus-Weather-Underground/venue target fidelity. Prioritized truth reconciliation, WeatherNext/NBM probabilistic baselines, spatial residuals, and observed radiation surprise without changing funded status or the execution critical path.
+- 2026-07-17: Approved full-market-lifecycle research and collection from first listing through settlement. Added horizon-specific forecast, repricing, inventory, exit, tape, and promotion gates while preserving the late Price Sheet V2a pilot as the immediate critical path and keeping funded trading paused.

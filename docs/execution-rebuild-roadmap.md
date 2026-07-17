@@ -6,10 +6,10 @@ Last updated: 2026-07-17
 
 ## Objective
 
-Establish whether an exact weather signal can be traded through an exact execution tactic at useful size with positive net, settlement-aligned PnL.
+Establish whether an exact weather signal can be traded through an exact execution tactic at useful size with positive net, settlement-aligned PnL across the observable market lifecycle.
 
 ```text
-forecast signal
+market listing + causal forecast state
 -> calibrated quoteable fair
 -> causal market state
 -> quote/taker decision
@@ -21,7 +21,9 @@ forecast signal
 
 ## Current Phase
 
-The Phase 3 market-tape recorder now has repository-validated rotation, reconnect/gap semantics, resource telemetry, strict health checks, deterministic arbitrary-time book reconstruction, and a latency-aware causal join from persisted execution-ledger quotes through GTD/cancel termination. One real host quote/tape reconstruction, complete-lifecycle capacity evidence, and fill replay remain open. Price Sheet V2a can continue independently; V2b will consume only valid Phase 3 tape windows. Funded trading remains paused.
+The Phase 3 market-tape recorder now has repository-validated rotation, reconnect/gap semantics, resource telemetry, strict health checks, deterministic arbitrary-time book reconstruction, and a latency-aware causal join from persisted execution-ledger quotes through GTD/cancel termination. One real host quote/tape reconstruction, complete-lifecycle capacity evidence, and fill replay remain open. Price Sheet V2a can continue independently; V2b will consume only valid Phase 3 tape windows.
+
+A full-market-lifecycle forecast/data program is approved as a parallel research build. It extends collection to first listing and builds distinct D-1, early-day, intraday, and late distributions and tactics. It does not change the current critical path: the bounded late Price Sheet V2a pilot remains first, with earlier horizons added one at a time after their forecast, tape, inventory, and execution gates pass. Funded trading remains paused.
 
 Canonical records:
 
@@ -29,6 +31,9 @@ Canonical records:
 - Economic hypothesis: `docs/hypotheses/2026-07-16-shared-weather-market-tape.md`
 - Tape implementation/acceptance: `docs/implementation/phase-3-market-tape-replay.md`
 - Active pricing implementation: `docs/implementation/price-sheet-v2.md`
+- Forecast-data implementation: `docs/implementation/forecast-edge-data-program.md`
+- Full-lifecycle implementation: `docs/implementation/full-market-lifecycle-trading.md`
+- Full-lifecycle hypothesis: `docs/hypotheses/2026-07-17-full-market-lifecycle-trading.md`
 - Funded operating state: `docs/live-trading-journal.md`
 
 ## Phase Status
@@ -39,6 +44,7 @@ Canonical records:
 | 1. Quoteable fair/price sheet | Convert model output into a conservative maximum price. | V2a current implementation priority | Positive walk-forward quoted-price EV without extreme uncalibrated fairs. |
 | 2. Shadow quote construction | Generate auditable quote intents and cancellation metadata. | Plumbing prototype complete | Deterministic intent construction tests pass. No profitability claim. |
 | 3. Shared market tape and replay | Collect pre-signal active-universe market events and replay quote tactics causally. | Recorder/book/join repository paths validated; host join evidence, long-run collection, and fill replay remain open | Tape validity, deterministic book replay, conservative fill bounds, and forward shadow reporting pass. |
+| F. Full-lifecycle forecast/data foundation | Observe weather and market state from first listing and price horizon-specific distributions. | Approved parallel research build; no production consumer | Venue-aligned truth, causal D-1 sources, first-listing tape, horizon calibration, and inventory-aware replay pass. |
 | 4. Funded validation | Validate replay fidelity and useful-size fill-conditioned PnL with controlled real orders. | Blocked on validated V2a + V2b configuration | Plumbing canary passes, then `$50` and `$100` size-specific evidence passes. |
 | 5. Learned quote policy and sizing | Select quote/skip/size from calibrated signal and microstructure state. | Future | Sufficient clean Phase 3/4 data and stable out-of-sample improvement. |
 
@@ -58,6 +64,26 @@ Canonical records:
 
 The detailed contracts, module boundaries, slices, tests, and acceptance gates are in `docs/implementation/price-sheet-v2.md`.
 
+## Full-Market-Lifecycle Expansion
+
+The intended steady state is a sequence of separately versioned horizons:
+
+```text
+D-1 open -> D-1 forecast revision -> D0 pre-dawn/morning
+-> D0 midday observations -> D0 late remaining heating -> settlement
+```
+
+The expansion follows these gates:
+
+1. Observe current and future-dated weather markets from first listing and measure actual lifecycle liquidity and price discovery.
+2. Build causally timestamped, station-specific D-1 distributions from WeatherNext/NBM and eligible short-range sources.
+3. Extend Price Sheet V2 one horizon at a time with separate calibration and uncertainty/inventory reserves.
+4. Replay quote activation, scheduled-release cancellation/repricing, filled inventory, exit, and hold-to-settlement behavior.
+5. Freeze one exact early-horizon shadow arm and compare it with the late control under shared portfolio caps.
+6. Request controlled funded validation only for the exact horizon, tactic, inventory cap, exit rule, and size that pass.
+
+The complete implementation contract is `docs/implementation/full-market-lifecycle-trading.md`.
+
 ## Phase 3 Workstreams
 
 1. Active-universe token discovery independent of current policies.
@@ -73,7 +99,7 @@ The detailed schema, module boundaries, sprint slices, and acceptance tests are 
 
 ## Phase 3 Exit Gates
 
-- The full supported active weather-token universe remains subscribed through a complete market lifecycle.
+- The full supported current and future-dated active weather-token universe is discovered near first listing and remains subscribed through a complete market lifecycle; discovery lag is reported explicitly.
 - A bounded queue and storage process stay within declared memory, disk, and receipt-lag budgets.
 - Each event has a stable session, token, feed timestamp when available, local receipt timestamp, and monotonic receipt ordering.
 - A book can be reconstructed deterministically from a checkpoint and ordered deltas.
@@ -96,6 +122,9 @@ Normal sizing does not follow from an arbitrary count of fills. Counts are smoke
 ## Parallel Research During Phase 3
 
 - Continue broad causal prediction snapshots and official outcome resolution.
+- Extend policy-independent market and forecast collection to first listing/day-before conditions.
+- Build D-1 opening and forecast-revision distributions without changing the frozen late control.
+- Measure actual lifecycle volume, spread/depth, price response, fill bounds, and exit capacity by horizon.
 - Freeze the late HRRR-rich tuned dynamic and HRRR-v2 dynamic signal definitions for forward shadow evaluation.
 - Keep the two-of-four late agreement rule exploratory until its exact definition and activation time are recorded.
 - Implement Price Sheet V2a around walk-forward calibration and market-aware shrinkage.
