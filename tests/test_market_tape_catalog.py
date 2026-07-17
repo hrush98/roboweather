@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 import asyncio
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -93,6 +94,46 @@ def test_catalog_persists_registry_and_subscription_generations(tmp_path: Path) 
         "select distinct subscription_state from tape_tokens"
     ).fetchall()
     assert [row[0] for row in states] == ["SUBSCRIBED"]
+    catalog.close()
+
+
+def test_catalog_migrates_existing_decision_join_rows_for_termination_fields(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "catalog.sqlite"
+    connection = sqlite3.connect(path)
+    connection.execute(
+        """
+        create table tape_decision_joins (
+            decision_id text not null,
+            hypothesis_version text not null,
+            token_id text not null,
+            session_id text not null,
+            quote_ready_at_utc text not null,
+            first_visible_event_id text,
+            first_visible_event_at_utc text,
+            coverage_valid integer not null,
+            invalid_reason text,
+            pre_signal_seconds real not null,
+            reconstruction_hash text,
+            raw_json text not null,
+            primary key (decision_id, hypothesis_version)
+        )
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    catalog = TapeCatalog(path)
+    columns = {
+        row["name"]
+        for row in catalog.connection.execute("pragma table_info(tape_decision_joins)")
+    }
+
+    assert "quote_termination_at_utc" in columns
+    assert "termination_reconstruction_hash" in columns
+    assert "coverage_interval_id" in columns
+    assert "source_ref" in columns
     catalog.close()
 
 

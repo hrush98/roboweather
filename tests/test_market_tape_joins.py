@@ -86,3 +86,29 @@ def test_causal_join_rejects_noncausal_decision_timestamps(tmp_path: Path) -> No
     with pytest.raises(ValueError, match="causally ordered"):
         join_decision_to_tape(catalog, [path], bad)
     catalog.close()
+
+
+def test_causal_join_requires_tape_and_valid_coverage_through_termination(
+    tmp_path: Path,
+) -> None:
+    catalog, path, _ = fixture(tmp_path, valid_until="2026-07-16T12:02:30+00:00")
+    bounded = replace(decision(), quote_termination_at_utc="2026-07-16T12:03:00+00:00")
+
+    not_observed = join_decision_to_tape(catalog, [path], bounded)
+
+    assert not_observed.coverage_valid is False
+    assert not_observed.invalid_reason == "quote_termination_not_observed"
+
+    writer = RawSegmentWriter(tmp_path, session_id="session-1", partition_id="zpart")
+    writer.append(
+        replace(
+            event(3, "2026-07-16T12:03:00+00:00", full=True),
+            token_id="other-token",
+        )
+    )
+    second_path = writer.close().path
+    coverage_break = join_decision_to_tape(catalog, [path, second_path], bounded)
+
+    assert coverage_break.coverage_valid is False
+    assert coverage_break.invalid_reason == "insufficient_continuous_valid_coverage"
+    catalog.close()

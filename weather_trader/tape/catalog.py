@@ -185,12 +185,46 @@ class TapeCatalog:
                 invalid_reason text,
                 pre_signal_seconds real not null,
                 reconstruction_hash text,
+                quote_termination_at_utc text,
+                termination_event_id text,
+                termination_event_at_utc text,
+                termination_reconstruction_hash text,
+                tape_observed_through_at_utc text,
+                coverage_interval_id integer,
+                coverage_started_at_utc text,
+                coverage_ended_at_utc text,
+                source_type text,
+                source_ref text,
                 raw_json text not null,
                 primary key (decision_id, hypothesis_version)
             );
             """
         )
+        self._migrate_decision_join_schema()
         self.connection.commit()
+
+    def _migrate_decision_join_schema(self) -> None:
+        columns = {
+            str(row["name"])
+            for row in self.connection.execute("pragma table_info(tape_decision_joins)").fetchall()
+        }
+        additions = {
+            "quote_termination_at_utc": "text",
+            "termination_event_id": "text",
+            "termination_event_at_utc": "text",
+            "termination_reconstruction_hash": "text",
+            "tape_observed_through_at_utc": "text",
+            "coverage_interval_id": "integer",
+            "coverage_started_at_utc": "text",
+            "coverage_ended_at_utc": "text",
+            "source_type": "text",
+            "source_ref": "text",
+        }
+        for name, sql_type in additions.items():
+            if name not in columns:
+                self.connection.execute(
+                    f"alter table tape_decision_joins add column {name} {sql_type}"
+                )
 
     def upsert_tokens(self, entries: list[TokenRegistryEntry]) -> int:
         if not entries:
@@ -524,14 +558,24 @@ class TapeCatalog:
                     decision_id, hypothesis_version, token_id, session_id,
                     quote_ready_at_utc, first_visible_event_id,
                     first_visible_event_at_utc, coverage_valid, invalid_reason,
-                    pre_signal_seconds, reconstruction_hash, raw_json
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    pre_signal_seconds, reconstruction_hash,
+                    quote_termination_at_utc, termination_event_id,
+                    termination_event_at_utc, termination_reconstruction_hash,
+                    tape_observed_through_at_utc, coverage_interval_id,
+                    coverage_started_at_utc, coverage_ended_at_utc,
+                    source_type, source_ref, raw_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.decision_id, item.hypothesis_version, item.token_id, item.session_id,
                     item.quote_ready_at_utc, item.first_visible_event_id,
                     item.first_visible_event_at_utc, int(item.coverage_valid), item.invalid_reason,
-                    item.pre_signal_seconds, item.reconstruction_hash, _json(payload),
+                    item.pre_signal_seconds, item.reconstruction_hash,
+                    item.quote_termination_at_utc, item.termination_event_id,
+                    item.termination_event_at_utc, item.termination_reconstruction_hash,
+                    item.tape_observed_through_at_utc, item.coverage_interval_id,
+                    item.coverage_started_at_utc, item.coverage_ended_at_utc,
+                    item.source_type, item.source_ref, _json(payload),
                 ),
             )
 

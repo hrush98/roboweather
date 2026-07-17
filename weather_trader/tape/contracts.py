@@ -45,10 +45,15 @@ class DecisionTiming:
     decision_started_at_utc: str
     decision_finished_at_utc: str
     latency_ms: int = 0
+    quote_termination_at_utc: str | None = None
+    source_type: str = "decision_json"
+    source_ref: str | None = None
 
     def __post_init__(self) -> None:
         _require(self.decision_id, "decision_id")
+        _require(self.hypothesis_version, "hypothesis_version")
         _require(self.token_id, "token_id")
+        _require(self.source_type, "source_type")
         if self.latency_ms < 0:
             raise ValueError("latency_ms must be non-negative")
 
@@ -66,6 +71,16 @@ class DecisionTapeJoin:
     invalid_reason: str | None
     pre_signal_seconds: float
     reconstruction_hash: str | None
+    quote_termination_at_utc: str | None = None
+    termination_event_id: str | None = None
+    termination_event_at_utc: str | None = None
+    termination_reconstruction_hash: str | None = None
+    tape_observed_through_at_utc: str | None = None
+    coverage_interval_id: int | None = None
+    coverage_started_at_utc: str | None = None
+    coverage_ended_at_utc: str | None = None
+    source_type: str = "decision_json"
+    source_ref: str | None = None
 
 
 class FillScenario(StringEnum):

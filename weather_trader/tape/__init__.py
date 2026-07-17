@@ -16,6 +16,7 @@ from weather_trader.tape.contracts import (
     TokenRegistryEntry,
 )
 from weather_trader.tape.joins import join_decision_to_tape
+from weather_trader.tape.decision_sources import decision_timing_from_execution_quote
 
 __all__ = [
     "BookCheckpoint",
@@ -30,6 +31,7 @@ __all__ = [
     "ReplayInput",
     "ReplayOutput",
     "ReconstructedBook",
+    "decision_timing_from_execution_quote",
     "reconstruct_at",
     "join_decision_to_tape",
     "TokenRegistryEntry",
