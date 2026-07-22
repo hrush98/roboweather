@@ -2,6 +2,11 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-07-22
+
+- Completed the repository implementation for Price Sheet V2a Slices 0 and 1. Added immutable/versioned pilot signal and V2 sheet contracts, deterministic decision/spec hashes, explicit V1 rollback, and a read-only dataset builder that emits separate leak-safe calibration-fit and frozen-policy evaluation artifacts. The materializer enforces prior-date fit cutoffs, timestamp causality, first-entry dedupe, market-date/station-date cluster weighting, typed stale/crossed market references, reconstructable source IDs, and explicit IEM-versus-venue label diagnostics. Focused tests pass; a nonempty artifact smoke against the current remote research database remains before real-data evidence closes.
+- Documented that Codex and operator commands may run on either the `/home/maxrush` remote host or the `/home/hmrush` local checkout host, preserving both valid `roboweather` Python environment paths.
+
 ## 2026-07-17
 
 - Approved and documented the full-market-lifecycle research program. Added a standalone strategy report, falsifiable hypothesis, and implementation contract covering first-listing/D-1 data, horizon-specific distributions, forecast-release cancellation/repricing, inventory and exits, frozen lifecycle arms, and useful-size gates. Integrated the program into the forecast-data, Price Sheet V2, shared-tape, roadmap, and living-audit documents. The late V2a pilot remains the immediate critical path and funded trading remains paused.

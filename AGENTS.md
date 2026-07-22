@@ -8,9 +8,12 @@
 - When you figure out a useful repeatable workflow, command pattern, data source, or repo-specific practice, document it here so future agents do not have to rediscover it.
 - Treat `docs/live-trading-journal.md` as the live trading state and rationale tracker. Update it when live policy mix, sizing, entry caps, risk caps, execution behavior, or material trading lessons change.
 - Update docs/changelog.md for meaningful system changes, including data source changes, model activation/deactivation, research-loop defaults, live execution behavior, sizing/risk policy, and operator workflow changes.
-- Use the `roboweather` conda environment for Python commands in this repo:
-  - `/home/maxrush/miniconda3/envs/roboweather/bin/python`
-  - Example: `/home/maxrush/miniconda3/envs/roboweather/bin/python -m pytest tests/test_live_execution.py`
+- Use the `roboweather` conda environment for Python commands in this repo. Codex may run on either host, so choose the path that exists in the current checkout:
+  - Remote runtime/development host: `/home/maxrush/miniconda3/envs/roboweather/bin/python`
+  - Local checkout host: `/home/hmrush/Desktop/personal/roboweather/.conda/roboweather/bin/python`
+  - Remote example: `/home/maxrush/miniconda3/envs/roboweather/bin/python -m pytest tests/test_live_execution.py`
+  - Local example: `/home/hmrush/Desktop/personal/roboweather/.conda/roboweather/bin/python -m pytest tests/test_live_execution.py`
+- Paths under `/home/maxrush/...` are valid on the remote host where the operator may run Codex, collectors, live/research databases, and production-style commands. A missing `/home/maxrush` path on the local host means use the local equivalent; it is not a repository or runtime failure.
 
 ## Documentation architecture
 
@@ -75,6 +78,13 @@
 - For current live-stack portfolio replay and sizing/promotion checks, use `scripts/portfolio_promotion_report.py`. It replays from raw `prediction_snapshots`, rebuilds consensus rows in memory, applies the current live plan order, live-style risk caps, and recorded ask-sweep depth, then reports each sleeve's incremental risk/PnL/RR after earlier live sleeves consume capacity. Default current-stack check:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/portfolio_promotion_report.py --db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite`
   - Add `--start-date YYYY-MM-DD` for recent-only reviews. Use `--no-depth` only for an upper-bound capacity diagnostic, not promotion evidence.
+
+## Price Sheet V2a dataset workflow
+
+- Build generated V2a fit/evaluation artifacts read-only from the current remote research database. The default frozen evaluation starts on the pilot activation date and the fit corpus ends strictly before it:
+  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/build_price_sheet_v2_dataset.py --db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --out reports/price-sheet-v2a-datasets/current`
+- Generated manifests and JSONL rows are research outputs. Inspect them for nonzero fit/evaluation counts and label/reference diagnostics, but leave the output directory uncommitted.
+- On the local `/home/hmrush` checkout, use `/home/hmrush/Desktop/personal/roboweather/.conda/roboweather/bin/python` with a locally available DB. The checked-in May DB predates the pilot HRRR-rich/HRRR-v2 families and is useful for schema compatibility only; zero pilot rows there are expected.
 
 ## Legacy candidate-scoped shadow collection workflow
 
