@@ -104,10 +104,16 @@
 ## Phase 3 market-tape development workflow
 
 - The shared recorder is opt-in and separate from both research and live ledgers. Do not point it at either production SQLite database.
+- Slice 2 repository implementation is complete, but the acceptance gate requires elapsed host evidence. The retained July 16 probes are too short and must not be described as a complete lifecycle pass.
 - While lifecycle gates remain open, use a bounded temporary probe:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/run_market_tape.py --catalog /tmp/roboweather_market_tape_catalog.sqlite --raw-dir /tmp/roboweather_market_tape_raw --max-messages 50 --max-seconds 60 --refresh-seconds 30`
 - Follow every probe with the strict catalog/segment check:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/market_tape_health.py --catalog /tmp/roboweather_market_tape_catalog.sqlite`
+- For the bounded complete-lifecycle evidence run on the remote host, install and start (but do not enable) `deploy/systemd/roboweather-market-tape-lifecycle.service`. It runs for at most 72 hours and writes only under `~/.local/state/roboweather/market_tape/`.
+- Inspect the bounded service with `systemctl --user status roboweather-market-tape-lifecycle.service --no-pager` and `journalctl --user -u roboweather-market-tape-lifecycle.service`. Stop it explicitly with `systemctl --user stop roboweather-market-tape-lifecycle.service` if the probe must be abandoned.
+- After the bounded run, evaluate the complete Slice 2 evidence:
+  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/market_tape_lifecycle_report.py --catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite`
+- The lifecycle report requires at least 12 recorded hours, authoritative Gamma listing timestamps, discovery within 300 seconds, no coverage gap over 5 seconds, receipt lag at or below 10 seconds, RSS at or below 1 GiB, queue high-water below capacity, projected raw growth at or below 25 GiB/day, and at least one complete eligible market per discovered station/family.
 - The recorder now fails closed on zero token events. Require nonzero messages/events, a subscription generation, `RESYNCING` followed by `VALID` coverage for full-book tokens, cataloged raw partitions, fresh telemetry, and exact segment replay.
 - Unexpected disconnects must appear as `GAPPED -> RECONNECTING -> RESYNCING`; replay must not bridge those intervals, and a token returns to `VALID` only after a new full book.
 - Rebuild deterministic L2 checkpoints only from verified raw segments:

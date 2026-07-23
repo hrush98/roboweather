@@ -2,7 +2,7 @@
 
 This is the living roadmap for turning RoboWeather research signals into measurable, fill-conditioned trading evidence. Update this document when phase status, sequencing, or exit gates change. Detailed economic ideas belong in `docs/hypotheses/`; active feature design belongs in `docs/implementation/`.
 
-Last updated: 2026-07-22
+Last updated: 2026-07-23
 
 ## Objective
 
@@ -21,7 +21,7 @@ market listing + causal forecast state
 
 ## Current Phase
 
-The Phase 3 market-tape recorder now has repository-validated rotation, reconnect/gap semantics, resource telemetry, strict health checks, deterministic arbitrary-time book reconstruction, and a latency-aware causal join from persisted execution-ledger quotes through GTD/cancel termination. One real host quote/tape reconstruction, complete-lifecycle capacity evidence, and fill replay remain open. Price Sheet V2a contracts and causal fit/evaluation materialization are implemented; walk-forward calibration baselines are the next build slice. V2b will consume only valid Phase 3 tape windows.
+The Phase 3 market-tape recorder now has repository-validated current/future discovery, listing provenance, bounded supervision, rotation, reconnect/gap semantics, resource telemetry, strict health and lifecycle gates, deterministic arbitrary-time book reconstruction, and a latency-aware causal join from persisted execution-ledger quotes through GTD/cancel termination. Slice 2 is implemented but has not passed: the remote host retained only approximately 18-second probes and no recorder was active at the 2026-07-23 audit. A bounded lifecycle run must still pass before the complete-lifecycle/capacity claim closes. One real host quote/tape reconstruction and fill replay also remain open. Price Sheet V2a contracts and causal fit/evaluation materialization are implemented; walk-forward calibration baselines are the next pricing build slice. V2b will consume only valid Phase 3 tape windows.
 
 A full-market-lifecycle forecast/data program is approved as a parallel research build. It extends collection to first listing and builds distinct D-1, early-day, intraday, and late distributions and tactics. It does not change the current critical path: the bounded late Price Sheet V2a pilot remains first, with earlier horizons added one at a time after their forecast, tape, inventory, and execution gates pass. Funded trading remains paused.
 
@@ -43,7 +43,7 @@ Canonical records:
 | 0. Whole-chain instrumentation | Link candidates, decisions, orders, fills, and settlement. | Prototype complete | Exact live candidate-to-settlement reconstruction exists. |
 | 1. Quoteable fair/price sheet | Convert model output into a conservative maximum price. | V2a Slices 0-1 repository complete; Slice 2 walk-forward calibration next | Positive walk-forward quoted-price EV without extreme uncalibrated fairs. |
 | 2. Shadow quote construction | Generate auditable quote intents and cancellation metadata. | Plumbing prototype complete | Deterministic intent construction tests pass. No profitability claim. |
-| 3. Shared market tape and replay | Collect pre-signal active-universe market events and replay quote tactics causally. | Recorder/book/join repository paths validated; host join evidence, long-run collection, and fill replay remain open | Tape validity, deterministic book replay, conservative fill bounds, and forward shadow reporting pass. |
+| 3. Shared market tape and replay | Collect pre-signal active-universe market events and replay quote tactics causally. | Slices 1-4 repository paths implemented; Slice 2 lifecycle run, Slice 4 real join, and Slices 5-6 remain open | Tape validity, deterministic book replay, conservative fill bounds, and forward shadow reporting pass. |
 | F. Full-lifecycle forecast/data foundation | Observe weather and market state from first listing and price horizon-specific distributions. | Approved parallel research build; no production consumer | Venue-aligned truth, causal D-1 sources, first-listing tape, horizon calibration, and inventory-aware replay pass. |
 | 4. Funded validation | Validate replay fidelity and useful-size fill-conditioned PnL with controlled real orders. | Blocked on validated V2a + V2b configuration | Plumbing canary passes, then `$50` and `$100` size-specific evidence passes. |
 | 5. Learned quote policy and sizing | Select quote/skip/size from calibrated signal and microstructure state. | Future | Sufficient clean Phase 3/4 data and stable out-of-sample improvement. |

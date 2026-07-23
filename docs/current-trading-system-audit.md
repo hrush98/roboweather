@@ -4,13 +4,13 @@ This is the living financial and systems audit for RoboWeather. Update this docu
 
 Generated or ad hoc analysis may live under `reports/`, but durable conclusions, open risks, and decisions belong here. The current implementation sequence belongs in `docs/execution-rebuild-roadmap.md`; funded operating state belongs in `docs/live-trading-journal.md`.
 
-Last reviewed: 2026-07-17
+Last reviewed: 2026-07-23
 
 ## Current Verdict
 
 RoboWeather is an execution-first research system with funded trading paused. The immediate objective is to determine whether promising weather signals can be converted into positive fill-conditioned PnL at useful size. A parallel forecast-edge and full-market-lifecycle research track is now approved because the fresh configured portfolio failed before execution, broad recent model fairs were overconfident, and waiting until late intraday may forfeit earlier liquidity and price-discovery opportunities.
 
-The shared weather market tape is reported built and running, with acceptance and replay evidence accumulating. It can remove policy-specific collection bias and make causal taker/passive replay possible, but it does not itself prove forecast alpha, exact passive fills, capacity, or profitability. The immediate implementation priority is Price Sheet V2a; V2b will consume valid tape windows.
+The shared weather market tape has its first four repository slices implemented, but it was not running on the remote host at the 2026-07-23 audit and has not passed its complete-lifecycle gate. The retained host evidence consists only of approximately 18-second probes. Future-market discovery, listing provenance, a strict lifecycle report, and a bounded supervisor are now implemented; elapsed listing-to-close evidence still has to be collected. The tape can remove policy-specific collection bias and make causal taker/passive replay possible, but it does not itself prove forecast alpha, exact passive fills, capacity, or profitability. The immediate pricing priority remains Price Sheet V2a; V2b may consume only tape windows that pass validity gates.
 
 Current confidence by layer:
 
@@ -22,7 +22,7 @@ Current confidence by layer:
 | Current configured portfolio | Failed the fresh July 9-14 cap-aware replay. | Do not restart it. |
 | New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
 | Fair-value/price sheet | Existing scoped price sheet failed its updated theoretical gate. | Redesign around walk-forward calibration and market-aware shrinkage. |
-| Phase 3 shared tape | Collector reported operational; replay validity and evidence gates are still accumulating. | Keep collecting and validate coverage/replay contracts. |
+| Phase 3 shared tape | Slices 1-4 are implemented in the repository. Slice 2 has not passed because no complete first-listing-through-close host run exists; Slice 4 also lacks one real quote/tape join. | Run the bounded lifecycle collector, require the strict lifecycle report to pass, then complete the real join. |
 | Existing candidate-token shadow collector | Useful plumbing prototype, but candidate-scoped and not a continuous causal market tape. | Do not use its fill labels as promotion evidence. |
 | Fillability and adverse selection | Still unresolved. Public L2 data can provide bounds, not exact hypothetical queue position. | Validate shared-tape replay, then run controlled real-order canaries. |
 | Funded readiness | No exact signal + quote policy + size has passed current fill-conditioned gates. | Keep funded trading paused. |
@@ -73,7 +73,7 @@ Evidence source: `reports/research-collection-analysis-2026-07-15.md`. That file
 1. Keep funded trading paused.
 2. Continue broad research snapshots and outcome resolution.
 3. Stop adding model families merely to expand the leaderboard. New models need demonstrably different predictions or incremental information.
-4. Keep the shared active-universe market tape running and complete its acceptance/replay evidence gates.
+4. Run the bounded shared active-universe market-tape lifecycle probe and complete its acceptance/replay evidence gates. Do not describe the recorder as continuously running until host supervision is confirmed.
 5. Treat the current candidate-token collector and shadow labeler as a prototype only.
 6. Keep the late HRRR-rich tuned dynamic and HRRR-v2 dynamic policies as the primary forward signal hypotheses. Keep the two-of-four agreement rule exploratory until frozen and replayed behind portfolio caps.
 7. Implement `docs/implementation/price-sheet-v2.md`: V2a walk-forward outcome pricing now, then V2b execution reductions/skips on valid tape windows.
@@ -122,6 +122,7 @@ Update the body of this document when the current assessment changes. Append one
 
 ## Audit Log
 
+- 2026-07-23: Reconciled the Phase 3 build claims against the remote host. No recorder was active and retained evidence covered only approximately 18-second probes, so Slice 2 had not passed. Completed the missing future discovery, listing provenance, bounded-supervision, and executable lifecycle-gate paths while keeping the exit open for real elapsed coverage.
 - 2026-07-16: Created the living audit from the July 15 research collection review and the market-tape systems audit. Confirmed the research memory-growth prerequisite is resolved and approved Phase 3 market-tape implementation while keeping funded trading paused.
 - 2026-07-16: Recorded operator confirmation that Phase 3 is built and running, with exit evidence still accumulating. Made Price Sheet V2a the current implementation priority and approved the V2b tape-overlay plan.
 - 2026-07-17: Added the station-specific forecast-edge research track after reviewing the existing rich METAR/HRRR feature baseline and identifying unresolved IEM-versus-Weather-Underground/venue target fidelity. Prioritized truth reconciliation, WeatherNext/NBM probabilistic baselines, spatial residuals, and observed radiation surprise without changing funded status or the execution critical path.

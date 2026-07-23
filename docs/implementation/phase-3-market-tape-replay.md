@@ -1,8 +1,8 @@
 # Phase 3 Market Tape And Replay Implementation Plan
 
-Status: Recorder, deterministic book, and decision-join repository paths validated; host and replay acceptance remains in progress
+Status: Slices 1-4 repository paths implemented; Slice 2 lifecycle evidence and Slice 4 real-join evidence remain open
 
-Last updated: 2026-07-17
+Last updated: 2026-07-23
 
 ## Feature Goal
 
@@ -260,7 +260,7 @@ Implementation status, 2026-07-16:
 
 Exit: a complete dry-run market lifecycle stays inside resource budgets with known coverage.
 
-Implementation status, 2026-07-16:
+Implementation status, 2026-07-23:
 
 - Added a separate SQLite tape catalog for token registry entries, collector sessions, immutable subscription generations/membership, and token coverage intervals.
 - Added policy-independent all-scope discovery that converts active weather markets into sibling YES/NO token records before policy selection. Complete refreshes retire missing tokens; incomplete refreshes preserve the last known universe.
@@ -268,7 +268,12 @@ Implementation status, 2026-07-16:
 - Added receipt-time UTC segment rotation (hourly by default), durable partition catalog rows, exponential bounded reconnects, explicit `GAPPED -> RECONNECTING -> RESYNCING` coverage, and fail-closed zero-event sessions. No reconnect can restore `VALID` without a fresh full book.
 - Added persisted queue depth/high-water, RSS, raw disk bytes, receipt lag, and reconnect telemetry plus strict `scripts/market_tape_health.py` verification of the latest session, resource budgets, cataloged files, checksums, and event counts.
 - A second repository-backed live probe subscribed to 616 tokens and captured 30 messages / 674 token events in 17.8 seconds. It wrote one cataloged 1.79 MB UTC partition, ended at 103 MiB RSS (108 MiB observed peak), used 679 / 10,000 queue slots, reported 484 ms final receipt lag, and passed the strict health command with all 616 tokens reaching `VALID` before terminal `CLOSED`.
-- Slice 2 remains open for durable host supervision and a complete market-lifecycle/daily-growth run. The bounded probe validates restart-readable storage and lifecycle behavior, not long-run capacity or retention.
+- Corrected active-universe discovery so tape refreshes merge targeted current events with broad active Gamma markets instead of returning only same-day targets. Gamma `createdAt` now supplies explicit listing provenance; discovery-time fallback is labeled and cannot pass a first-listing claim.
+- Added `scripts/market_tape_lifecycle_report.py`, which aggregates all catalog sessions and fails closed on incomplete listing-to-close coverage, late discovery, invalid coverage gaps, collector errors, queue saturation, reconstruction errors, receipt lag, RSS, projected daily disk growth, or absent authoritative listing timestamps.
+- Added a bounded user-systemd probe unit at `deploy/systemd/roboweather-market-tape-lifecycle.service`. It is a 72-hour evidence run, is not enabled as a production service, and keeps its catalog/raw data outside the repository.
+- The predeclared probe budgets are: at least 12 recorded hours, Gamma listing discovery within 300 seconds, no coverage gap over 5 seconds, receipt lag at or below 10 seconds, RSS at or below 1 GiB, queue high-water below capacity, projected raw growth at or below 25 GiB/day, and a 14-day retention projection.
+- A 2026-07-23 host audit found no active recorder and only the July 16 short probes. The latest deterministic-book catalog covered 17.7 seconds, 644 events, one 1.76 MB partition, 124,284,928 bytes peak RSS, 1,115 / 10,000 queue high-water, and 898 ms final receipt lag. These results remain valid short-probe evidence but do not satisfy the duration or complete-lifecycle gate.
+- Slice 2 repository work is complete. Its exit remains open until the bounded host run records at least one eligible first-listing-through-close market per discovered station/family and the lifecycle report passes. The same run supplies the still-open Slice 1 daily-growth/retention evidence.
 
 ### Slice 3: Book Reconstruction
 
@@ -344,6 +349,7 @@ Exit: the report answers whether base-case fill-conditioned PnL is positive with
 
 ## Decision Log
 
+- 2026-07-23: Audited the remote host and corrected the prior “running” assumption: no recorder was active and all retained catalogs were approximately 18-second probes. Completed the missing future-market discovery, listing-provenance, lifecycle-gate, and bounded-supervision repository work; kept Slice 2 open pending elapsed host evidence rather than treating the short probes as a pass.
 - 2026-07-17: Extended the acceptance target to explicit first-listing-through-close/settlement collection, including future-dated weather markets, lifecycle discovery-lag reporting, and horizon-tagged forward arms. Existing fill-validity requirements remain unchanged.
 - 2026-07-17: Completed the Slice 4 repository path from persisted execution quote/source snapshots through a strictly causal quote-ready book and continuous termination-boundary coverage. Kept the exit evidence open for one real host quote/tape reconstruction.
 - 2026-07-16: Started Slice 4 with an immutable, latency-aware causal decision join and continuous pre-signal coverage gate. Kept the slice open pending a real decision-export integration and recorded decision replay.
