@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import os
+import shutil
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -104,6 +106,7 @@ class RotatingRawSegmentWriter:
         session_id: str,
         rotation_seconds: int = 3600,
         fsync_on_append: bool = False,
+        compress_closed: bool = False,
     ) -> None:
         if rotation_seconds < 1:
             raise ValueError("rotation_seconds must be positive")
@@ -111,6 +114,7 @@ class RotatingRawSegmentWriter:
         self.session_id = session_id
         self.rotation_seconds = rotation_seconds
         self.fsync_on_append = fsync_on_append
+        self.compress_closed = compress_closed
         self._writer: RawSegmentWriter | None = None
         self._closed: list[SegmentStats] = []
 
@@ -129,7 +133,10 @@ class RotatingRawSegmentWriter:
         rotated: SegmentStats | None = None
         if self._writer is None or self._writer.partition_id != partition_id:
             if self._writer is not None:
-                rotated = self._writer.close()
+                rotated = _finalize_segment(
+                    self._writer.close(),
+                    compress=self.compress_closed,
+                )
                 self._closed.append(rotated)
             self._writer = RawSegmentWriter(
                 self.directory,
@@ -141,13 +148,19 @@ class RotatingRawSegmentWriter:
 
     def close(self) -> tuple[SegmentStats, ...]:
         if self._writer is not None:
-            self._closed.append(self._writer.close())
+            self._closed.append(
+                _finalize_segment(
+                    self._writer.close(),
+                    compress=self.compress_closed,
+                )
+            )
             self._writer = None
         return tuple(self._closed)
 
 
 def iter_segment(path: Path) -> Iterator[MarketTapeEvent]:
-    with path.open("rb") as handle:
+    opener = gzip.open if path.suffix == ".gz" else Path.open
+    with opener(path, "rb") as handle:
         while True:
             offset = handle.tell()
             line = handle.readline()
@@ -168,6 +181,27 @@ def iter_segment(path: Path) -> Iterator[MarketTapeEvent]:
             if event.append_offset != offset:
                 raise SegmentCorruptionError(f"stored offset mismatch at byte offset {offset}")
             yield event
+
+
+def _finalize_segment(stats: SegmentStats, *, compress: bool) -> SegmentStats:
+    if not compress or stats.events == 0:
+        return stats
+    compressed_path = stats.path.with_suffix(f"{stats.path.suffix}.gz")
+    temporary_path = compressed_path.with_suffix(f"{compressed_path.suffix}.tmp")
+    try:
+        with stats.path.open("rb") as source:
+            with gzip.open(temporary_path, "wb", compresslevel=6) as destination:
+                shutil.copyfileobj(source, destination, length=1024 * 1024)
+        os.replace(temporary_path, compressed_path)
+        stats.path.unlink()
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+    return replace(
+        stats,
+        path=compressed_path,
+        bytes_written=compressed_path.stat().st_size,
+    )
 
 
 def _encode_event(event: MarketTapeEvent) -> bytes:

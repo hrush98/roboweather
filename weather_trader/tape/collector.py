@@ -193,6 +193,7 @@ async def collect_market_tape(
         raw_directory,
         session_id=session_id,
         rotation_seconds=rotation_seconds,
+        compress_closed=True,
     )
     messages = events = generations = high_water = 0
     reconnects = 0

@@ -9,7 +9,7 @@ WorkingDirectory=-%h/General/roboweather
 Environment=PYTHONUNBUFFERED=1
 Environment=PATH=%h/miniconda3/envs/roboweather/bin:/usr/bin:/bin
 ExecStartPre=/usr/bin/mkdir -p %h/.local/state/roboweather/market_tape/raw
-ExecStart=/usr/bin/env python scripts/run_market_tape.py --catalog %h/.local/state/roboweather/market_tape/catalog.sqlite --raw-dir %h/.local/state/roboweather/market_tape/raw --max-seconds 259200 --refresh-seconds 240 --rotation-seconds 3600 --telemetry-seconds 30 --queue-size 10000 --max-reconnect-attempts 8 --reconnect-initial-seconds 1 --reconnect-max-seconds 30 --checkpoint-every 1000
+ExecStart=/usr/bin/env python scripts/run_market_tape.py --catalog %h/.local/state/roboweather/market_tape/catalog.sqlite --raw-dir %h/.local/state/roboweather/market_tape/raw --max-seconds 259200 --refresh-seconds 240 --rotation-seconds 300 --telemetry-seconds 30 --queue-size 10000 --max-reconnect-attempts 8 --reconnect-initial-seconds 1 --reconnect-max-seconds 30 --checkpoint-every 1000
 Restart=on-failure
 RestartSec=10
 KillSignal=SIGINT

@@ -117,3 +117,22 @@ def test_rotating_writer_uses_receipt_time_and_preserves_each_partition(tmp_path
     assert [item.partition_id for item in stats] == ["20260716T120000Z", "20260716T130000Z"]
     assert list(iter_segment(stats[0].path)) == [first]
     assert list(iter_segment(stats[1].path)) == [second]
+
+
+def test_rotating_writer_compresses_closed_partitions_without_changing_identity(
+    tmp_path: Path,
+) -> None:
+    writer = RotatingRawSegmentWriter(
+        tmp_path,
+        session_id="session-1",
+        rotation_seconds=3600,
+        compress_closed=True,
+    )
+    stored, _ = writer.append(make_event(1, {"event_type": "book", "payload": "x" * 10_000}))
+
+    stats = writer.close()
+
+    assert len(stats) == 1
+    assert stats[0].path.suffixes[-2:] == [".jsonl", ".gz"]
+    assert not stats[0].path.with_suffix("").exists()
+    assert list(iter_segment(stats[0].path)) == [stored]
