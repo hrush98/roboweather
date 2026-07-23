@@ -159,7 +159,12 @@ class PolymarketReader:
                 time.sleep(self.retry_backoff_seconds * attempt)
         raise last_error or RuntimeError("gamma event request failed")
 
-    def _parse_weather_market(self, item: dict) -> WeatherMarket | None:
+    def _parse_weather_market(
+        self,
+        item: dict,
+        *,
+        require_price: bool = True,
+    ) -> WeatherMarket | None:
         question = item.get("question") or ""
         question_lower = question.lower()
         city = next((city for city in self.city_map if city in question_lower), None)
@@ -181,7 +186,7 @@ class PolymarketReader:
         station_id = _parse_resolution_station(item) or self.city_map[city]
         best_bid = _to_float(item.get("bestBid"))
         best_ask = _to_float(item.get("bestAsk"))
-        if best_ask is None:
+        if require_price and best_ask is None:
             return None
         return WeatherMarket(
             market_id=str(item.get("id")),
@@ -193,7 +198,7 @@ class PolymarketReader:
             lower_f=lower_f,
             upper_f=upper_f,
             best_bid_yes=best_bid or 0.0,
-            best_ask_yes=best_ask,
+            best_ask_yes=best_ask or 0.0,
             best_bid_no=None,
             best_ask_no=None,
             end_date=item.get("endDate") or "",

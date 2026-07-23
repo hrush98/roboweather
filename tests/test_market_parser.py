@@ -164,6 +164,24 @@ def test_market_parser_accepts_ask_only_market() -> None:
     assert market.best_ask_yes == 0.01
 
 
+def test_market_parser_can_describe_newly_listed_market_without_price() -> None:
+    reader = PolymarketReader()
+
+    market = reader._parse_weather_market(
+        {
+            "id": "new-listing",
+            "question": "Will the highest temperature in Seattle be between 70-71°F on May 14?",
+            "slug": "highest-temperature-in-seattle-on-may-14-2026-70-71f",
+            "clobTokenIds": '["yes-token", "no-token"]',
+            "resolutionSource": "https://www.wunderground.com/history/daily/us/wa/seatac/KSEA",
+        },
+        require_price=False,
+    )
+
+    assert market is not None
+    assert market.best_ask_yes == 0.0
+
+
 def test_market_parser_uses_resolution_station_for_denver_buckley() -> None:
     reader = PolymarketReader()
 

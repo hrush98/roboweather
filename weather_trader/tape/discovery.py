@@ -25,6 +25,7 @@ class TapeDiscoveryService:
             limit=market_limit,
             validate_stations=True,
             market_scope="all",
+            include_future=True,
         )
         warnings = tuple(self.discovery.last_warnings)
         tokens = tuple(_tokens_from_markets(markets))
@@ -66,8 +67,9 @@ def _tokens_from_markets(markets: list[MarketSnapshot]) -> list[TokenRegistryEnt
                     sibling_market_id=market.market_id,
                     market_end_at_utc=market.end_date or None,
                     discovered_at_utc=market.discovered_at,
-                    active_from_utc=market.discovered_at,
+                    active_from_utc=market.listed_at or market.discovered_at,
                     resolution_source=market.resolution_source,
+                    listing_timestamp_source="gamma_created_at" if market.listed_at else "discovery_fallback",
                 )
             )
     return entries

@@ -35,6 +35,7 @@ def market(*, market_id: str = "market-1", active: bool = True) -> MarketSnapsho
         discovered_at="2026-07-16T12:00:00+00:00",
         active=active,
         market_family=MarketFamily.HIGH_TEMP,
+        listed_at="2026-07-16T11:58:00+00:00",
     )
 
 
@@ -56,6 +57,8 @@ def test_market_conversion_builds_yes_no_siblings_and_excludes_inactive() -> Non
     assert tokens[0].sibling_token_id == "market-1-no"
     assert tokens[1].sibling_token_id == "market-1-yes"
     assert tokens[0].market_end_at_utc == "2026-07-17T00:00:00Z"
+    assert tokens[0].active_from_utc == "2026-07-16T11:58:00+00:00"
+    assert tokens[0].listing_timestamp_source == "gamma_created_at"
 
 
 def test_tape_discovery_forces_full_scope_and_reports_completeness() -> None:
@@ -64,7 +67,12 @@ def test_tape_discovery_forces_full_scope_and_reports_completeness() -> None:
 
     assert len(result.tokens) == 2
     assert result.complete is True
-    assert underlying.call == {"limit": 123, "validate_stations": True, "market_scope": "all"}
+    assert underlying.call == {
+        "limit": 123,
+        "validate_stations": True,
+        "market_scope": "all",
+        "include_future": True,
+    }
 
 
 def test_catalog_persists_registry_and_subscription_generations(tmp_path: Path) -> None:

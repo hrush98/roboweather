@@ -110,6 +110,7 @@ class TokenRegistryEntry:
     active_until_utc: str | None = None
     subscription_state: str = "PENDING"
     last_health_status: str | None = None
+    listing_timestamp_source: str = "discovery_fallback"
 
     def __post_init__(self) -> None:
         _require(self.token_id, "token_id")

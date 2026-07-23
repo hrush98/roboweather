@@ -132,6 +132,7 @@ class MarketSnapshot:
     discovered_at: str
     active: bool = True
     market_family: MarketFamily = MarketFamily.HIGH_TEMP
+    listed_at: str | None = None
 
 
 @dataclass(frozen=True)

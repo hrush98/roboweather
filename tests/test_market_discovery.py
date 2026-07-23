@@ -46,6 +46,24 @@ def test_discovery_preserves_gamma_active_flag() -> None:
     assert markets[0].active is False
 
 
+def test_discovery_can_merge_targeted_and_future_broad_markets_with_listing_time() -> None:
+    reader = FakeReader(
+        event_items=[{"id": "current", "createdAt": "2026-05-12T12:00:00Z"}],
+        broad_items=[
+            {"id": "current", "createdAt": "2026-05-12T12:00:00Z"},
+            {"id": "future", "createdAt": "2026-05-13T12:00:00Z", "market_date": date(2026, 5, 15)},
+        ],
+    )
+    discovery = MarketDiscoveryService(reader=reader)
+
+    markets = discovery.discover(include_future=True)
+
+    assert [market.market_id for market in markets] == ["current", "future"]
+    assert discovery.last_warnings == []
+    assert markets[0].listed_at == "2026-05-12T12:00:00Z"
+    assert markets[1].listed_at == "2026-05-13T12:00:00Z"
+
+
 def test_global_discovery_targets_international_events_and_stations() -> None:
     reader = FakeReader(event_items=[{"id": "global-market", "city": "Tokyo", "station": "RJTT"}], broad_items=[])
     discovery = MarketDiscoveryService(reader=reader)
@@ -72,7 +90,13 @@ class FakeReader:
         self.broad_called = True
         return self.broad_items
 
-    def _parse_weather_market(self, item: dict) -> WeatherMarket | None:
+    def _parse_weather_market(
+        self,
+        item: dict,
+        *,
+        require_price: bool = True,
+    ) -> WeatherMarket | None:
+        assert require_price is False
         return WeatherMarket(
             market_id=item["id"],
             question="Will the highest temperature in Seattle be between 58-59°F on May 14?",
@@ -88,5 +112,5 @@ class FakeReader:
             resolution_source="https://www.wunderground.com/history/daily/us/wa/seatac/KSEA",
             yes_token_id="yes-token",
             no_token_id="no-token",
-            market_date=date(2026, 5, 14),
+            market_date=item.get("market_date", date(2026, 5, 14)),
         )

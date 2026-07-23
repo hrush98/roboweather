@@ -49,7 +49,13 @@ class MarketDiscoveryService:
         self.reader = reader or PolymarketReader()
         self.last_warnings: list[str] = []
 
-    def discover(self, limit: int = 50000, validate_stations: bool = True, market_scope: str = "us") -> list[MarketSnapshot]:
+    def discover(
+        self,
+        limit: int = 50000,
+        validate_stations: bool = True,
+        market_scope: str = "us",
+        include_future: bool = False,
+    ) -> list[MarketSnapshot]:
         now = datetime.now(timezone.utc)
         discovered_at = now.isoformat()
         self.last_warnings = []
@@ -62,28 +68,34 @@ class MarketDiscoveryService:
         event_items, missing_events = self.reader._fetch_weather_event_markets(targets)
         self.last_warnings.extend(f"missing_event:{slug}" for slug in missing_events)
 
-        snapshots = self._items_to_snapshots(
+        targeted_snapshots = self._items_to_snapshots(
             event_items,
             discovered_at=discovered_at,
             validate_stations=validate_stations,
             market_scope=market_scope,
         )
-        if snapshots:
-            return snapshots
+        if targeted_snapshots and not include_future:
+            return targeted_snapshots
 
-        if event_items:
-            self.last_warnings.append("targeted_event_parse_empty")
-        else:
-            self.last_warnings.append("targeted_event_discovery_empty")
-        source_items = self.reader._fetch_gamma_markets(limit=limit)
-        if not source_items:
+        if not targeted_snapshots:
+            if event_items:
+                self.last_warnings.append("targeted_event_parse_empty")
+            else:
+                self.last_warnings.append("targeted_event_discovery_empty")
+        broad_items = self.reader._fetch_gamma_markets(limit=limit)
+        if not broad_items:
             self.last_warnings.append("broad_market_discovery_empty")
-        return self._items_to_snapshots(
-            source_items,
+        broad_snapshots = self._items_to_snapshots(
+            broad_items,
             discovered_at=discovered_at,
             validate_stations=validate_stations,
             market_scope=market_scope,
         )
+        if not include_future:
+            return broad_snapshots
+        by_market_id = {market.market_id: market for market in broad_snapshots}
+        by_market_id.update({market.market_id: market for market in targeted_snapshots})
+        return sorted(by_market_id.values(), key=lambda market: (market.market_date or now.date(), market.station, market.market_id))
 
     def _items_to_snapshots(
         self,
@@ -95,7 +107,7 @@ class MarketDiscoveryService:
         snapshots: list[MarketSnapshot] = []
         seen_market_ids: set[str] = set()
         for item in items:
-            market = self.reader._parse_weather_market(item)
+            market = self.reader._parse_weather_market(item, require_price=False)
             if market is None:
                 continue
             if not _market_in_scope(market.city, market_scope):
@@ -126,6 +138,7 @@ class MarketDiscoveryService:
                     discovered_at=discovered_at,
                     active=_active_flag(item),
                     market_family=market.market_family,
+                    listed_at=_listing_timestamp(item),
                 )
             )
         return snapshots
@@ -151,6 +164,14 @@ def _active_flag(item: dict) -> bool:
     if isinstance(value, str):
         return value.strip().lower() not in {"false", "0", "no"}
     return bool(value)
+
+
+def _listing_timestamp(item: dict) -> str | None:
+    # Gamma's creation timestamp is the listing provenance needed for lifecycle
+    # evidence. ``startDate`` is a schedule field and may differ from listing.
+    value = item.get("createdAt") or item.get("created_at")
+    text = str(value or "").strip()
+    return text or None
 
 
 def _configs_for_scope(market_scope: str) -> tuple[WeatherEventConfig, ...]:

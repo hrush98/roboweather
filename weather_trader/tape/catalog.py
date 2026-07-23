@@ -58,6 +58,7 @@ class TapeCatalog:
                 market_end_at_utc text,
                 discovered_at_utc text not null,
                 active_from_utc text not null,
+                listing_timestamp_source text not null default 'discovery_fallback',
                 active_until_utc text,
                 resolution_source text not null,
                 subscription_state text not null,
@@ -200,8 +201,19 @@ class TapeCatalog:
             );
             """
         )
+        self._migrate_token_schema()
         self._migrate_decision_join_schema()
         self.connection.commit()
+
+    def _migrate_token_schema(self) -> None:
+        columns = {
+            str(row["name"])
+            for row in self.connection.execute("pragma table_info(tape_tokens)").fetchall()
+        }
+        if "listing_timestamp_source" not in columns:
+            self.connection.execute(
+                "alter table tape_tokens add column listing_timestamp_source text not null default 'discovery_fallback'"
+            )
 
     def _migrate_decision_join_schema(self) -> None:
         columns = {
@@ -238,14 +250,14 @@ class TapeCatalog:
                         token_id, market_id, condition_id, outcome, station,
                         market_date, market_family, lower_bound, upper_bound,
                         sibling_token_id, sibling_market_id, market_end_at_utc,
-                        discovered_at_utc, active_from_utc, active_until_utc,
+                        discovered_at_utc, active_from_utc, listing_timestamp_source, active_until_utc,
                         resolution_source, subscription_state, last_health_status,
                         raw_json
                     ) values (
                         :token_id, :market_id, :condition_id, :outcome, :station,
                         :market_date, :market_family, :lower_bound, :upper_bound,
                         :sibling_token_id, :sibling_market_id, :market_end_at_utc,
-                        :discovered_at_utc, :active_from_utc, :active_until_utc,
+                        :discovered_at_utc, :active_from_utc, :listing_timestamp_source, :active_until_utc,
                         :resolution_source, :subscription_state, :last_health_status,
                         :raw_json
                     )
@@ -261,6 +273,19 @@ class TapeCatalog:
                         sibling_token_id = excluded.sibling_token_id,
                         sibling_market_id = excluded.sibling_market_id,
                         market_end_at_utc = excluded.market_end_at_utc,
+                        active_from_utc = case
+                            when excluded.listing_timestamp_source != 'discovery_fallback'
+                                then excluded.active_from_utc
+                            when tape_tokens.listing_timestamp_source = 'discovery_fallback'
+                                 and excluded.active_from_utc < tape_tokens.active_from_utc
+                                then excluded.active_from_utc
+                            else tape_tokens.active_from_utc
+                        end,
+                        listing_timestamp_source = case
+                            when excluded.listing_timestamp_source != 'discovery_fallback'
+                                then excluded.listing_timestamp_source
+                            else tape_tokens.listing_timestamp_source
+                        end,
                         resolution_source = excluded.resolution_source,
                         active_until_utc = excluded.active_until_utc,
                         subscription_state = excluded.subscription_state,
@@ -600,6 +625,7 @@ def _token_from_row(row: sqlite3.Row) -> TokenRegistryEntry:
         market_end_at_utc=row["market_end_at_utc"],
         discovered_at_utc=row["discovered_at_utc"],
         active_from_utc=row["active_from_utc"],
+        listing_timestamp_source=row["listing_timestamp_source"],
         active_until_utc=row["active_until_utc"],
         resolution_source=row["resolution_source"],
         subscription_state=row["subscription_state"],
