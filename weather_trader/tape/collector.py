@@ -79,7 +79,6 @@ class PolymarketTapeTransport:
                     {
                         "type": "market",
                         "assets_ids": list(token_ids),
-                        "custom_feature_enabled": True,
                     }
                 )
             )
@@ -100,11 +99,10 @@ class PolymarketTapeTransport:
                         if update.added_token_ids:
                             await websocket.send(
                                 json.dumps(
-                                    {
-                                        "assets_ids": list(update.added_token_ids),
-                                        "operation": "subscribe",
-                                        "custom_feature_enabled": True,
-                                    }
+                                {
+                                    "assets_ids": list(update.added_token_ids),
+                                    "operation": "subscribe",
+                                }
                                 )
                             )
                         if update.removed_token_ids:
