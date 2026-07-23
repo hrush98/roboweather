@@ -5,7 +5,7 @@ Keep this file up to date for notable data, model, and trading changes.
 ## 2026-07-23
 
 - Completed the repository work needed to evaluate Phase 3 Slice 2 honestly: market-tape discovery now merges current and future active weather markets, records authoritative Gamma creation/listing provenance, migrates existing catalogs, refreshes subscriptions dynamically without scheduled reconnect gaps, and provides a strict multi-session lifecycle/resource report plus a bounded 72-hour user-systemd probe unit. A remote audit found no active recorder and only approximately 18-second historical probes, so the Slice 2 evidence gate remains open until a real first-listing-through-close run passes.
-- Started corrected bounded host session `tape-20260723T172701Z-6fa05892`. Its initial strict health check passed with 616 current/future tokens, 32,100 captured events, all initial books valid, zero reconstruction errors, 127 MiB RSS, queue high-water 1 / 10,000, and 70 ms receipt lag; the complete-lifecycle gate remains pending elapsed evidence.
+- A dynamic-subscription host probe preserved existing coverage across refresh but showed that optional custom feed events would exceed the raw-disk budget, reaching 405 MB in four minutes. Removed that optional stream, archived the failed probe, and started final core-L2 session `tape-20260723T173217Z-4c025738`; its initial strict health check passed with 616 current/future tokens, all initial books valid, zero reconstruction errors, 126 MiB RSS, queue high-water 1 / 10,000, and 69 ms receipt lag. The complete-lifecycle gate remains pending elapsed evidence.
 
 ## 2026-07-22
 
