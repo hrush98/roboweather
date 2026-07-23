@@ -29,6 +29,19 @@ class SubscriptionRegistry:
         market_limit: int = 50000,
     ) -> RegistryRefresh:
         result = self.discovery.discover(market_limit=market_limit)
+        return self.apply_discovery(
+            result,
+            session_id=session_id,
+            effective_at_utc=effective_at_utc,
+        )
+
+    def apply_discovery(
+        self,
+        result: TapeDiscoveryResult,
+        *,
+        session_id: str,
+        effective_at_utc: str,
+    ) -> RegistryRefresh:
         upserted = self.catalog.upsert_tokens(list(result.tokens))
         if result.complete:
             self.catalog.retire_missing_tokens(

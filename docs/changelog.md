@@ -4,7 +4,7 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-07-23
 
-- Completed the repository work needed to evaluate Phase 3 Slice 2 honestly: market-tape discovery now merges current and future active weather markets, records authoritative Gamma creation/listing provenance, migrates existing catalogs, and provides a strict multi-session lifecycle/resource report plus a bounded 72-hour user-systemd probe unit. A remote audit found no active recorder and only approximately 18-second historical probes, so the Slice 2 evidence gate remains open until a real first-listing-through-close run passes.
+- Completed the repository work needed to evaluate Phase 3 Slice 2 honestly: market-tape discovery now merges current and future active weather markets, records authoritative Gamma creation/listing provenance, migrates existing catalogs, refreshes subscriptions dynamically without scheduled reconnect gaps, and provides a strict multi-session lifecycle/resource report plus a bounded 72-hour user-systemd probe unit. A remote audit found no active recorder and only approximately 18-second historical probes, so the Slice 2 evidence gate remains open until a real first-listing-through-close run passes.
 
 ## 2026-07-22
 

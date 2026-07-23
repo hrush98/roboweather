@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import Future
 import json
 import socket
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -21,7 +23,7 @@ from weather_trader.tape.contracts import (
     MarketTapeEvent,
     SubscriptionGeneration,
 )
-from weather_trader.tape.discovery import TapeDiscoveryService
+from weather_trader.tape.discovery import TapeDiscoveryResult, TapeDiscoveryService
 from weather_trader.tape.storage import RotatingRawSegmentWriter
 from weather_trader.tape.subscriptions import SubscriptionRegistry
 
@@ -31,8 +33,19 @@ COLLECTOR_VERSION = "market_tape_collector_v1"
 
 
 class MarketTapeTransport(Protocol):
-    def stream(self, token_ids: tuple[str, ...]) -> AsyncIterator[dict[str, Any] | list[Any]]:
+    def stream(
+        self,
+        token_ids: tuple[str, ...],
+        *,
+        subscription_updates: asyncio.Queue[SubscriptionUpdate] | None = None,
+    ) -> AsyncIterator[dict[str, Any] | list[Any]]:
         ...
+
+
+@dataclass(frozen=True)
+class SubscriptionUpdate:
+    added_token_ids: tuple[str, ...]
+    removed_token_ids: tuple[str, ...]
 
 
 class PolymarketTapeTransport:
@@ -45,7 +58,12 @@ class PolymarketTapeTransport:
         self.url = url
         self.max_message_bytes = max_message_bytes
 
-    async def stream(self, token_ids: tuple[str, ...]) -> AsyncIterator[dict[str, Any] | list[Any]]:
+    async def stream(
+        self,
+        token_ids: tuple[str, ...],
+        *,
+        subscription_updates: asyncio.Queue[SubscriptionUpdate] | None = None,
+    ) -> AsyncIterator[dict[str, Any] | list[Any]]:
         try:
             import websockets
         except ImportError as exc:  # pragma: no cover
@@ -56,14 +74,69 @@ class PolymarketTapeTransport:
             ping_timeout=20,
             max_size=self.max_message_bytes,
         ) as websocket:
-            await websocket.send(json.dumps({"type": "market", "assets_ids": list(token_ids)}))
-            async for raw in websocket:
-                if raw == "PONG":
-                    continue
-                try:
-                    yield json.loads(raw)
-                except (TypeError, json.JSONDecodeError):
-                    continue
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "market",
+                        "assets_ids": list(token_ids),
+                        "custom_feature_enabled": True,
+                    }
+                )
+            )
+            receive_task: asyncio.Task[str | bytes] | None = None
+            update_task: asyncio.Task[SubscriptionUpdate] | None = None
+            try:
+                while True:
+                    receive_task = receive_task or asyncio.create_task(websocket.recv())
+                    if subscription_updates is not None:
+                        update_task = update_task or asyncio.create_task(subscription_updates.get())
+                    waiting = {receive_task}
+                    if update_task is not None:
+                        waiting.add(update_task)
+                    done, _ = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+                    if update_task is not None and update_task in done:
+                        update = update_task.result()
+                        update_task = None
+                        if update.added_token_ids:
+                            await websocket.send(
+                                json.dumps(
+                                    {
+                                        "assets_ids": list(update.added_token_ids),
+                                        "operation": "subscribe",
+                                        "custom_feature_enabled": True,
+                                    }
+                                )
+                            )
+                        if update.removed_token_ids:
+                            await websocket.send(
+                                json.dumps(
+                                    {
+                                        "assets_ids": list(update.removed_token_ids),
+                                        "operation": "unsubscribe",
+                                    }
+                                )
+                            )
+                        subscription_updates.task_done()
+                    if receive_task not in done:
+                        continue
+                    raw = receive_task.result()
+                    receive_task = None
+                    if raw == "PONG":
+                        continue
+                    try:
+                        yield json.loads(raw)
+                    except (TypeError, json.JSONDecodeError):
+                        continue
+            finally:
+                pending = [
+                    task
+                    for task in (receive_task, update_task)
+                    if task is not None and not task.done()
+                ]
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
 
 
 @dataclass(frozen=True)
@@ -174,11 +247,13 @@ async def collect_market_tape(
                     generation,
                     writer,
                     catalog,
+                    registry,
                     token_to_market,
                     coverage,
                     refresh_seconds=refresh_seconds,
                     telemetry_seconds=telemetry_seconds,
                     queue_size=queue_size,
+                    market_limit=market_limit,
                     deadline=deadline,
                     max_messages=remaining_messages,
                     initial_messages=messages,
@@ -189,12 +264,16 @@ async def collect_market_tape(
                     checkpoint_every=checkpoint_every,
                 )
             except Exception:
+                latest_after_error = catalog.latest_subscription(session_id)
+                if latest_after_error is not None:
+                    subscribed = latest_after_error.token_ids
+                    latest_generation_number = latest_after_error.generation
                 _transition_tokens(
                     catalog,
                     session_id,
                     subscribed,
                     coverage,
-                    generation.generation,
+                    latest_generation_number,
                     CoverageState.GAPPED,
                     reason="transport_error",
                     gap_id=uuid.uuid4().hex,
@@ -215,7 +294,7 @@ async def collect_market_tape(
                     session_id,
                     subscribed,
                     coverage,
-                    generation.generation,
+                    latest_generation_number,
                     CoverageState.RECONNECTING,
                     reason=f"transport_retry_{reconnects}",
                 )
@@ -224,19 +303,22 @@ async def collect_market_tape(
             events += collected.events
             high_water = max(high_water, collected.queue_high_water)
             receipt_sequence += collected.events
+            generations += collected.subscription_generations
+            subscribed = collected.subscribed_token_ids
+            latest_generation_number = collected.latest_generation
             if collected.termination == "max_messages":
                 finish_reason = "max_messages"
                 break
             if collected.termination == "deadline":
                 finish_reason = "max_seconds"
                 break
-            gap_reason = "scheduled_subscription_refresh" if collected.termination == "refresh" else "stream_end"
+            gap_reason = "stream_end"
             _transition_tokens(
                 catalog,
                 session_id,
                 subscribed,
                 coverage,
-                generation.generation,
+                latest_generation_number,
                 CoverageState.GAPPED,
                 reason=gap_reason,
                 gap_id=uuid.uuid4().hex,
@@ -256,7 +338,7 @@ async def collect_market_tape(
                 session_id,
                 subscribed,
                 coverage,
-                generation.generation,
+                latest_generation_number,
                 CoverageState.RECONNECTING,
                 reason=f"{gap_reason}_reconnect",
             )
@@ -306,6 +388,9 @@ class _GenerationStats:
     events: int
     queue_high_water: int
     termination: str
+    subscription_generations: int
+    subscribed_token_ids: tuple[str, ...]
+    latest_generation: int
 
 
 async def _collect_generation(
@@ -313,12 +398,14 @@ async def _collect_generation(
     generation: SubscriptionGeneration,
     writer: RotatingRawSegmentWriter,
     catalog: TapeCatalog,
+    registry: SubscriptionRegistry,
     token_to_market: dict[str, str],
     coverage: dict[str, CoverageState],
     *,
     refresh_seconds: float,
     telemetry_seconds: float,
     queue_size: int,
+    market_limit: int,
     deadline: float | None,
     max_messages: int | None,
     initial_messages: int,
@@ -329,7 +416,13 @@ async def _collect_generation(
     checkpoint_every: int,
 ) -> _GenerationStats:
     queue: asyncio.Queue[tuple[dict[str, Any] | list[Any], str, int]] = asyncio.Queue(maxsize=queue_size)
-    stream = transport.stream(generation.token_ids)
+    subscription_updates: asyncio.Queue[SubscriptionUpdate] = asyncio.Queue()
+    current_generation = generation
+    current_subscribed = generation.token_ids
+    stream = transport.stream(
+        current_subscribed,
+        subscription_updates=subscription_updates,
+    )
     producer_done = asyncio.Event()
 
     async def produce() -> None:
@@ -341,10 +434,10 @@ async def _collect_generation(
 
     producer = asyncio.create_task(produce())
     messages = events = high_water = 0
-    end_at = time.monotonic() + refresh_seconds
-    if deadline is not None:
-        end_at = min(end_at, deadline)
-    termination = "refresh"
+    next_refresh = time.monotonic() + refresh_seconds
+    refresh_task: Future[TapeDiscoveryResult] | None = None
+    subscription_generations = 0
+    termination = "stream_end"
     last_receipt_lag_ms: float | None = None
     next_telemetry = time.monotonic() + telemetry_seconds
 
@@ -364,14 +457,95 @@ async def _collect_generation(
         )
         next_telemetry = time.monotonic() + telemetry_seconds
 
+    async def apply_refresh_if_ready() -> None:
+        nonlocal refresh_task, next_refresh, current_generation
+        nonlocal current_subscribed, subscription_generations
+        if refresh_task is None:
+            if time.monotonic() >= next_refresh:
+                if deadline is not None and time.monotonic() + 0.01 >= deadline:
+                    return
+                refresh_task = _start_discovery(
+                    registry.discovery,
+                    market_limit=market_limit,
+                )
+            return
+        if not refresh_task.done():
+            return
+        try:
+            discovery_result = refresh_task.result()
+        except Exception:
+            # A discovery outage must not tear down otherwise valid tape
+            # coverage. The next bounded refresh retries it.
+            refresh_task = None
+            next_refresh = time.monotonic() + refresh_seconds
+            return
+        refreshed = registry.apply_discovery(
+            discovery_result,
+            session_id=generation.session_id,
+            effective_at_utc=_utc_now(),
+        )
+        refresh_task = None
+        next_refresh = time.monotonic() + refresh_seconds
+        if refreshed.subscription is None:
+            return
+        previous = set(current_subscribed)
+        current_generation = refreshed.subscription
+        current_subscribed = current_generation.token_ids
+        current = set(current_subscribed)
+        added = tuple(sorted(current - previous))
+        removed = tuple(sorted(previous - current))
+        token_to_market.clear()
+        token_to_market.update(
+            {entry.token_id: entry.market_id for entry in catalog.active_tokens()}
+        )
+        changed_at = _utc_now()
+        if removed:
+            _transition_tokens(
+                catalog,
+                generation.session_id,
+                removed,
+                coverage,
+                current_generation.generation,
+                CoverageState.CLOSED,
+                reason="subscription_removed",
+            )
+        for token_id in added:
+            coverage[token_id] = CoverageState.RESYNCING
+            catalog.transition_coverage(
+                CoverageInterval(
+                    session_id=generation.session_id,
+                    token_id=token_id,
+                    state=CoverageState.RESYNCING,
+                    started_at_utc=changed_at,
+                    ended_at_utc=None,
+                    subscription_generation=current_generation.generation,
+                    reason="dynamic_subscription_added",
+                )
+            )
+        await subscription_updates.put(
+            SubscriptionUpdate(
+                added_token_ids=added,
+                removed_token_ids=removed,
+            )
+        )
+        subscription_generations += 1
+
     try:
         while True:
             if max_messages is not None and messages >= max_messages:
                 termination = "max_messages"
                 break
-            remaining = end_at - time.monotonic()
+            if deadline is not None and time.monotonic() >= deadline:
+                termination = "deadline"
+                break
+            await apply_refresh_if_ready()
+            remaining = (
+                deadline - time.monotonic()
+                if deadline is not None
+                else float("inf")
+            )
             if remaining <= 0:
-                termination = "deadline" if deadline is not None and time.monotonic() >= deadline else "refresh"
+                termination = "deadline"
                 break
             if producer_done.is_set() and queue.empty():
                 await producer
@@ -383,6 +557,13 @@ async def _collect_generation(
                     wait_timeout,
                     max(0.001, next_telemetry - time.monotonic()),
                 )
+            if refresh_task is None:
+                wait_timeout = min(
+                    wait_timeout,
+                    max(0.001, next_refresh - time.monotonic()),
+                )
+            else:
+                wait_timeout = min(wait_timeout, 0.1)
             try:
                 message, received_at, monotonic_ns = await asyncio.wait_for(
                     queue.get(), timeout=wait_timeout
@@ -394,8 +575,8 @@ async def _collect_generation(
                     break
                 if telemetry_seconds <= 0 or time.monotonic() >= next_telemetry:
                     record_telemetry()
-                if time.monotonic() >= end_at:
-                    termination = "deadline" if deadline is not None and time.monotonic() >= deadline else "refresh"
+                if deadline is not None and time.monotonic() >= deadline:
+                    termination = "deadline"
                     break
                 continue
             messages += 1
@@ -418,7 +599,7 @@ async def _collect_generation(
                         received_at_utc=received_at,
                         received_monotonic_ns=monotonic_ns,
                         receipt_sequence=initial_receipt_sequence + events,
-                        subscription_generation=generation.generation,
+                        subscription_generation=current_generation.generation,
                         coverage_state=state,
                     )
                 )
@@ -444,7 +625,7 @@ async def _collect_generation(
                                 state=CoverageState.GAPPED,
                                 started_at_utc=received_at,
                                 ended_at_utc=None,
-                                subscription_generation=generation.generation,
+                                subscription_generation=current_generation.generation,
                                 reason=book.invalid_reason,
                                 gap_id=uuid.uuid4().hex,
                             )
@@ -461,7 +642,7 @@ async def _collect_generation(
                             state=CoverageState.VALID,
                             started_at_utc=received_at,
                             ended_at_utc=None,
-                            subscription_generation=generation.generation,
+                            subscription_generation=current_generation.generation,
                             reason="initial_full_book_received",
                         )
                     )
@@ -473,7 +654,37 @@ async def _collect_generation(
             producer.cancel()
         await asyncio.gather(producer, return_exceptions=True)
         record_telemetry()
-    return _GenerationStats(messages, events, high_water, termination)
+    return _GenerationStats(
+        messages,
+        events,
+        high_water,
+        termination,
+        subscription_generations,
+        current_subscribed,
+        current_generation.generation,
+    )
+
+
+def _start_discovery(
+    discovery: TapeDiscoveryService,
+    *,
+    market_limit: int,
+) -> Future[TapeDiscoveryResult]:
+    """Run blocking Gamma discovery without pausing WebSocket consumption."""
+    future: Future[TapeDiscoveryResult] = Future()
+
+    def run() -> None:
+        try:
+            future.set_result(discovery.discover(market_limit=market_limit))
+        except BaseException as exc:
+            future.set_exception(exc)
+
+    threading.Thread(
+        target=run,
+        name="market-tape-discovery",
+        daemon=True,
+    ).start()
+    return future
 
 
 def _event_units(message: dict[str, Any] | list[Any]) -> list[dict[str, Any]]:

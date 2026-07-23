@@ -246,6 +246,49 @@ def test_collector_records_telemetry_while_feed_is_idle(tmp_path: Path) -> None:
     catalog.close()
 
 
+def test_collector_updates_subscription_without_gapping_existing_tokens(
+    tmp_path: Path,
+) -> None:
+    catalog = TapeCatalog(tmp_path / "catalog.sqlite")
+    initial = _tokens_from_markets([market()])
+    expanded = _tokens_from_markets([market(), market(market_id="market-2")])
+    discovery = SequencedTapeDiscovery(initial, expanded)
+    transport = DynamicTransport()
+
+    stats = asyncio.run(
+        collect_market_tape(
+            catalog,
+            raw_directory=tmp_path / "raw",
+            discovery=discovery,
+            transport=transport,
+            refresh_seconds=0.05,
+            max_seconds=0.25,
+            telemetry_seconds=0.05,
+        )
+    )
+
+    existing_states = [
+        row[0]
+        for row in catalog.connection.execute(
+            "select state from tape_coverage_intervals where token_id = 'market-1-yes' order by id"
+        )
+    ]
+    added_states = [
+        row[0]
+        for row in catalog.connection.execute(
+            "select state from tape_coverage_intervals where token_id = 'market-2-yes' order by id"
+        )
+    ]
+
+    assert stats.subscription_generations == 2
+    assert transport.connections == 1
+    assert transport.updates[0].added_token_ids == ("market-2-no", "market-2-yes")
+    assert transport.updates[0].removed_token_ids == ()
+    assert existing_states == ["RESYNCING", "VALID", "CLOSED"]
+    assert added_states == ["RESYNCING", "VALID", "CLOSED"]
+    catalog.close()
+
+
 def test_active_health_allows_open_segment_before_first_rotation(tmp_path: Path) -> None:
     catalog = TapeCatalog(tmp_path / "catalog.sqlite")
     catalog.start_session(session())
@@ -400,19 +443,33 @@ class FakeTapeDiscovery:
         return self.result
 
 
+class SequencedTapeDiscovery:
+    def __init__(self, initial, expanded) -> None:
+        self.results = [
+            TapeDiscoveryResult(tuple(initial), (), True),
+            TapeDiscoveryResult(tuple(expanded), (), True),
+        ]
+        self.calls = 0
+
+    def discover(self, *, market_limit: int):
+        index = min(self.calls, len(self.results) - 1)
+        self.calls += 1
+        return self.results[index]
+
+
 class FakeTransport:
     def __init__(self, messages) -> None:
         self.messages = messages
         self.subscriptions = []
 
-    async def stream(self, token_ids):
+    async def stream(self, token_ids, *, subscription_updates=None):
         self.subscriptions.append(token_ids)
         for message in self.messages:
             yield message
 
 
 class FailingTransport:
-    async def stream(self, token_ids):
+    async def stream(self, token_ids, *, subscription_updates=None):
         if False:
             yield {}
         raise RuntimeError("socket failed")
@@ -422,7 +479,7 @@ class RecoveringTransport:
     def __init__(self) -> None:
         self.attempts = 0
 
-    async def stream(self, token_ids):
+    async def stream(self, token_ids, *, subscription_updates=None):
         self.attempts += 1
         if self.attempts == 1:
             raise RuntimeError("transient socket failure")
@@ -436,18 +493,45 @@ class RecoveringTransport:
 
 
 class SilentTransport:
-    async def stream(self, token_ids):
+    async def stream(self, token_ids, *, subscription_updates=None):
         await asyncio.sleep(1)
         if False:
             yield {}
 
 
 class IdleAfterBookTransport:
-    async def stream(self, token_ids):
+    async def stream(self, token_ids, *, subscription_updates=None):
         yield {
             "event_type": "book",
             "asset_id": "market-1-yes",
             "market": "market-1",
+            "bids": [],
+            "asks": [],
+        }
+        await asyncio.sleep(1)
+
+
+class DynamicTransport:
+    def __init__(self) -> None:
+        self.connections = 0
+        self.updates = []
+
+    async def stream(self, token_ids, *, subscription_updates=None):
+        self.connections += 1
+        yield {
+            "event_type": "book",
+            "asset_id": "market-1-yes",
+            "market": "market-1",
+            "bids": [],
+            "asks": [],
+        }
+        update = await subscription_updates.get()
+        self.updates.append(update)
+        subscription_updates.task_done()
+        yield {
+            "event_type": "book",
+            "asset_id": "market-2-yes",
+            "market": "market-2",
             "bids": [],
             "asks": [],
         }
