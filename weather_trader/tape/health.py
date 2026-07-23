@@ -90,7 +90,11 @@ def evaluate_tape_health(
             age = ((now or datetime.now(timezone.utc)) - captured).total_seconds()
             if age > stale_after_seconds:
                 failures.append("telemetry_stale")
-    if events > 0 and not partitions:
+    # The active writer catalogs a segment atomically only when it rotates or
+    # closes. Fresh telemetry and the current raw byte count are sufficient for
+    # operational health before that first rotation; terminal sessions must
+    # always have cataloged partitions.
+    if events > 0 and not partitions and session["finished_at_utc"] is not None:
         failures.append("missing_partitions")
     if verify_segments:
         for partition in partitions:

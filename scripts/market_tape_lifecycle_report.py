@@ -25,6 +25,11 @@ def main() -> None:
     parser.add_argument("--retention-days", type=int, default=14)
     parser.add_argument("--max-receipt-lag-ms", type=float, default=10_000.0)
     parser.add_argument("--max-rss-mib", type=float, default=1024.0)
+    parser.add_argument(
+        "--include-markets",
+        action="store_true",
+        help="Include per-market lifecycle details in addition to the default summary.",
+    )
     parser.add_argument("--no-fail", action="store_true")
     args = parser.parse_args()
     with TapeCatalog(args.catalog.expanduser()) as catalog:
@@ -38,7 +43,10 @@ def main() -> None:
             max_receipt_lag_ms=args.max_receipt_lag_ms,
             max_rss_bytes=int(args.max_rss_mib * 1024**2),
         )
-    print(json.dumps(asdict(report), indent=2, sort_keys=True))
+    payload = asdict(report)
+    if not args.include_markets:
+        payload.pop("markets")
+    print(json.dumps(payload, indent=2, sort_keys=True))
     if not report.passed and not args.no_fail:
         raise SystemExit(1)
 

@@ -347,6 +347,23 @@ async def _collect_generation(
     termination = "refresh"
     last_receipt_lag_ms: float | None = None
     next_telemetry = time.monotonic() + telemetry_seconds
+
+    def record_telemetry() -> None:
+        nonlocal next_telemetry
+        _record_metric(
+            catalog,
+            writer,
+            session_id=generation.session_id,
+            messages=initial_messages + messages,
+            events=initial_receipt_sequence + events,
+            queue_depth=queue.qsize(),
+            queue_capacity=queue_size,
+            queue_high_water=high_water,
+            receipt_lag_ms=last_receipt_lag_ms,
+            reconnect_attempt=reconnect_attempt,
+        )
+        next_telemetry = time.monotonic() + telemetry_seconds
+
     try:
         while True:
             if max_messages is not None and messages >= max_messages:
@@ -360,15 +377,23 @@ async def _collect_generation(
                 await producer
                 termination = "stream_end"
                 break
+            wait_timeout = min(remaining, 1.0)
+            if telemetry_seconds > 0:
+                wait_timeout = min(
+                    wait_timeout,
+                    max(0.001, next_telemetry - time.monotonic()),
+                )
             try:
                 message, received_at, monotonic_ns = await asyncio.wait_for(
-                    queue.get(), timeout=min(remaining, 1.0)
+                    queue.get(), timeout=wait_timeout
                 )
             except asyncio.TimeoutError:
                 if producer.done():
                     await producer
                     termination = "stream_end"
                     break
+                if telemetry_seconds <= 0 or time.monotonic() >= next_telemetry:
+                    record_telemetry()
                 if time.monotonic() >= end_at:
                     termination = "deadline" if deadline is not None and time.monotonic() >= deadline else "refresh"
                     break
@@ -442,35 +467,12 @@ async def _collect_generation(
                     )
             queue.task_done()
             if telemetry_seconds <= 0 or time.monotonic() >= next_telemetry:
-                _record_metric(
-                    catalog,
-                    writer,
-                    session_id=generation.session_id,
-                    messages=initial_messages + messages,
-                    events=initial_receipt_sequence + events,
-                    queue_depth=queue.qsize(),
-                    queue_capacity=queue_size,
-                    queue_high_water=high_water,
-                    receipt_lag_ms=last_receipt_lag_ms,
-                    reconnect_attempt=reconnect_attempt,
-                )
-                next_telemetry = time.monotonic() + telemetry_seconds
+                record_telemetry()
     finally:
         if not producer.done():
             producer.cancel()
         await asyncio.gather(producer, return_exceptions=True)
-        _record_metric(
-            catalog,
-            writer,
-            session_id=generation.session_id,
-            messages=initial_messages + messages,
-            events=initial_receipt_sequence + events,
-            queue_depth=queue.qsize(),
-            queue_capacity=queue_size,
-            queue_high_water=high_water,
-            receipt_lag_ms=last_receipt_lag_ms,
-            reconnect_attempt=reconnect_attempt,
-        )
+        record_telemetry()
     return _GenerationStats(messages, events, high_water, termination)
 
 

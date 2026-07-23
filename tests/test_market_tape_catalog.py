@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 import asyncio
 from pathlib import Path
 import sqlite3
@@ -10,7 +10,7 @@ import pytest
 from weather_trader.execution.contracts import MarketFamily, MarketSnapshot
 from weather_trader.tape.catalog import TapeCatalog
 from weather_trader.tape.collector import collect_market_tape
-from weather_trader.tape.contracts import CollectorSession, TokenOutcome
+from weather_trader.tape.contracts import CollectorMetric, CollectorSession, TokenOutcome
 from weather_trader.tape.discovery import TapeDiscoveryResult, TapeDiscoveryService, _tokens_from_markets
 from weather_trader.tape.health import evaluate_tape_health
 from weather_trader.tape.subscriptions import SubscriptionRegistry
@@ -222,6 +222,57 @@ def test_collector_records_bounded_generation_and_requires_full_book_for_valid_c
     catalog.close()
 
 
+def test_collector_records_telemetry_while_feed_is_idle(tmp_path: Path) -> None:
+    catalog = TapeCatalog(tmp_path / "catalog.sqlite")
+    stats = asyncio.run(
+        collect_market_tape(
+            catalog,
+            raw_directory=tmp_path / "raw",
+            discovery=FakeTapeDiscovery(_tokens_from_markets([market()])),
+            transport=IdleAfterBookTransport(),
+            refresh_seconds=1,
+            max_seconds=0.2,
+            telemetry_seconds=0.05,
+        )
+    )
+
+    metrics = catalog.connection.execute(
+        "select * from tape_collector_metrics where session_id = ? order by id",
+        (stats.session_id,),
+    ).fetchall()
+
+    assert len(metrics) >= 3
+    assert all(row["events"] == 1 for row in metrics)
+    catalog.close()
+
+
+def test_active_health_allows_open_segment_before_first_rotation(tmp_path: Path) -> None:
+    catalog = TapeCatalog(tmp_path / "catalog.sqlite")
+    catalog.start_session(session())
+    captured = datetime.now(timezone.utc).isoformat()
+    catalog.record_metric(
+        CollectorMetric(
+            session_id="session-1",
+            captured_at_utc=captured,
+            messages=1,
+            events=2,
+            queue_depth=0,
+            queue_capacity=10_000,
+            queue_high_water=2,
+            rss_bytes=100_000_000,
+            raw_disk_bytes=1024,
+            receipt_lag_ms=100.0,
+            reconnect_attempt=0,
+        )
+    )
+
+    report = evaluate_tape_health(catalog, now=datetime.fromisoformat(captured))
+
+    assert report.healthy is True
+    assert report.partitions == 0
+    catalog.close()
+
+
 def test_collector_propagates_transport_failure_and_closes_session(tmp_path: Path) -> None:
     catalog = TapeCatalog(tmp_path / "catalog.sqlite")
 
@@ -389,3 +440,15 @@ class SilentTransport:
         await asyncio.sleep(1)
         if False:
             yield {}
+
+
+class IdleAfterBookTransport:
+    async def stream(self, token_ids):
+        yield {
+            "event_type": "book",
+            "asset_id": "market-1-yes",
+            "market": "market-1",
+            "bids": [],
+            "asks": [],
+        }
+        await asyncio.sleep(1)
