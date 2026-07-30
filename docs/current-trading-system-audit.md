@@ -30,7 +30,7 @@ Current confidence by layer:
 | Current configured portfolio | Failed the fresh July 9-14 cap-aware replay. | Do not restart it. |
 | New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
 | Fair-value/price sheet | V2a Slices 0-3 now produce leak-safe calibration, causal uncertainty reserves, conservative fairs, maximum quotes, and economic gates. The first 98-row Slice 3 read leaves both pilots research-only because no calibrator or untouched forward window was frozen. | Freeze a baseline and forward start before new outcomes; do not promote from the July 16-29 comparison. |
-| Phase 3 shared tape | Slices 1-4 are implemented. Recorder discovery/reconnect/health/cohort-integrity defects are repaired and a 1,364-token multi-refresh short probe passed, but no post-fix first-listing-through-close lifecycle has passed; Slice 4 also lacks one real persisted-quote join. | Install the repaired unit and run one fresh scoped lifecycle probe; continue to fail closed on gaps. |
+| Phase 3 shared tape | Slices 1-4 are implemented. Recorder discovery/reconnect/health/cohort-integrity defects are repaired, a 1,364-token two-refresh short probe passed, and bounded validation run `tape-validation-20260730T183750Z-69556cbf` is active through 2026-08-02 18:37:50 UTC. No post-fix first-listing-through-close lifecycle has passed; Slice 4 also lacks one real persisted-quote join. | Monitor the active scoped run and require the final strict lifecycle report to pass; continue to fail closed on gaps. |
 | Phase 3D strategy discovery | The architecture now requires broad policy-neutral joined rows, constrained walk-forward search, complexity control, one immutable winner, and untouched forward tape. The materializer and discovery engine are not yet implemented. | Build the broad view and discovery/freeze path; do not presume a named pilot is the winner. |
 | Existing candidate-token shadow collector | Useful plumbing prototype, but candidate-scoped and not a continuous causal market tape. | Do not use its fill labels as promotion evidence. |
 | Fillability and adverse selection | Still unresolved. Public L2 data can provide bounds, not exact hypothetical queue position. | Validate shared-tape replay, then run controlled real-order canaries. |
@@ -99,7 +99,7 @@ The result is reproducible with `scripts/tape_strategy_holdout_report.py`; the f
 1. Keep funded trading paused.
 2. Continue broad research snapshots and outcome resolution.
 3. Stop adding model families merely to expand the leaderboard. New models need demonstrably different predictions or incremental information.
-4. Keep the obsolete shared market-tape probe stopped. Install the repaired bounded unit, start one fresh scoped validation cohort, and require the scoped strict lifecycle report to pass before calling Slice 2 complete. Do not promote the probe into an unattended production service.
+4. Monitor bounded shared-tape validation run `tape-validation-20260730T183750Z-69556cbf`, scheduled to end at 2026-08-02 18:37:50 UTC, and require its scoped strict lifecycle report to pass before calling Slice 2 complete. The unit remains disabled and must not be promoted into an unattended production service.
 5. Treat the current candidate-token collector and shadow labeler as a prototype only.
 6. Keep the late HRRR-rich tuned dynamic and HRRR-v2 dynamic policies as V2 vertical controls and forward signal hypotheses. Add the frozen three-family late taker portfolio as separate preliminary evidence; do not presume any is the Phase 3D winner, fund it, or retune it on the July 23-28 holdout.
 7. Implement `docs/implementation/price-sheet-v2.md`: V2a walk-forward outcome pricing now, then V2b execution reductions/skips on valid tape windows.
@@ -153,6 +153,12 @@ Update the body of this document when the current assessment changes. Append one
 
 ## Audit Log
 
+- 2026-07-30: Corrected lifecycle right-censoring and narrowed recorder
+  fingerprinting, then passed a two-refresh 1,364-token short probe with 60,401
+  events, zero health failures, queue high-water 1/10,000, and no reconstruction
+  errors. Started disabled bounded validation run
+  `tape-validation-20260730T183750Z-69556cbf`, due 2026-08-02 18:37:50 UTC;
+  complete-lifecycle acceptance remains open.
 - 2026-07-30: Made constrained policy-neutral strategy discovery a required
   Phase 3D gate. Added a broad snapshot/tape/settlement substrate, predeclared
   walk-forward and complexity rules, at most one immutable primary winner, and

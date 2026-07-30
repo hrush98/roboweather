@@ -4,7 +4,7 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-07-30
 
-- Corrected the Phase 3 lifecycle acceptance cohort to include only in-window listings whose scheduled close is at or before the validation end. Later-closing listings are now reported explicitly as right-censored and do not fail a clean matured cohort; late, fallback-listed, and coverage-incomplete matured markets still fail closed. Replaced whole-repository Git fingerprinting with a recorder-scoped source/data/service-unit/runtime-version fingerprint while retaining the separate collector-config identity, so unrelated commits no longer split a supervised run.
+- Corrected the Phase 3 lifecycle acceptance cohort to include only in-window listings whose scheduled close is at or before the validation end. Later-closing listings are now reported explicitly as right-censored and do not fail a clean matured cohort; late, fallback-listed, and coverage-incomplete matured markets still fail closed. Replaced whole-repository Git fingerprinting with a recorder-scoped source/data/service-unit/runtime-version fingerprint while retaining the separate collector-config identity, so unrelated commits no longer split a supervised run. A two-refresh 1,364-token short probe passed strict health, and disabled bounded validation run `tape-validation-20260730T183750Z-69556cbf` is active through 2026-08-02 18:37:50 UTC.
 - Made policy-neutral strategy discovery a first-class Phase 3D gate between
   measurement and funded validation. Added a dedicated implementation contract
   for a broad causal snapshot + tape + settlement substrate, predeclared
