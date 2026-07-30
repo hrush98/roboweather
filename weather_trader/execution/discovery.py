@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from weather_trader.execution.contracts import MarketFamily, MarketSnapshot
@@ -42,6 +42,7 @@ GLOBAL_WEATHER_EVENT_CONFIGS: tuple[WeatherEventConfig, ...] = (
 )
 
 GLOBAL_CITY_SLUGS = frozenset(config.city_slug for config in GLOBAL_WEATHER_EVENT_CONFIGS)
+FUTURE_EVENT_LOOKAHEAD_DAYS = 2
 
 
 class MarketDiscoveryService:
@@ -60,11 +61,7 @@ class MarketDiscoveryService:
         discovered_at = now.isoformat()
         self.last_warnings = []
         configs = _configs_for_scope(market_scope)
-        targets = [
-            WeatherEventTarget(config.city_slug, now.astimezone(ZoneInfo(config.timezone)).date(), family)
-            for config in configs
-            for family in (MarketFamily.HIGH_TEMP, MarketFamily.LOW_TEMP)
-        ]
+        targets = _weather_event_targets(configs, now, include_future=include_future)
         event_items, missing_events = self.reader._fetch_weather_event_markets(targets)
         self.last_warnings.extend(f"missing_event:{slug}" for slug in missing_events)
 
@@ -182,6 +179,32 @@ def _configs_for_scope(market_scope: str) -> tuple[WeatherEventConfig, ...]:
     if market_scope == "all":
         return (*WEATHER_EVENT_CONFIGS, *GLOBAL_WEATHER_EVENT_CONFIGS)
     raise ValueError(f"Unsupported market_scope: {market_scope}")
+
+
+def _weather_event_targets(
+    configs: tuple[WeatherEventConfig, ...],
+    now_utc: datetime,
+    *,
+    include_future: bool,
+) -> list[WeatherEventTarget]:
+    """Build direct event-slug targets for the supported local-date horizon.
+
+    Gamma's broad active-market listing is retained as a fallback, but it is
+    not ordered to guarantee that newly listed weather events appear within a
+    bounded page scan. Querying the deterministic event slugs for the next two
+    local dates lets the tape recorder see the observed one- and two-day-ahead
+    listing cadence on its next discovery refresh.
+    """
+
+    lookahead_days = FUTURE_EVENT_LOOKAHEAD_DAYS if include_future else 0
+    targets: list[WeatherEventTarget] = []
+    for config in configs:
+        local_date = now_utc.astimezone(ZoneInfo(config.timezone)).date()
+        for days_ahead in range(lookahead_days + 1):
+            market_date = local_date + timedelta(days=days_ahead)
+            for family in (MarketFamily.HIGH_TEMP, MarketFamily.LOW_TEMP):
+                targets.append(WeatherEventTarget(config.city_slug, market_date, family))
+    return targets
 
 
 def _market_in_scope(city: str, market_scope: str) -> bool:

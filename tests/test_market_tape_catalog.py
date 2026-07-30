@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import asyncio
 from pathlib import Path
 import sqlite3
@@ -10,7 +10,13 @@ import pytest
 from weather_trader.execution.contracts import MarketFamily, MarketSnapshot
 from weather_trader.tape.catalog import TapeCatalog
 from weather_trader.tape.collector import collect_market_tape
-from weather_trader.tape.contracts import CollectorMetric, CollectorSession, TokenOutcome
+from weather_trader.tape.contracts import (
+    CollectorMetric,
+    CollectorSession,
+    CoverageInterval,
+    CoverageState,
+    TokenOutcome,
+)
 from weather_trader.tape.discovery import TapeDiscoveryResult, TapeDiscoveryService, _tokens_from_markets
 from weather_trader.tape.health import evaluate_tape_health
 from weather_trader.tape.subscriptions import SubscriptionRegistry
@@ -293,6 +299,25 @@ def test_active_health_allows_open_segment_before_first_rotation(tmp_path: Path)
     catalog = TapeCatalog(tmp_path / "catalog.sqlite")
     catalog.start_session(session())
     captured = datetime.now(timezone.utc).isoformat()
+    catalog.upsert_tokens(_tokens_from_markets([market()]))
+    generation = catalog.reconcile_subscription(
+        "session-1",
+        token_ids=("market-1-yes",),
+        effective_at_utc=captured,
+        reason="initial",
+    )
+    assert generation is not None
+    catalog.insert_coverage_interval(
+        CoverageInterval(
+            session_id="session-1",
+            token_id="market-1-yes",
+            state=CoverageState.VALID,
+            started_at_utc=captured,
+            ended_at_utc=None,
+            subscription_generation=1,
+            reason="initial_full_book_received",
+        )
+    )
     catalog.record_metric(
         CollectorMetric(
             session_id="session-1",
@@ -313,6 +338,220 @@ def test_active_health_allows_open_segment_before_first_rotation(tmp_path: Path)
 
     assert report.healthy is True
     assert report.partitions == 0
+    assert report.subscription_generation == 1
+    assert report.subscribed_tokens == 1
+    assert report.valid_subscribed_tokens == 1
+    catalog.close()
+
+
+def test_health_accepts_retained_valid_tokens_and_ignores_removed_members(
+    tmp_path: Path,
+) -> None:
+    catalog = TapeCatalog(tmp_path / "catalog.sqlite")
+    catalog.start_session(session())
+    catalog.upsert_tokens(_tokens_from_markets([market(), market(market_id="market-2")]))
+    catalog.reconcile_subscription(
+        "session-1",
+        token_ids=("market-1-yes", "market-1-no"),
+        effective_at_utc="2026-07-16T12:00:01+00:00",
+        reason="initial",
+    )
+    for token_id in ("market-1-yes", "market-1-no"):
+        catalog.insert_coverage_interval(
+            CoverageInterval(
+                session_id="session-1",
+                token_id=token_id,
+                state=CoverageState.VALID,
+                started_at_utc="2026-07-16T12:00:02+00:00",
+                ended_at_utc=None,
+                subscription_generation=1,
+                reason="initial_full_book_received",
+            )
+        )
+    catalog.reconcile_subscription(
+        "session-1",
+        token_ids=("market-1-yes", "market-2-yes"),
+        effective_at_utc="2026-07-16T12:01:00+00:00",
+        reason="refresh",
+    )
+    catalog.transition_coverage(
+        CoverageInterval(
+            session_id="session-1",
+            token_id="market-2-yes",
+            state=CoverageState.VALID,
+            started_at_utc="2026-07-16T12:01:01+00:00",
+            ended_at_utc=None,
+            subscription_generation=2,
+            reason="initial_full_book_received",
+        )
+    )
+    captured = datetime.now(timezone.utc).isoformat()
+    catalog.record_metric(
+        CollectorMetric(
+            session_id="session-1",
+            captured_at_utc=captured,
+            messages=2,
+            events=2,
+            queue_depth=0,
+            queue_capacity=10_000,
+            queue_high_water=1,
+            rss_bytes=1,
+            raw_disk_bytes=1,
+            receipt_lag_ms=None,
+            reconnect_attempt=0,
+        )
+    )
+
+    report = evaluate_tape_health(
+        catalog, verify_segments=False, now=datetime.fromisoformat(captured)
+    )
+
+    assert report.healthy is True
+    assert report.subscription_generation == 2
+    assert report.subscribed_tokens == 2
+    assert report.valid_subscribed_tokens == 2
+    catalog.close()
+
+
+def test_health_requires_new_full_book_when_token_is_removed_then_readded(
+    tmp_path: Path,
+) -> None:
+    catalog = TapeCatalog(tmp_path / "catalog.sqlite")
+    catalog.start_session(session())
+    catalog.upsert_tokens(_tokens_from_markets([market(), market(market_id="market-2")]))
+    catalog.reconcile_subscription(
+        "session-1",
+        token_ids=("market-1-yes",),
+        effective_at_utc="2026-07-16T12:00:01+00:00",
+        reason="initial",
+    )
+    catalog.insert_coverage_interval(
+        CoverageInterval(
+            session_id="session-1",
+            token_id="market-1-yes",
+            state=CoverageState.VALID,
+            started_at_utc="2026-07-16T12:00:02+00:00",
+            ended_at_utc="2026-07-16T12:01:00+00:00",
+            subscription_generation=1,
+            reason="initial_full_book_received",
+        )
+    )
+    catalog.reconcile_subscription(
+        "session-1",
+        token_ids=("market-2-yes",),
+        effective_at_utc="2026-07-16T12:01:00+00:00",
+        reason="refresh",
+    )
+    catalog.reconcile_subscription(
+        "session-1",
+        token_ids=("market-1-yes", "market-2-yes"),
+        effective_at_utc="2026-07-16T12:02:00+00:00",
+        reason="refresh",
+    )
+    catalog.insert_coverage_interval(
+        CoverageInterval(
+            session_id="session-1",
+            token_id="market-2-yes",
+            state=CoverageState.VALID,
+            started_at_utc="2026-07-16T12:02:01+00:00",
+            ended_at_utc=None,
+            subscription_generation=3,
+            reason="initial_full_book_received",
+        )
+    )
+    captured = datetime.now(timezone.utc).isoformat()
+    catalog.record_metric(
+        CollectorMetric(
+            session_id="session-1",
+            captured_at_utc=captured,
+            messages=2,
+            events=2,
+            queue_depth=0,
+            queue_capacity=10_000,
+            queue_high_water=1,
+            rss_bytes=1,
+            raw_disk_bytes=1,
+            receipt_lag_ms=None,
+            reconnect_attempt=0,
+        )
+    )
+
+    report = evaluate_tape_health(
+        catalog, verify_segments=False, now=datetime.fromisoformat(captured)
+    )
+
+    assert report.healthy is False
+    assert report.subscription_generation == 3
+    assert report.subscribed_tokens == 2
+    assert report.valid_subscribed_tokens == 1
+    assert "subscribed_tokens_without_valid_full_book" in report.failures
+    catalog.close()
+
+
+def test_terminal_health_accepts_closed_tokens_that_had_valid_full_books(
+    tmp_path: Path,
+) -> None:
+    catalog = TapeCatalog(tmp_path / "catalog.sqlite")
+    stats = asyncio.run(
+        collect_market_tape(
+            catalog,
+            raw_directory=tmp_path / "raw",
+            discovery=FakeTapeDiscovery(_tokens_from_markets([market()])),
+            transport=FakeTransport(
+                [
+                    {
+                        "event_type": "book",
+                        "asset_id": token_id,
+                        "market": "market-1",
+                        "bids": [],
+                        "asks": [],
+                    }
+                    for token_id in ("market-1-yes", "market-1-no")
+                ]
+            ),
+            max_messages=2,
+            telemetry_seconds=0,
+        )
+    )
+
+    report = evaluate_tape_health(catalog)
+
+    assert stats.events == 2
+    assert report.finish_reason == "max_messages"
+    assert report.healthy is True
+    assert report.subscribed_tokens == 2
+    assert report.valid_subscribed_tokens == 2
+    catalog.close()
+
+
+def test_health_fails_closed_on_zero_messages_events_and_generations(tmp_path: Path) -> None:
+    catalog = TapeCatalog(tmp_path / "catalog.sqlite")
+    catalog.start_session(session())
+    captured = datetime.now(timezone.utc).isoformat()
+    catalog.record_metric(
+        CollectorMetric(
+            session_id="session-1",
+            captured_at_utc=captured,
+            messages=0,
+            events=0,
+            queue_depth=0,
+            queue_capacity=10_000,
+            queue_high_water=0,
+            rss_bytes=1,
+            raw_disk_bytes=0,
+            receipt_lag_ms=None,
+            reconnect_attempt=0,
+        )
+    )
+
+    report = evaluate_tape_health(
+        catalog, verify_segments=False, now=datetime.fromisoformat(captured)
+    )
+
+    assert report.healthy is False
+    assert "zero_messages" in report.failures
+    assert "zero_events" in report.failures
+    assert "missing_subscription_generation" in report.failures
     catalog.close()
 
 
@@ -389,9 +628,212 @@ def test_collector_reconnects_through_explicit_gap_and_health_verifies_segments(
     assert stats.segment_paths
     assert catalog.connection.execute("select count(*) from tape_raw_partitions").fetchone()[0] == 1
     assert catalog.connection.execute("select count(*) from tape_collector_metrics").fetchone()[0] >= 1
-    assert report.healthy is True
+    assert report.healthy is False
     assert report.events == 1
     assert report.partitions == 1
+    assert report.subscription_generation == 1
+    assert report.subscribed_tokens == 2
+    assert report.valid_subscribed_tokens == 1
+    assert "subscribed_tokens_without_valid_full_book" in report.failures
+    catalog.close()
+
+
+def test_collector_resets_retry_budget_after_a_connection_delivers_data(
+    tmp_path: Path,
+) -> None:
+    catalog = TapeCatalog(tmp_path / "catalog.sqlite")
+    stats = asyncio.run(
+        collect_market_tape(
+            catalog,
+            raw_directory=tmp_path / "raw",
+            discovery=FakeTapeDiscovery(_tokens_from_markets([market()])),
+            transport=RepeatedlyInterruptedTransport(),
+            max_messages=3,
+            reconnect_initial_seconds=0,
+            max_reconnect_attempts=1,
+            telemetry_seconds=0,
+        )
+    )
+
+    events = [
+        event
+        for path in stats.segment_paths
+        for event in iter_segment(path)
+    ]
+    session = catalog.connection.execute(
+        "select finish_reason from tape_collector_sessions where session_id = ?",
+        (stats.session_id,),
+    ).fetchone()
+
+    assert stats.reconnects == 2
+    assert stats.messages == 3
+    assert stats.events == 3
+    assert [event.receipt_sequence for event in events] == [1, 2, 3]
+    assert session["finish_reason"] == "max_messages"
+    catalog.close()
+
+
+def test_collector_reconnects_and_resyncs_instead_of_accepting_stale_feed_data(
+    tmp_path: Path,
+) -> None:
+    catalog = TapeCatalog(tmp_path / "catalog.sqlite")
+    stats = asyncio.run(
+        collect_market_tape(
+            catalog,
+            raw_directory=tmp_path / "raw",
+            discovery=FakeTapeDiscovery(_tokens_from_markets([market()])),
+            transport=StaleThenFreshTransport(),
+            max_messages=2,
+            reconnect_initial_seconds=0,
+            max_reconnect_attempts=1,
+            max_receipt_lag_seconds=10,
+            telemetry_seconds=0,
+        )
+    )
+
+    states = [
+        row[0]
+        for row in catalog.connection.execute(
+            "select state from tape_coverage_intervals "
+            "where token_id = 'market-1-yes' order by id"
+        )
+    ]
+    events = [
+        event
+        for path in stats.segment_paths
+        for event in iter_segment(path)
+    ]
+    maximum_lag = catalog.connection.execute(
+        "select max(receipt_lag_ms) from tape_collector_metrics "
+        "where session_id = ?",
+        (stats.session_id,),
+    ).fetchone()[0]
+
+    assert stats.reconnects == 1
+    assert stats.messages == 2
+    assert stats.events == 1
+    assert states == [
+        "RESYNCING",
+        "GAPPED",
+        "RECONNECTING",
+        "RESYNCING",
+        "VALID",
+        "CLOSED",
+    ]
+    assert len(events) == 1
+    assert events[0].coverage_state.value == "RESYNCING"
+    assert maximum_lag > 10_000
+    catalog.close()
+
+
+def test_old_full_book_timestamp_seeds_coverage_without_receipt_lag_reconnect(
+    tmp_path: Path,
+) -> None:
+    catalog = TapeCatalog(tmp_path / "catalog.sqlite")
+    stats = asyncio.run(
+        collect_market_tape(
+            catalog,
+            raw_directory=tmp_path / "raw",
+            discovery=FakeTapeDiscovery(_tokens_from_markets([market()])),
+            transport=OldTimestampBookTransport(),
+            max_messages=1,
+            max_receipt_lag_seconds=10,
+            telemetry_seconds=0,
+        )
+    )
+
+    states = [
+        row[0]
+        for row in catalog.connection.execute(
+            "select state from tape_coverage_intervals "
+            "where token_id = 'market-1-yes' order by id"
+        )
+    ]
+    receipt_lags = [
+        row[0]
+        for row in catalog.connection.execute(
+            "select receipt_lag_ms from tape_collector_metrics "
+            "where session_id = ?",
+            (stats.session_id,),
+        )
+    ]
+
+    assert stats.reconnects == 0
+    assert stats.events == 1
+    assert states == ["RESYNCING", "VALID", "CLOSED"]
+    assert receipt_lags
+    assert all(value is None for value in receipt_lags)
+    catalog.close()
+
+
+def test_pre_book_delta_stays_resyncing_without_reconstruction_error(
+    tmp_path: Path,
+) -> None:
+    catalog = TapeCatalog(tmp_path / "catalog.sqlite")
+    stats = asyncio.run(
+        collect_market_tape(
+            catalog,
+            raw_directory=tmp_path / "raw",
+            discovery=FakeTapeDiscovery(_tokens_from_markets([market()])),
+            transport=PreBookDeltaTransport(),
+            max_messages=2,
+            telemetry_seconds=0,
+        )
+    )
+
+    events = [
+        event
+        for path in stats.segment_paths
+        for event in iter_segment(path)
+    ]
+    states = [
+        row[0]
+        for row in catalog.connection.execute(
+            "select state from tape_coverage_intervals "
+            "where token_id = 'market-1-yes' order by id"
+        )
+    ]
+
+    assert [event.event_type for event in events] == ["price_change", "book"]
+    assert [event.coverage_state.value for event in events] == [
+        "RESYNCING",
+        "RESYNCING",
+    ]
+    assert states == ["RESYNCING", "VALID", "CLOSED"]
+    assert catalog.connection.execute(
+        "select count(*) from tape_reconstruction_errors"
+    ).fetchone()[0] == 0
+    catalog.close()
+
+
+def test_malformed_delta_after_valid_book_records_reconstruction_error(
+    tmp_path: Path,
+) -> None:
+    catalog = TapeCatalog(tmp_path / "catalog.sqlite")
+    asyncio.run(
+        collect_market_tape(
+            catalog,
+            raw_directory=tmp_path / "raw",
+            discovery=FakeTapeDiscovery(_tokens_from_markets([market()])),
+            transport=MalformedDeltaAfterBookTransport(),
+            max_messages=2,
+            telemetry_seconds=0,
+        )
+    )
+
+    error = catalog.connection.execute(
+        "select reason from tape_reconstruction_errors"
+    ).fetchone()
+    states = [
+        row[0]
+        for row in catalog.connection.execute(
+            "select state from tape_coverage_intervals "
+            "where token_id = 'market-1-yes' order by id"
+        )
+    ]
+
+    assert error["reason"] == "malformed_price_change"
+    assert states == ["RESYNCING", "VALID", "GAPPED", "CLOSED"]
     catalog.close()
 
 
@@ -489,6 +931,102 @@ class RecoveringTransport:
             "market": "market-1",
             "bids": [],
             "asks": [],
+        }
+
+
+class RepeatedlyInterruptedTransport:
+    async def stream(self, token_ids, *, subscription_updates=None):
+        yield {
+            "event_type": "book",
+            "asset_id": "market-1-yes",
+            "market": "market-1",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "bids": [],
+            "asks": [],
+        }
+        raise RuntimeError("connection closed")
+
+
+class StaleThenFreshTransport:
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    async def stream(self, token_ids, *, subscription_updates=None):
+        self.attempts += 1
+        timestamp = datetime.now(timezone.utc)
+        if self.attempts == 1:
+            timestamp -= timedelta(seconds=30)
+        yield {
+            "event_type": (
+                "price_change"
+                if self.attempts == 1
+                else "book"
+            ),
+            "asset_id": "market-1-yes",
+            "market": "market-1",
+            "timestamp": timestamp.isoformat(),
+            "price": "0.5",
+            "bids": [],
+            "asks": [],
+        }
+
+
+class OldTimestampBookTransport:
+    async def stream(self, token_ids, *, subscription_updates=None):
+        yield {
+            "event_type": "book",
+            "asset_id": "market-1-yes",
+            "market": "market-1",
+            "timestamp": (
+                datetime.now(timezone.utc) - timedelta(seconds=30)
+            ).isoformat(),
+            "bids": [],
+            "asks": [],
+        }
+
+
+class PreBookDeltaTransport:
+    async def stream(self, token_ids, *, subscription_updates=None):
+        yield {
+            "event_type": "price_change",
+            "market": "market-1",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "price_changes": [
+                {
+                    "asset_id": "market-1-yes",
+                    "price": "0.5",
+                    "size": "10",
+                    "side": "BUY",
+                }
+            ],
+        }
+        yield {
+            "event_type": "book",
+            "asset_id": "market-1-yes",
+            "market": "market-1",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "bids": [],
+            "asks": [],
+        }
+
+
+class MalformedDeltaAfterBookTransport:
+    async def stream(self, token_ids, *, subscription_updates=None):
+        yield {
+            "event_type": "book",
+            "asset_id": "market-1-yes",
+            "market": "market-1",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "bids": [],
+            "asks": [],
+        }
+        yield {
+            "event_type": "price_change",
+            "asset_id": "market-1-yes",
+            "market": "market-1",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "price": "0.5",
+            "size": "10",
         }
 
 

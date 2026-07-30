@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 
-from weather_trader.execution.discovery import MarketDiscoveryService
+from weather_trader.execution.discovery import (
+    FUTURE_EVENT_LOOKAHEAD_DAYS,
+    MarketDiscoveryService,
+    WeatherEventConfig,
+    _weather_event_targets,
+)
 from weather_trader.execution.contracts import MarketFamily
 from weather_trader.markets.polymarket_reader import WeatherMarket
 
@@ -62,6 +67,44 @@ def test_discovery_can_merge_targeted_and_future_broad_markets_with_listing_time
     assert discovery.last_warnings == []
     assert markets[0].listed_at == "2026-05-12T12:00:00Z"
     assert markets[1].listed_at == "2026-05-13T12:00:00Z"
+
+
+def test_future_discovery_directly_targets_next_two_local_dates() -> None:
+    configs = (
+        WeatherEventConfig("seattle", "America/Los_Angeles"),
+        WeatherEventConfig("tokyo", "Asia/Tokyo"),
+    )
+
+    targets = _weather_event_targets(
+        configs,
+        datetime(2026, 7, 30, 6, 30, tzinfo=timezone.utc),
+        include_future=True,
+    )
+
+    assert FUTURE_EVENT_LOOKAHEAD_DAYS == 2
+    assert {(target.city_slug, target.market_date) for target in targets} == {
+        ("seattle", date(2026, 7, 29)),
+        ("seattle", date(2026, 7, 30)),
+        ("seattle", date(2026, 7, 31)),
+        ("tokyo", date(2026, 7, 30)),
+        ("tokyo", date(2026, 7, 31)),
+        ("tokyo", date(2026, 8, 1)),
+    }
+    assert len(targets) == 2 * 3 * 2
+
+
+def test_default_discovery_still_targets_only_current_local_date() -> None:
+    targets = _weather_event_targets(
+        (WeatherEventConfig("seattle", "America/Los_Angeles"),),
+        datetime(2026, 7, 30, 6, 30, tzinfo=timezone.utc),
+        include_future=False,
+    )
+
+    assert {target.market_date for target in targets} == {date(2026, 7, 29)}
+    assert {target.market_family for target in targets} == {
+        MarketFamily.HIGH_TEMP,
+        MarketFamily.LOW_TEMP,
+    }
 
 
 def test_global_discovery_targets_international_events_and_stations() -> None:

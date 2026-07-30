@@ -54,9 +54,52 @@ class PolymarketTapeTransport:
         url: str = POLYMARKET_MARKET_WS_URL,
         *,
         max_message_bytes: int = 8 * 1024 * 1024,
+        subscription_batch_size: int = 500,
     ) -> None:
+        if subscription_batch_size < 1:
+            raise ValueError("subscription_batch_size must be positive")
         self.url = url
         self.max_message_bytes = max_message_bytes
+        self.subscription_batch_size = subscription_batch_size
+
+    async def _send_initial_subscription(
+        self,
+        websocket: Any,
+        token_ids: tuple[str, ...],
+    ) -> None:
+        batches = tuple(_batched(token_ids, self.subscription_batch_size))
+        first, *remaining = batches or ((),)
+        await websocket.send(
+            json.dumps(
+                {
+                    "type": "market",
+                    "assets_ids": list(first),
+                }
+            )
+        )
+        for batch in remaining:
+            await self._send_subscription_operation(
+                websocket,
+                batch,
+                operation="subscribe",
+            )
+
+    async def _send_subscription_operation(
+        self,
+        websocket: Any,
+        token_ids: tuple[str, ...],
+        *,
+        operation: str,
+    ) -> None:
+        for batch in _batched(token_ids, self.subscription_batch_size):
+            await websocket.send(
+                json.dumps(
+                    {
+                        "assets_ids": list(batch),
+                        "operation": operation,
+                    }
+                )
+            )
 
     async def stream(
         self,
@@ -74,14 +117,7 @@ class PolymarketTapeTransport:
             ping_timeout=20,
             max_size=self.max_message_bytes,
         ) as websocket:
-            await websocket.send(
-                json.dumps(
-                    {
-                        "type": "market",
-                        "assets_ids": list(token_ids),
-                    }
-                )
-            )
+            await self._send_initial_subscription(websocket, token_ids)
             receive_task: asyncio.Task[str | bytes] | None = None
             update_task: asyncio.Task[SubscriptionUpdate] | None = None
             try:
@@ -97,22 +133,16 @@ class PolymarketTapeTransport:
                         update = update_task.result()
                         update_task = None
                         if update.added_token_ids:
-                            await websocket.send(
-                                json.dumps(
-                                {
-                                    "assets_ids": list(update.added_token_ids),
-                                    "operation": "subscribe",
-                                }
-                                )
+                            await self._send_subscription_operation(
+                                websocket,
+                                update.added_token_ids,
+                                operation="subscribe",
                             )
                         if update.removed_token_ids:
-                            await websocket.send(
-                                json.dumps(
-                                    {
-                                        "assets_ids": list(update.removed_token_ids),
-                                        "operation": "unsubscribe",
-                                    }
-                                )
+                            await self._send_subscription_operation(
+                                websocket,
+                                update.removed_token_ids,
+                                operation="unsubscribe",
                             )
                         subscription_updates.task_done()
                     if receive_task not in done:
@@ -168,6 +198,8 @@ async def collect_market_tape(
     max_reconnect_attempts: int = 8,
     reconnect_initial_seconds: float = 1.0,
     reconnect_max_seconds: float = 30.0,
+    max_receipt_lag_seconds: float | None = 10.0,
+    subscription_batch_size: int = 500,
     checkpoint_every: int = 1000,
 ) -> TapeCollectionStats:
     if queue_size < 1:
@@ -183,10 +215,16 @@ async def collect_market_tape(
     )
     catalog.start_session(session)
     registry = SubscriptionRegistry(catalog, discovery or TapeDiscoveryService())
-    transport = transport or PolymarketTapeTransport()
+    transport = transport or PolymarketTapeTransport(
+        subscription_batch_size=subscription_batch_size,
+    )
     deadline = time.monotonic() + max_seconds if max_seconds is not None else None
     if max_reconnect_attempts < 0:
         raise ValueError("max_reconnect_attempts must be non-negative")
+    if max_receipt_lag_seconds is not None and max_receipt_lag_seconds <= 0:
+        raise ValueError("max_receipt_lag_seconds must be positive when provided")
+    if subscription_batch_size < 1:
+        raise ValueError("subscription_batch_size must be positive")
     if checkpoint_every < 1:
         raise ValueError("checkpoint_every must be positive")
     writer = RotatingRawSegmentWriter(
@@ -197,6 +235,7 @@ async def collect_market_tape(
     )
     messages = events = generations = high_water = 0
     reconnects = 0
+    consecutive_reconnect_attempts = 0
     subscribed: tuple[str, ...] = ()
     latest_generation_number = 0
     receipt_sequence = 0
@@ -257,47 +296,16 @@ async def collect_market_tape(
                     max_messages=remaining_messages,
                     initial_messages=messages,
                     initial_receipt_sequence=receipt_sequence,
-                    reconnect_attempt=reconnects,
+                    reconnect_attempt=consecutive_reconnect_attempts,
                     book_reconstructor=book_reconstructor,
                     token_event_counts=token_event_counts,
                     checkpoint_every=checkpoint_every,
+                    max_receipt_lag_seconds=max_receipt_lag_seconds,
                 )
             except Exception:
-                latest_after_error = catalog.latest_subscription(session_id)
-                if latest_after_error is not None:
-                    subscribed = latest_after_error.token_ids
-                    latest_generation_number = latest_after_error.generation
-                _transition_tokens(
-                    catalog,
-                    session_id,
-                    subscribed,
-                    coverage,
-                    latest_generation_number,
-                    CoverageState.GAPPED,
-                    reason="transport_error",
-                    gap_id=uuid.uuid4().hex,
-                )
-                if reconnects >= max_reconnect_attempts:
-                    raise
-                reconnects += 1
-                await _reconnect_delay(
-                    reconnects,
-                    initial_seconds=reconnect_initial_seconds,
-                    maximum_seconds=reconnect_max_seconds,
-                    deadline=deadline,
-                )
-                if deadline is not None and time.monotonic() >= deadline:
-                    raise
-                _transition_tokens(
-                    catalog,
-                    session_id,
-                    subscribed,
-                    coverage,
-                    latest_generation_number,
-                    CoverageState.RECONNECTING,
-                    reason=f"transport_retry_{reconnects}",
-                )
-                continue
+                # Errors raised outside the transport producer (for example,
+                # catalog or storage failures) are not safe to recover from.
+                raise
             messages += collected.messages
             events += collected.events
             high_water = max(high_water, collected.queue_high_water)
@@ -305,13 +313,23 @@ async def collect_market_tape(
             generations += collected.subscription_generations
             subscribed = collected.subscribed_token_ids
             latest_generation_number = collected.latest_generation
+            if collected.events:
+                # The retry budget protects against a feed which cannot
+                # reconnect at all. A connection that delivered data was
+                # healthy, so a later network interruption starts a fresh
+                # consecutive retry budget.
+                consecutive_reconnect_attempts = 0
             if collected.termination == "max_messages":
                 finish_reason = "max_messages"
                 break
             if collected.termination == "deadline":
                 finish_reason = "max_seconds"
                 break
-            gap_reason = "stream_end"
+            gap_reason = (
+                "transport_error"
+                if collected.termination == "transport_error"
+                else collected.termination
+            )
             _transition_tokens(
                 catalog,
                 session_id,
@@ -322,16 +340,23 @@ async def collect_market_tape(
                 reason=gap_reason,
                 gap_id=uuid.uuid4().hex,
             )
-            if collected.termination == "stream_end":
-                if reconnects >= max_reconnect_attempts:
-                    raise RuntimeError("market tape stream ended and reconnect budget was exhausted")
-                reconnects += 1
-                await _reconnect_delay(
-                    reconnects,
-                    initial_seconds=reconnect_initial_seconds,
-                    maximum_seconds=reconnect_max_seconds,
-                    deadline=deadline,
+            if consecutive_reconnect_attempts >= max_reconnect_attempts:
+                if collected.error is not None:
+                    raise collected.error
+                raise RuntimeError(
+                    "market tape stream ended and reconnect budget was exhausted"
                 )
+            consecutive_reconnect_attempts += 1
+            reconnects += 1
+            await _reconnect_delay(
+                consecutive_reconnect_attempts,
+                initial_seconds=reconnect_initial_seconds,
+                maximum_seconds=reconnect_max_seconds,
+                deadline=deadline,
+            )
+            if deadline is not None and time.monotonic() >= deadline:
+                finish_reason = "max_seconds"
+                break
             _transition_tokens(
                 catalog,
                 session_id,
@@ -339,7 +364,7 @@ async def collect_market_tape(
                 coverage,
                 latest_generation_number,
                 CoverageState.RECONNECTING,
-                reason=f"{gap_reason}_reconnect",
+                reason=f"{gap_reason}_retry_{consecutive_reconnect_attempts}",
             )
         if events == 0:
             raise RuntimeError("market tape session captured zero token events")
@@ -390,6 +415,7 @@ class _GenerationStats:
     subscription_generations: int
     subscribed_token_ids: tuple[str, ...]
     latest_generation: int
+    error: Exception | None = None
 
 
 async def _collect_generation(
@@ -413,6 +439,7 @@ async def _collect_generation(
     book_reconstructor: BookReconstructor,
     token_event_counts: dict[str, int],
     checkpoint_every: int,
+    max_receipt_lag_seconds: float | None,
 ) -> _GenerationStats:
     queue: asyncio.Queue[tuple[dict[str, Any] | list[Any], str, int]] = asyncio.Queue(maxsize=queue_size)
     subscription_updates: asyncio.Queue[SubscriptionUpdate] = asyncio.Queue()
@@ -437,6 +464,7 @@ async def _collect_generation(
     refresh_task: Future[TapeDiscoveryResult] | None = None
     subscription_generations = 0
     termination = "stream_end"
+    transport_error: Exception | None = None
     last_receipt_lag_ms: float | None = None
     next_telemetry = time.monotonic() + telemetry_seconds
 
@@ -547,8 +575,13 @@ async def _collect_generation(
                 termination = "deadline"
                 break
             if producer_done.is_set() and queue.empty():
-                await producer
-                termination = "stream_end"
+                try:
+                    await producer
+                except Exception as exc:
+                    transport_error = exc
+                    termination = "transport_error"
+                else:
+                    termination = "stream_end"
                 break
             wait_timeout = min(remaining, 1.0)
             if telemetry_seconds > 0:
@@ -569,8 +602,13 @@ async def _collect_generation(
                 )
             except asyncio.TimeoutError:
                 if producer.done():
-                    await producer
-                    termination = "stream_end"
+                    try:
+                        await producer
+                    except Exception as exc:
+                        transport_error = exc
+                        termination = "transport_error"
+                    else:
+                        termination = "stream_end"
                     break
                 if telemetry_seconds <= 0 or time.monotonic() >= next_telemetry:
                     record_telemetry()
@@ -580,11 +618,34 @@ async def _collect_generation(
                 continue
             messages += 1
             high_water = max(high_water, 1, queue.qsize())
+            receipt_lag_exceeded = False
             for unit in _event_units(message):
                 token_id = _token_id(unit)
                 if not token_id or token_id not in token_to_market:
                     continue
                 event_type = _event_type(unit)
+                event_receipt_lag_ms = None
+                if _uses_live_event_timestamp(event_type):
+                    event_receipt_lag_ms = _receipt_lag_ms(
+                        _feed_timestamp(unit),
+                        received_at,
+                    )
+                    last_receipt_lag_ms = event_receipt_lag_ms
+                if (
+                    max_receipt_lag_seconds is not None
+                    and event_receipt_lag_ms is not None
+                    and event_receipt_lag_ms > max_receipt_lag_seconds * 1000.0
+                ):
+                    # A stale frame means the socket may be draining delayed
+                    # data after an outage. Do not persist it under VALID
+                    # coverage; reconnect and require a fresh full book.
+                    termination = "receipt_lag"
+                    transport_error = RuntimeError(
+                        "market tape receipt lag exceeded "
+                        f"{max_receipt_lag_seconds:g}s"
+                    )
+                    receipt_lag_exceeded = True
+                    break
                 state = coverage.get(token_id, CoverageState.RESYNCING)
                 events += 1
                 stored, rotated = writer.append(
@@ -607,14 +668,20 @@ async def _collect_generation(
                 token_event_counts[token_id] = token_event_counts.get(token_id, 0) + 1
                 book = book_reconstructor.apply(stored)
                 if not book.valid:
-                    catalog.record_reconstruction_error(
-                        session_id=generation.session_id,
-                        token_id=token_id,
-                        event_id=stored.stable_event_id,
-                        receipt_sequence=stored.receipt_sequence,
-                        captured_at_utc=received_at,
-                        reason=book.invalid_reason or "unknown_reconstruction_error",
-                    )
+                    # Incremental events can race ahead of their initial full
+                    # book after a subscription. They remain raw-marked
+                    # RESYNCING and unusable for replay, but are not malformed
+                    # reconstruction evidence. A bad full book, or any
+                    # failure after VALID coverage, is still an error.
+                    if event_type == "book" or state is CoverageState.VALID:
+                        catalog.record_reconstruction_error(
+                            session_id=generation.session_id,
+                            token_id=token_id,
+                            event_id=stored.stable_event_id,
+                            receipt_sequence=stored.receipt_sequence,
+                            captured_at_utc=received_at,
+                            reason=book.invalid_reason or "unknown_reconstruction_error",
+                        )
                     if state is CoverageState.VALID:
                         coverage[token_id] = CoverageState.GAPPED
                         catalog.transition_coverage(
@@ -631,7 +698,6 @@ async def _collect_generation(
                         )
                 elif event_type == "book" or token_event_counts[token_id] % checkpoint_every == 0:
                     catalog.record_checkpoint(book_reconstructor.checkpoint(stored))
-                last_receipt_lag_ms = _receipt_lag_ms(_feed_timestamp(unit), received_at)
                 if event_type == "book" and book.valid and state is not CoverageState.VALID:
                     coverage[token_id] = CoverageState.VALID
                     catalog.transition_coverage(
@@ -646,6 +712,9 @@ async def _collect_generation(
                         )
                     )
             queue.task_done()
+            if receipt_lag_exceeded:
+                record_telemetry()
+                break
             if telemetry_seconds <= 0 or time.monotonic() >= next_telemetry:
                 record_telemetry()
     finally:
@@ -661,6 +730,7 @@ async def _collect_generation(
         subscription_generations,
         current_subscribed,
         current_generation.generation,
+        transport_error,
     )
 
 
@@ -701,6 +771,16 @@ def _event_units(message: dict[str, Any] | list[Any]) -> list[dict[str, Any]]:
     return [message]
 
 
+def _batched(
+    values: tuple[str, ...],
+    batch_size: int,
+) -> tuple[tuple[str, ...], ...]:
+    return tuple(
+        values[start : start + batch_size]
+        for start in range(0, len(values), batch_size)
+    )
+
+
 def _token_id(message: dict[str, Any]) -> str | None:
     change = message.get("price_change")
     source = change if isinstance(change, dict) else message
@@ -712,6 +792,20 @@ def _event_type(message: dict[str, Any]) -> str:
     parent = message.get("parent")
     source = parent if isinstance(parent, dict) else message
     return str(source.get("event_type") or source.get("type") or "unknown")
+
+
+def _uses_live_event_timestamp(event_type: str) -> bool:
+    """Whether an event timestamp measures live feed delivery latency.
+
+    Full-book timestamps describe the age of the represented book state, so
+    they cannot be compared with local receipt time as transport latency.
+    """
+    return event_type.lower() in {
+        "best_bid_ask",
+        "last_trade_price",
+        "price_change",
+        "tick_size_change",
+    }
 
 
 def _feed_timestamp(message: dict[str, Any]) -> str | None:
