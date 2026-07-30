@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -137,11 +138,13 @@ def walk_forward_calibration(
 
     for evaluation_date in sorted({row.market_date for row in evaluation_rows}):
         fold_rows = [row for row in evaluation_rows if row.market_date == evaluation_date]
+        first_fold_decision_time = min(_parse_utc(row.decision_time_utc) for row in fold_rows)
         training_rows = _dedupe_training_rows(
             [
                 row
                 for row in (*dataset.fit_rows, *evaluation_rows)
                 if row.market_date < evaluation_date
+                and _parse_utc(row.outcome_resolved_at_utc) < first_fold_decision_time
             ]
         )
         pooled = _fit_fold(
@@ -502,6 +505,13 @@ def _clip_probability(value: float, epsilon: float) -> float:
 def _logit(value: float, epsilon: float) -> float:
     probability = _clip_probability(value, epsilon)
     return math.log(probability / (1.0 - probability))
+
+
+def _parse_utc(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError(f"timestamp must include timezone: {value}")
+    return parsed.astimezone(timezone.utc)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
