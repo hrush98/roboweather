@@ -79,6 +79,18 @@
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/portfolio_promotion_report.py --db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite`
   - Add `--start-date YYYY-MM-DD` for recent-only reviews. Use `--no-depth` only for an upper-bound capacity diagnostic, not promotion evidence.
 
+## Tape-backed rolling portfolio discovery workflow
+
+- Strategies do not need to be defined before snapshot or shared-tape collection. Generate candidate policy families from raw `prediction_snapshots`, choose an immutable cutoff, freeze the exact family/order/parameters, and evaluate only later decisions against the shared tape.
+- Keep discovery and execution holdout separate. Run the rolling snapshot sweep through the day before tape activation:
+  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/snapshot_opportunity_sweep.py --db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --end-date YYYY-MM-DD --market-family HIGH_TEMP --us-high-temp-only --rolling-summary --min-policy-n 20 --top-n 8`
+- Prefer stable first-eligible families across all/30-day/7-day windows, collapse nearby delay/scope/entry variants, and freeze priority order before inspecting the holdout.
+- Replay the frozen portfolio against quote-ready books with:
+  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/tape_strategy_holdout_report.py --research-db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --tape-catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite --discovery-cutoff YYYY-MM-DD --holdout-start YYYY-MM-DD --end-date YYYY-MM-DD`
+- The initial built-in family is `pm_high_regression_10m_late`, `pm_mvp_late`, then `pm_dynamic_tuned_10m_late`. Repeat `--sleeve` to declare a different priority.
+- The report is read-only and fail-closed. It requires continuous `VALID` pre-signal coverage, reconstructs the exact token book after configured latency, and simulates only an immediate capped ask sweep. Missing coverage and unavailable capped asks are rejections, not snapshot-price fills.
+- Interpret the output as post-cutoff taker-execution hypothesis evidence. It does not infer passive fills, uses weather outcomes rather than venue settlement, and cannot by itself authorize funding.
+
 ## Price Sheet V2a dataset workflow
 
 - Build generated V2a fit/evaluation artifacts read-only from the current remote research database. The default frozen evaluation starts on the pilot activation date and the fit corpus ends strictly before it:

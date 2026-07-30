@@ -2,7 +2,7 @@
 
 ## Status
 
-Operational collection hypothesis. The Phase 3 collector is reported built and running; replay, validity, and acceptance evidence continues to accumulate. The research-loop memory-growth prerequisite is resolved, and funded trading remains paused.
+Operational collection hypothesis. Retained collection has run from July 23 onward and the tape now supports exact quote-ready batch taker replay for strategies extracted later from broad snapshots. The strict lifecycle gate still fails on session errors, receipt lag, and absent eligible complete markets. Funded trading remains paused.
 
 Implementation details and sprint acceptance belong in `docs/implementation/phase-3-market-tape-replay.md`. Current sequencing and promotion gates belong in `docs/execution-rebuild-roadmap.md`.
 
@@ -87,6 +87,7 @@ Review at each Phase 3 implementation exit gate and again before any private use
 
 ## Decision Log
 
+- 2026-07-29: Confirmed the shared-tape premise with a pre-cutoff discovery/post-cutoff execution holdout: 12 exact capped taker sweeps reconstructed from later valid tape produced preliminary positive weather-outcome PnL. Kept lifecycle, passive-fill, markout, settlement, and funding gates open.
 - 2026-07-16: Recorded the shared-market-tape design so memory stabilization can be addressed first without losing the execution-data plan.
 - 2026-07-16: Confirmed the memory issue is resolved, approved the hypothesis for Phase 3 implementation, and split implementation details into `docs/implementation/phase-3-market-tape-replay.md`.
 - 2026-07-16: Recorded operator confirmation that the collector is built and running. The tape remains execution evidence rather than profitability evidence; valid tape windows feed the Price Sheet V2b plan in `docs/implementation/price-sheet-v2.md`.

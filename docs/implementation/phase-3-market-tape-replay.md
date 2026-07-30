@@ -1,8 +1,8 @@
 # Phase 3 Market Tape And Replay Implementation Plan
 
-Status: Slices 1-4 repository paths implemented; Slice 2 lifecycle evidence and Slice 4 real-join evidence remain open
+Status: Slices 1-4 implemented; first batch taker holdout complete; Slice 2 lifecycle, Slice 4 real join, and Slices 5-6 remain open
 
-Last updated: 2026-07-23
+Last updated: 2026-07-29
 
 ## Feature Goal
 
@@ -334,6 +334,12 @@ Exit: repeated replay is deterministic and known false-fill cases remain unfille
 
 Exit: the report answers whether base-case fill-conditioned PnL is positive without using optimistic-only labels.
 
+Implementation status, 2026-07-29:
+
+- Added `scripts/tape_strategy_holdout_report.py` as a read-only bridge between broad raw-snapshot discovery and exact later tape. It freezes built-in sleeve order, applies station/date portfolio deduplication, maps the selected side to its token, requires continuous valid pre-signal coverage, reconstructs from a valid checkpoint and checksummed deltas through quote readiness, and simulates a capped immediate ask sweep.
+- The first frozen-family replay used a July 22 discovery cutoff and July 23 holdout start. Across six resolved July 23-28 market dates it deduplicated 19 signals, executed 12, rejected three for invalid continuous coverage and four for absent asks under the cap, and produced `+$93.22` weather-outcome PnL on `$205.51` cost.
+- This is a batch taker-holdout milestone, not Slice 6 completion. It permits partial fills, has no passive queue/fill labels or markouts, is not venue-settlement aligned, and was activated retrospectively at the cutoff rather than prospectively registered before collection.
+
 ## Acceptance Checklist
 
 - [ ] Policy-independent token discovery covers current and future-dated supported weather markets.
@@ -353,6 +359,7 @@ Exit: the report answers whether base-case fill-conditioned PnL is positive with
 
 ## Decision Log
 
+- 2026-07-29: Added the first reusable frozen-portfolio taker holdout over later valid tape. Recorded its preliminary positive result while keeping Slice 2 failed and Slices 5-6 open for lifecycle validity, passive-fill bounds, markouts, settlement, and true forward activation.
 - 2026-07-23: Audited the remote host and corrected the prior “running” assumption: no recorder was active and all retained catalogs were approximately 18-second probes. Completed the missing future-market discovery, listing-provenance, lifecycle-gate, and bounded-supervision repository work; kept Slice 2 open pending elapsed host evidence rather than treating the short probes as a pass.
 - 2026-07-17: Extended the acceptance target to explicit first-listing-through-close/settlement collection, including future-dated weather markets, lifecycle discovery-lag reporting, and horizon-tagged forward arms. Existing fill-validity requirements remain unchanged.
 - 2026-07-17: Completed the Slice 4 repository path from persisted execution quote/source snapshots through a strictly causal quote-ready book and continuous termination-boundary coverage. Kept the exit evidence open for one real host quote/tape reconstruction.

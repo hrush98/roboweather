@@ -2,6 +2,12 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-07-29
+
+- Added `scripts/tape_strategy_holdout_report.py` and focused tests for causal quote-ready taker replay of a portfolio discovered from raw snapshots before an immutable cutoff. The report fails closed on broken coverage or unavailable capped asks, applies sleeve-priority station/date deduplication, and leaves research and tape databases read-only.
+- Froze the initial late US high-temperature three-family shadow portfolio and reproduced its July 23-28 holdout: 12 of 19 deduplicated signals executed, producing `+$93.22` weather-outcome PnL on `$205.51` cost across six resolved dates. Recorded this as preliminary hypothesis evidence only; passive fills, markouts, venue settlement, lifecycle acceptance, and funded promotion remain open.
+- Documented the repeatable snapshot-discovery-to-tape-holdout workflow in `AGENTS.md`, the living audit, roadmap, Phase 3 implementation plan, and hypothesis records. Added the personal `roboweather-tape-discovery` Codex skill. Funded trading policy and sizing did not change.
+
 ## 2026-07-23
 
 - Completed the repository work needed to evaluate Phase 3 Slice 2 honestly: market-tape discovery now merges current and future active weather markets, records authoritative Gamma creation/listing provenance, migrates existing catalogs, refreshes subscriptions dynamically without scheduled reconnect gaps, and provides a strict multi-session lifecycle/resource report plus a bounded 72-hour user-systemd probe unit. A remote audit found no active recorder and only approximately 18-second historical probes, so the Slice 2 evidence gate remains open until a real first-listing-through-close run passes.
