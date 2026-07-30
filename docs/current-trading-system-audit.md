@@ -85,7 +85,7 @@ The result is reproducible with `scripts/tape_strategy_holdout_report.py`; the f
 1. Keep funded trading paused.
 2. Continue broad research snapshots and outcome resolution.
 3. Stop adding model families merely to expand the leaderboard. New models need demonstrably different predictions or incremental information.
-4. Keep the obsolete shared market-tape probe stopped. Install the repaired bounded unit, start one fresh validation catalog, and require the scoped strict lifecycle report to pass before calling Slice 2 complete. Do not promote the probe into an unattended production service.
+4. Keep the obsolete shared market-tape probe stopped. Install the repaired bounded unit, start one fresh scoped validation cohort, and require the scoped strict lifecycle report to pass before calling Slice 2 complete. Do not promote the probe into an unattended production service.
 5. Treat the current candidate-token collector and shadow labeler as a prototype only.
 6. Keep the late HRRR-rich tuned dynamic and HRRR-v2 dynamic policies as forward signal hypotheses. Add the frozen three-family late taker portfolio as a separate tape-backed forward-shadow hypothesis; do not fund or retune it on the July 23-28 holdout.
 7. Implement `docs/implementation/price-sheet-v2.md`: V2a walk-forward outcome pricing now, then V2b execution reductions/skips on valid tape windows.
