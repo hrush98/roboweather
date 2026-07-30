@@ -7,9 +7,9 @@ import argparse
 import asyncio
 from datetime import datetime, timedelta, timezone
 import hashlib
+from importlib.metadata import PackageNotFoundError, version
 import json
 from pathlib import Path
-import subprocess
 import sys
 import uuid
 
@@ -17,6 +17,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from weather_trader.tape.catalog import TapeCatalog
 from weather_trader.tape.collector import collect_market_tape
+
+
+RECORDER_BUILD_PATHS = (
+    "scripts/run_market_tape.py",
+    "weather_trader/tape/books.py",
+    "weather_trader/tape/catalog.py",
+    "weather_trader/tape/collector.py",
+    "weather_trader/tape/contracts.py",
+    "weather_trader/tape/discovery.py",
+    "weather_trader/tape/storage.py",
+    "weather_trader/tape/subscriptions.py",
+    "weather_trader/execution/contracts.py",
+    "weather_trader/execution/discovery.py",
+    "weather_trader/markets/polymarket_reader.py",
+    "weather_trader/stations/international_station_map.csv",
+    "weather_trader/stations/metadata.py",
+    "weather_trader/stations/station_map.csv",
+    "deploy/systemd/roboweather-market-tape-lifecycle.service",
+)
+RECORDER_DEPENDENCIES = ("pandas", "requests", "websockets")
 
 
 def _remaining_overall_seconds(
@@ -67,24 +87,50 @@ def _validation_run_id_from_state(state_path: Path) -> str:
     return value
 
 
-def _build_fingerprint(repository_root: Path) -> str:
-    """Fingerprint the exact Git commit plus tracked working-tree delta."""
-    try:
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repository_root,
-            check=True,
-            capture_output=True,
-        ).stdout.strip()
-        diff = subprocess.run(
-            ["git", "diff", "--no-ext-diff", "--binary", "HEAD"],
-            cwd=repository_root,
-            check=True,
-            capture_output=True,
-        ).stdout
-    except (OSError, subprocess.CalledProcessError) as exc:
-        raise RuntimeError("cannot fingerprint recorder build from Git") from exc
-    return hashlib.sha256(head + b"\0" + diff).hexdigest()
+def _build_fingerprint(
+    repository_root: Path,
+    *,
+    source_paths: tuple[str, ...] = RECORDER_BUILD_PATHS,
+    dependency_versions: dict[str, str] | None = None,
+) -> str:
+    """Fingerprint recorder-relevant code, unit definition, and dependencies."""
+    versions = dependency_versions or _recorder_dependency_versions()
+    digest = hashlib.sha256()
+    digest.update(
+        json.dumps(
+            {
+                "dependencies": dict(sorted(versions.items())),
+                "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    )
+    for relative_path in sorted(source_paths):
+        path = repository_root / relative_path
+        try:
+            contents = path.read_bytes()
+        except OSError as exc:
+            raise RuntimeError(
+                f"cannot fingerprint recorder build source: {relative_path}"
+            ) from exc
+        digest.update(b"\0path\0")
+        digest.update(relative_path.encode())
+        digest.update(b"\0contents\0")
+        digest.update(contents)
+    return digest.hexdigest()
+
+
+def _recorder_dependency_versions() -> dict[str, str]:
+    versions: dict[str, str] = {}
+    for package in RECORDER_DEPENDENCIES:
+        try:
+            versions[package] = version(package)
+        except PackageNotFoundError as exc:
+            raise RuntimeError(
+                f"cannot fingerprint missing recorder dependency: {package}"
+            ) from exc
+    return versions
 
 
 def main() -> None:

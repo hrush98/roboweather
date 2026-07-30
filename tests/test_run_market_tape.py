@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from scripts.run_market_tape import (
+    _build_fingerprint,
     _remaining_overall_seconds,
     _validation_run_id_from_state,
 )
@@ -70,3 +71,52 @@ def test_validation_run_state_fails_closed_when_identity_is_missing(
         assert "lacks validation_run_id" in str(exc)
     else:
         raise AssertionError("missing validation identity must fail closed")
+
+
+def test_unrelated_documentation_change_does_not_change_build_fingerprint(
+    tmp_path: Path,
+) -> None:
+    recorder = tmp_path / "weather_trader" / "tape" / "collector.py"
+    recorder.parent.mkdir(parents=True)
+    recorder.write_text("RECORDER_VERSION = 1\n")
+    docs = tmp_path / "docs" / "forecast.md"
+    docs.parent.mkdir()
+    docs.write_text("before\n")
+    paths = ("weather_trader/tape/collector.py",)
+    dependencies = {"requests": "2.32.0", "websockets": "15.0"}
+
+    before = _build_fingerprint(
+        tmp_path,
+        source_paths=paths,
+        dependency_versions=dependencies,
+    )
+    docs.write_text("after\n")
+    after = _build_fingerprint(
+        tmp_path,
+        source_paths=paths,
+        dependency_versions=dependencies,
+    )
+
+    assert after == before
+
+
+def test_recorder_source_change_changes_build_fingerprint(tmp_path: Path) -> None:
+    recorder = tmp_path / "weather_trader" / "tape" / "collector.py"
+    recorder.parent.mkdir(parents=True)
+    recorder.write_text("RECORDER_VERSION = 1\n")
+    paths = ("weather_trader/tape/collector.py",)
+    dependencies = {"requests": "2.32.0", "websockets": "15.0"}
+
+    before = _build_fingerprint(
+        tmp_path,
+        source_paths=paths,
+        dependency_versions=dependencies,
+    )
+    recorder.write_text("RECORDER_VERSION = 2\n")
+    after = _build_fingerprint(
+        tmp_path,
+        source_paths=paths,
+        dependency_versions=dependencies,
+    )
+
+    assert after != before

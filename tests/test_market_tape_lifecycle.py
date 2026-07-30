@@ -195,7 +195,57 @@ def test_lifecycle_report_rejects_unknown_selected_session(tmp_path: Path) -> No
     catalog.close()
 
 
-def test_lifecycle_report_keeps_late_fallback_and_open_markets_in_denominator(
+def test_lifecycle_report_passes_with_good_matured_and_right_censored_market(
+    tmp_path: Path,
+) -> None:
+    catalog = _complete_catalog(tmp_path)
+    pending = MarketSnapshot(
+        market_id="pending-market",
+        condition_id="pending-condition",
+        question="Highest temperature in Atlanta?",
+        slug="atlanta-pending",
+        city="Atlanta",
+        station="KATL",
+        market_date=date(2026, 7, 17),
+        lower_f=91.0,
+        upper_f=92.0,
+        yes_token_id="pending-yes",
+        no_token_id="pending-no",
+        end_date="2026-07-18T12:00:00+00:00",
+        resolution_source="Weather Underground",
+        discovered_at="2026-07-16T12:03:00+00:00",
+        market_family=MarketFamily.HIGH_TEMP,
+        listed_at="2026-07-16T12:02:00+00:00",
+    )
+    tokens = _tokens_from_markets([pending])
+    catalog.upsert_tokens(tokens)
+    catalog.record_discovery_refresh(
+        session_id="session-1",
+        attempted_at_utc="2026-07-16T12:03:00+00:00",
+        completed_at_utc="2026-07-16T12:03:00+00:00",
+        complete=True,
+        token_ids_and_markets=tuple(
+            (token.token_id, token.market_id) for token in tokens
+        ),
+    )
+
+    report = evaluate_tape_lifecycle(catalog)
+
+    assert report.passed is True
+    assert report.listed_markets == 2
+    assert report.cohort_markets == 1
+    assert report.right_censored_markets == 1
+    assert report.incomplete_cohort_markets == 0
+    evidence = next(
+        market for market in report.markets if market.market_id == "pending-market"
+    )
+    assert evidence.cohort_status == "RIGHT_CENSORED"
+    assert evidence.complete is False
+    assert evidence.failures == ()
+    catalog.close()
+
+
+def test_lifecycle_report_fails_for_late_and_fallback_matured_markets(
     tmp_path: Path,
 ) -> None:
     catalog = _complete_catalog(tmp_path)
@@ -206,12 +256,12 @@ def test_lifecycle_report_keeps_late_fallback_and_open_markets_in_denominator(
         slug="atlanta-late",
         city="Atlanta",
         station="KATL",
-        market_date=date(2026, 7, 17),
+        market_date=date(2026, 7, 16),
         lower_f=91.0,
         upper_f=92.0,
         yes_token_id="late-yes",
         no_token_id="late-no",
-        end_date="2026-07-18T12:00:00+00:00",
+        end_date="2026-07-17T12:00:00+00:00",
         resolution_source="Weather Underground",
         discovered_at="2026-07-16T12:10:01+00:00",
         market_family=MarketFamily.HIGH_TEMP,
@@ -229,7 +279,7 @@ def test_lifecycle_report_keeps_late_fallback_and_open_markets_in_denominator(
         upper_f=93.0,
         yes_token_id="fallback-yes",
         no_token_id="fallback-no",
-        end_date="2026-07-18T12:00:00+00:00",
+        end_date="2026-07-17T12:00:00+00:00",
         resolution_source="Weather Underground",
         discovered_at="2026-07-16T12:03:00+00:00",
         market_family=MarketFamily.HIGH_TEMP,
@@ -249,7 +299,9 @@ def test_lifecycle_report_keeps_late_fallback_and_open_markets_in_denominator(
 
     report = evaluate_tape_lifecycle(catalog)
 
+    assert report.listed_markets == 3
     assert report.cohort_markets == 3
+    assert report.right_censored_markets == 0
     assert report.incomplete_cohort_markets == 2
     assert "incomplete_validation_cohort_markets" in report.failures
     failures_by_market = {
@@ -260,10 +312,7 @@ def test_lifecycle_report_keeps_late_fallback_and_open_markets_in_denominator(
         "listing_timestamp_not_authoritative"
         in failures_by_market["fallback-market"]
     )
-    assert (
-        "market_not_closed_in_observation_window"
-        in failures_by_market["fallback-market"]
-    )
+    assert report.markets[0].cohort_status == "MATURED"
     catalog.close()
 
 

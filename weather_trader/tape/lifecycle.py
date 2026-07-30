@@ -20,6 +20,7 @@ class MarketLifecycleEvidence:
     discovered_at_utc: str
     discovery_lag_seconds: float
     market_end_at_utc: str
+    cohort_status: str
     valid_through_end_tokens: int
     maximum_coverage_gap_seconds: float | None
     complete: bool
@@ -59,7 +60,9 @@ class TapeLifecycleReport:
     incomplete_discovery_refreshes: int
     failed_discovery_refreshes: int
     listing_source_counts: dict[str, int]
+    listed_markets: int
     cohort_markets: int
+    right_censored_markets: int
     incomplete_cohort_markets: int
     eligible_closed_markets: int
     complete_markets: int
@@ -304,16 +307,23 @@ def evaluate_tape_lifecycle(
             coverage_by_token,
             observed_start=observed_start,
             observed_end=observed_end,
+            cohort_end=validation_end or observed_end,
             max_discovery_lag_seconds=max_discovery_lag_seconds,
             max_coverage_gap_seconds=max_coverage_gap_seconds,
         )
         for market_id, rows in sorted(by_market.items())
     )
-    cohort_evidence = tuple(
+    listed_evidence = tuple(
         item
         for item in market_evidence
         if _parse_utc(item.listing_at_utc) >= observed_start
         and _parse_utc(item.listing_at_utc) <= observed_end
+    )
+    cohort_evidence = tuple(
+        item for item in listed_evidence if item.cohort_status == "MATURED"
+    )
+    right_censored_evidence = tuple(
+        item for item in listed_evidence if item.cohort_status == "RIGHT_CENSORED"
     )
     cohort_market_ids = {item.market_id for item in cohort_evidence}
     listing_source_counts: dict[str, int] = defaultdict(int)
@@ -426,7 +436,9 @@ def evaluate_tape_lifecycle(
         incomplete_discovery_refreshes=incomplete_refreshes,
         failed_discovery_refreshes=failed_refreshes,
         listing_source_counts=dict(sorted(listing_source_counts.items())),
+        listed_markets=len(listed_evidence),
         cohort_markets=len(cohort_evidence),
+        right_censored_markets=len(right_censored_evidence),
         incomplete_cohort_markets=sum(
             not item.complete for item in cohort_evidence
         ),
@@ -446,6 +458,7 @@ def _market_evidence(
     *,
     observed_start: datetime,
     observed_end: datetime,
+    cohort_end: datetime,
     max_discovery_lag_seconds: float,
     max_coverage_gap_seconds: float,
 ) -> MarketLifecycleEvidence:
@@ -457,36 +470,44 @@ def _market_evidence(
     if not end_text:
         end = observed_end
         failures.append("missing_market_end")
+        cohort_status = "MATURED"
     else:
         end = _parse_utc(end_text)
+        cohort_status = (
+            "MATURED" if end <= cohort_end else "RIGHT_CENSORED"
+        )
     source_values = {str(row["listing_timestamp_source"]) for row in rows}
     listing_source = next(iter(source_values)) if len(source_values) == 1 else "mixed"
-    if listing_source == "discovery_fallback" or listing_source == "mixed":
+    if (
+        cohort_status == "MATURED"
+        and (listing_source == "discovery_fallback" or listing_source == "mixed")
+    ):
         failures.append("listing_timestamp_not_authoritative")
     discovery_lag = max(0.0, (discovered - listing).total_seconds())
-    if discovery_lag > max_discovery_lag_seconds:
+    if cohort_status == "MATURED" and discovery_lag > max_discovery_lag_seconds:
         failures.append("discovery_lag_over_budget")
     if listing < observed_start:
         failures.append("market_listed_before_observation_window")
-    if end > observed_end:
-        failures.append("market_not_closed_in_observation_window")
 
     valid_tokens = 0
     maximum_gap: float | None = None
-    for row in rows:
-        complete, token_gap = _coverage_reaches_end(
-            coverage_by_token.get(str(row["token_id"]), []),
-            required_start=discovered,
-            required_end=end,
-            max_gap_seconds=max_coverage_gap_seconds,
-        )
-        if complete:
-            valid_tokens += 1
-        if token_gap is not None:
-            maximum_gap = token_gap if maximum_gap is None else max(maximum_gap, token_gap)
-    if valid_tokens != len(rows):
-        failures.append("token_coverage_not_continuous_to_end")
-    complete = not failures
+    if cohort_status == "MATURED":
+        for row in rows:
+            complete, token_gap = _coverage_reaches_end(
+                coverage_by_token.get(str(row["token_id"]), []),
+                required_start=discovered,
+                required_end=end,
+                max_gap_seconds=max_coverage_gap_seconds,
+            )
+            if complete:
+                valid_tokens += 1
+            if token_gap is not None:
+                maximum_gap = (
+                    token_gap if maximum_gap is None else max(maximum_gap, token_gap)
+                )
+        if valid_tokens != len(rows):
+            failures.append("token_coverage_not_continuous_to_end")
+    complete = cohort_status == "MATURED" and not failures
     return MarketLifecycleEvidence(
         market_id=market_id,
         station=str(first["station"]),
@@ -498,6 +519,7 @@ def _market_evidence(
         discovered_at_utc=_iso_utc(discovered),
         discovery_lag_seconds=round(discovery_lag, 6),
         market_end_at_utc=_iso_utc(end),
+        cohort_status=cohort_status,
         valid_through_end_tokens=valid_tokens,
         maximum_coverage_gap_seconds=round(maximum_gap, 6) if maximum_gap is not None else None,
         complete=complete,
@@ -571,7 +593,9 @@ def _empty_report(
         incomplete_discovery_refreshes=0,
         failed_discovery_refreshes=0,
         listing_source_counts={},
+        listed_markets=0,
         cohort_markets=0,
+        right_censored_markets=0,
         incomplete_cohort_markets=0,
         eligible_closed_markets=0,
         complete_markets=0,
