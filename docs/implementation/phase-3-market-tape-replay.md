@@ -2,7 +2,7 @@
 
 Status: Slices 1-4 implemented; first batch taker holdout complete; Slice 2 lifecycle, Slice 4 real join, and Slices 5-6 remain open
 
-Last updated: 2026-07-29
+Last updated: 2026-07-30
 
 ## Feature Goal
 
@@ -279,6 +279,17 @@ Implementation status, 2026-07-23:
 - Final compressed core-L2 host session `tape-20260723T173900Z-b9392349` started at 2026-07-23 17:39:00 UTC. Its post-rotation strict check was healthy: 616 authoritative-listing tokens spanning current and future dates, all 616 initial books `VALID`, 106,869 events, zero reconstruction errors, 134,975,488 bytes RSS, queue high-water 1 / 10,000, 807 ms receipt lag, and one exactly replayed gzip partition. The unit is disabled, capped at 1 GiB, and will stop no later than 2026-07-26 18:39 UTC.
 - Slice 2 repository work is complete. Its exit remains open until the bounded host run records at least one eligible first-listing-through-close market per discovered station/family and the lifecycle report passes. The same run supplies the still-open Slice 1 daily-growth/retention evidence.
 
+Repair status, 2026-07-30:
+
+- Direct tape discovery now queries deterministic current, D+1, and D+2 weather event slugs in each city timezone before merging the broad active Gamma universe. Ordinary execution discovery remains current-day only.
+- WebSocket closures recover inside one collector session through `GAPPED -> RECONNECTING -> RESYNCING`; the consecutive retry budget resets only after real token events, and every reconnect requires a new full book before `VALID`.
+- Live incremental events over the 10-second receipt-lag limit force a fail-closed resync. Full-book timestamps are treated as book-state age rather than transport lag and may establish a valid baseline when the book reconstructs.
+- Initial and dynamic WebSocket subscriptions are chunked in 500-token requests. Expected pre-book deltas remain raw `RESYNCING` evidence but are not misclassified as reconstruction failures; malformed books and post-`VALID` reconstruction errors still fail health.
+- Strict health now requires nonzero messages/events, a subscription generation, and a valid full-book transition for every latest-generation member, including correct remove/re-add behavior.
+- The systemd probe preserves one wall-clock deadline across automatic restarts. Lifecycle acceptance can be scoped by validation timestamps or exact session IDs so historical sessions outside the declared run do not poison it; failures inside the selected run remain fail-closed.
+- The obsolete July 23-30 service was stopped with its tape preserved. Final short verification session `tape-20260730T165046Z-aa80a5e1` subscribed to 1,364 tokens, recorded 40,249 events, reached `VALID` for all 1,364 tokens, used queue high-water 1 and about 172 MiB RSS, recorded zero reconstruction errors/reconnects, and passed strict health. Its lifecycle report failed only the expected short-duration and no-closed-market gates.
+- Slice 2 exit remains open pending installation of the repaired unit and one fresh scoped first-listing-through-close lifecycle run.
+
 ### Slice 3: Book Reconstruction
 
 - Store initial/periodic checkpoints.
@@ -359,6 +370,7 @@ Implementation status, 2026-07-29:
 
 ## Decision Log
 
+- 2026-07-30: Repaired the long-probe failures without weakening replay validity. Added direct future-event discovery, in-process reconnect/resync, incremental-event lag enforcement, restart-stable bounds, chunked subscription seeding, strict generation health, scoped lifecycle acceptance, and expected pre-seed delta handling. A 1,364-token short probe passed; the complete lifecycle gate remains open.
 - 2026-07-29: Added the first reusable frozen-portfolio taker holdout over later valid tape. Recorded its preliminary positive result while keeping Slice 2 failed and Slices 5-6 open for lifecycle validity, passive-fill bounds, markouts, settlement, and true forward activation.
 - 2026-07-23: Audited the remote host and corrected the prior “running” assumption: no recorder was active and all retained catalogs were approximately 18-second probes. Completed the missing future-market discovery, listing-provenance, lifecycle-gate, and bounded-supervision repository work; kept Slice 2 open pending elapsed host evidence rather than treating the short probes as a pass.
 - 2026-07-17: Extended the acceptance target to explicit first-listing-through-close/settlement collection, including future-dated weather markets, lifecycle discovery-lag reporting, and horizon-tagged forward arms. Existing fill-validity requirements remain unchanged.

@@ -128,6 +128,12 @@
 - Inspect the bounded service with `systemctl --user status roboweather-market-tape-lifecycle.service --no-pager` and `journalctl --user -u roboweather-market-tape-lifecycle.service`. Stop it explicitly with `systemctl --user stop roboweather-market-tape-lifecycle.service` if the probe must be abandoned.
 - After the bounded run, evaluate the complete Slice 2 evidence:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/market_tape_lifecycle_report.py --catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite`
+- Scope acceptance to the declared clean validation cohort so historical probes do not poison the result:
+  - use `--validation-start ISO_UTC --validation-end ISO_UTC` for a bounded session-start window;
+  - or repeat `--session-id TAPE_SESSION_ID` for the exact restart cohort;
+  - errors, lag, gaps, reconstruction failures, and incomplete lifecycles inside the selected cohort still fail closed.
+- Tape discovery directly polls current, D+1, and D+2 event slugs. The expanded universe is subscribed in 500-token WebSocket batches; strict health must show every latest-generation member received a full-book `VALID` transition.
+- Reinstall `deploy/systemd/roboweather-market-tape-lifecycle.service` and run `systemctl --user daemon-reload` after recorder-unit changes. Its preserved runtime-directory deadline prevents automatic restarts from resetting the 72-hour bound.
 - The lifecycle report requires at least 12 recorded hours, authoritative Gamma listing timestamps, discovery within 300 seconds, no coverage gap over 5 seconds, receipt lag at or below 10 seconds, RSS at or below 1 GiB, queue high-water below capacity, projected raw growth at or below 25 GiB/day, and at least one complete eligible market per discovered station/family.
 - The recorder now fails closed on zero token events. Require nonzero messages/events, a subscription generation, `RESYNCING` followed by `VALID` coverage for full-book tokens, cataloged raw partitions, fresh telemetry, and exact segment replay.
 - Unexpected disconnects must appear as `GAPPED -> RECONNECTING -> RESYNCING`; replay must not bridge those intervals, and a token returns to `VALID` only after a new full book.
