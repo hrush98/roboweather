@@ -42,6 +42,10 @@ def main() -> None:
         default=None,
         help="Evaluate only this exact collector session; repeat to select a restarted run.",
     )
+    parser.add_argument(
+        "--validation-run-id",
+        help="Evaluate every session persisted under this validation cohort.",
+    )
     parser.add_argument("--min-recorded-hours", type=float, default=12.0)
     parser.add_argument("--max-discovery-lag-seconds", type=float, default=300.0)
     parser.add_argument("--max-coverage-gap-seconds", type=float, default=5.0)
@@ -62,6 +66,7 @@ def main() -> None:
             validation_start_at=args.validation_start,
             validation_end_at=args.validation_end,
             validation_session_ids=tuple(args.session_id) if args.session_id else None,
+            validation_run_id=args.validation_run_id,
             min_recorded_hours=args.min_recorded_hours,
             max_discovery_lag_seconds=args.max_discovery_lag_seconds,
             max_coverage_gap_seconds=args.max_coverage_gap_seconds,

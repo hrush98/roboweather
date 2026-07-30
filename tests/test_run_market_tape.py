@@ -4,7 +4,10 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
-from scripts.run_market_tape import _remaining_overall_seconds
+from scripts.run_market_tape import (
+    _remaining_overall_seconds,
+    _validation_run_id_from_state,
+)
 
 
 def test_overall_deadline_is_preserved_across_process_restarts(tmp_path: Path) -> None:
@@ -32,6 +35,8 @@ def test_overall_deadline_is_preserved_across_process_restarts(tmp_path: Path) -
     assert after_restart == 12 * 60 * 60
     assert elapsed == 0
     assert payload["started_at_utc"] == started.isoformat()
+    assert payload["validation_run_id"].startswith("tape-validation-")
+    assert _validation_run_id_from_state(state_path) == payload["validation_run_id"]
 
 
 def test_overall_deadline_state_fails_closed_when_malformed(tmp_path: Path) -> None:
@@ -44,3 +49,24 @@ def test_overall_deadline_state_fails_closed_when_malformed(tmp_path: Path) -> N
         assert "invalid lifecycle deadline state" in str(exc)
     else:
         raise AssertionError("malformed deadline state must fail closed")
+
+
+def test_validation_run_state_fails_closed_when_identity_is_missing(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "deadline.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "started_at_utc": "2026-07-30T12:00:00+00:00",
+                "deadline_at_utc": "2026-07-30T13:00:00+00:00",
+            }
+        )
+    )
+
+    try:
+        _validation_run_id_from_state(state_path)
+    except ValueError as exc:
+        assert "lacks validation_run_id" in str(exc)
+    else:
+        raise AssertionError("missing validation identity must fail closed")

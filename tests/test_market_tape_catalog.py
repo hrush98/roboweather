@@ -148,6 +148,17 @@ def test_catalog_migrates_existing_decision_join_rows_for_termination_fields(
     assert "termination_reconstruction_hash" in columns
     assert "coverage_interval_id" in columns
     assert "source_ref" in columns
+    session_columns = {
+        row["name"]
+        for row in catalog.connection.execute(
+            "pragma table_info(tape_collector_sessions)"
+        )
+    }
+    assert {
+        "validation_run_id",
+        "build_fingerprint",
+        "config_fingerprint",
+    } <= session_columns
     catalog.close()
 
 
@@ -166,6 +177,16 @@ def test_subscription_registry_uses_catalog_universe_without_retiring_missing_to
     assert second.discovery.complete is False
     assert second.subscription is None
     assert {token.token_id for token in catalog.active_tokens()} == {"market-1-yes", "market-1-no"}
+    refresh_rows = catalog.connection.execute(
+        """
+        select status, token_count, market_count
+        from tape_discovery_refreshes order by id
+        """
+    ).fetchall()
+    assert [
+        (row["status"], row["token_count"], row["market_count"])
+        for row in refresh_rows
+    ] == [("COMPLETE", 2, 1), ("INCOMPLETE", 0, 0)]
     catalog.close()
 
 
@@ -185,6 +206,31 @@ def test_complete_refresh_retires_missing_tokens_and_emits_new_generation(tmp_pa
         "select count(*) from tape_tokens where subscription_state = 'RETIRED'"
     ).fetchone()[0]
     assert retired == 2
+    catalog.close()
+
+
+def test_discovery_exception_is_persisted_as_failed_refresh(tmp_path: Path) -> None:
+    catalog = TapeCatalog(tmp_path / "catalog.sqlite")
+    catalog.start_session(session())
+    registry = SubscriptionRegistry(catalog, ExplodingTapeDiscovery())
+
+    with pytest.raises(RuntimeError, match="discovery failed"):
+        registry.refresh(
+            session_id="session-1",
+            effective_at_utc="2026-07-16T12:00:01+00:00",
+        )
+
+    row = catalog.connection.execute(
+        """
+        select status, complete, token_count, market_count, error
+        from tape_discovery_refreshes
+        """
+    ).fetchone()
+    assert row["status"] == "ERROR"
+    assert row["complete"] == 0
+    assert row["token_count"] == 0
+    assert row["market_count"] == 0
+    assert row["error"] == "RuntimeError: discovery failed"
     catalog.close()
 
 
@@ -300,6 +346,7 @@ def test_active_health_allows_open_segment_before_first_rotation(tmp_path: Path)
     catalog.start_session(session())
     captured = datetime.now(timezone.utc).isoformat()
     catalog.upsert_tokens(_tokens_from_markets([market()]))
+    _record_complete_discovery(catalog, captured)
     generation = catalog.reconcile_subscription(
         "session-1",
         token_ids=("market-1-yes",),
@@ -350,6 +397,7 @@ def test_health_accepts_retained_valid_tokens_and_ignores_removed_members(
     catalog = TapeCatalog(tmp_path / "catalog.sqlite")
     catalog.start_session(session())
     catalog.upsert_tokens(_tokens_from_markets([market(), market(market_id="market-2")]))
+    _record_complete_discovery(catalog, "2026-07-16T12:00:00+00:00")
     catalog.reconcile_subscription(
         "session-1",
         token_ids=("market-1-yes", "market-1-no"),
@@ -419,6 +467,7 @@ def test_health_requires_new_full_book_when_token_is_removed_then_readded(
     catalog = TapeCatalog(tmp_path / "catalog.sqlite")
     catalog.start_session(session())
     catalog.upsert_tokens(_tokens_from_markets([market(), market(market_id="market-2")]))
+    _record_complete_discovery(catalog, "2026-07-16T12:00:00+00:00")
     catalog.reconcile_subscription(
         "session-1",
         token_ids=("market-1-yes",),
@@ -877,12 +926,29 @@ class FakeMarketDiscovery:
         return self.markets
 
 
+def _record_complete_discovery(catalog: TapeCatalog, captured_at: str) -> None:
+    catalog.record_discovery_refresh(
+        session_id="session-1",
+        attempted_at_utc=captured_at,
+        completed_at_utc=captured_at,
+        complete=True,
+        token_ids_and_markets=tuple(
+            (token.token_id, token.market_id) for token in catalog.active_tokens()
+        ),
+    )
+
+
 class FakeTapeDiscovery:
     def __init__(self, tokens, complete: bool = True) -> None:
         self.result = TapeDiscoveryResult(tuple(tokens), (), complete)
 
     def discover(self, *, market_limit: int):
         return self.result
+
+
+class ExplodingTapeDiscovery:
+    def discover(self, *, market_limit: int):
+        raise RuntimeError("discovery failed")
 
 
 class SequencedTapeDiscovery:

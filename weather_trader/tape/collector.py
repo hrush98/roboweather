@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import Future
+import hashlib
 import json
 import socket
 import threading
@@ -201,17 +202,40 @@ async def collect_market_tape(
     max_receipt_lag_seconds: float | None = 10.0,
     subscription_batch_size: int = 500,
     checkpoint_every: int = 1000,
+    validation_run_id: str | None = None,
+    build_fingerprint: str | None = None,
 ) -> TapeCollectionStats:
     if queue_size < 1:
         raise ValueError("queue_size must be positive")
     started_at = _utc_now()
     session_id = f"tape-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:8]}"
+    config_fingerprint = _fingerprint(
+        {
+            "checkpoint_every": checkpoint_every,
+            "collector_version": COLLECTOR_VERSION,
+            "market_limit": market_limit,
+            "max_receipt_lag_seconds": max_receipt_lag_seconds,
+            "max_reconnect_attempts": max_reconnect_attempts,
+            "queue_size": queue_size,
+            "reconnect_initial_seconds": reconnect_initial_seconds,
+            "reconnect_max_seconds": reconnect_max_seconds,
+            "refresh_seconds": refresh_seconds,
+            "rotation_seconds": rotation_seconds,
+            "subscription_batch_size": subscription_batch_size,
+            "telemetry_seconds": telemetry_seconds,
+        }
+    )
     session = CollectorSession(
         session_id=session_id,
         started_at_utc=started_at,
         started_monotonic_ns=time.monotonic_ns(),
         collector_version=COLLECTOR_VERSION,
         hostname=socket.gethostname(),
+        validation_run_id=validation_run_id or session_id,
+        build_fingerprint=build_fingerprint or _fingerprint(
+            {"collector_version": COLLECTOR_VERSION}
+        ),
+        config_fingerprint=config_fingerprint,
     )
     catalog.start_session(session)
     registry = SubscriptionRegistry(catalog, discovery or TapeDiscoveryService())
@@ -462,6 +486,7 @@ async def _collect_generation(
     messages = events = high_water = 0
     next_refresh = time.monotonic() + refresh_seconds
     refresh_task: Future[TapeDiscoveryResult] | None = None
+    refresh_attempted_at: str | None = None
     subscription_generations = 0
     termination = "stream_end"
     transport_error: Exception | None = None
@@ -487,10 +512,12 @@ async def _collect_generation(
     async def apply_refresh_if_ready() -> None:
         nonlocal refresh_task, next_refresh, current_generation
         nonlocal current_subscribed, subscription_generations
+        nonlocal refresh_attempted_at
         if refresh_task is None:
             if time.monotonic() >= next_refresh:
                 if deadline is not None and time.monotonic() + 0.01 >= deadline:
                     return
+                refresh_attempted_at = _utc_now()
                 refresh_task = _start_discovery(
                     registry.discovery,
                     market_limit=market_limit,
@@ -500,18 +527,30 @@ async def _collect_generation(
             return
         try:
             discovery_result = refresh_task.result()
-        except Exception:
+        except Exception as exc:
             # A discovery outage must not tear down otherwise valid tape
             # coverage. The next bounded refresh retries it.
+            completed_at = _utc_now()
+            catalog.record_discovery_refresh(
+                session_id=generation.session_id,
+                attempted_at_utc=refresh_attempted_at or completed_at,
+                completed_at_utc=completed_at,
+                complete=False,
+                error=f"{type(exc).__name__}: {exc}",
+            )
             refresh_task = None
+            refresh_attempted_at = None
             next_refresh = time.monotonic() + refresh_seconds
             return
+        completed_at = _utc_now()
         refreshed = registry.apply_discovery(
             discovery_result,
             session_id=generation.session_id,
-            effective_at_utc=_utc_now(),
+            effective_at_utc=completed_at,
+            attempted_at_utc=refresh_attempted_at,
         )
         refresh_task = None
+        refresh_attempted_at = None
         next_refresh = time.monotonic() + refresh_seconds
         if refreshed.subscription is None:
             return
@@ -919,3 +958,12 @@ def _rss_bytes() -> int:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _fingerprint(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()

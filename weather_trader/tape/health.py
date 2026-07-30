@@ -25,6 +25,9 @@ class TapeHealthReport:
     rss_bytes: int
     receipt_lag_ms: float | None
     reconstruction_errors: int
+    discovery_refreshes: int
+    latest_discovery_status: str | None
+    unhealthy_discovery_refreshes: int
     coverage_counts: dict[str, int]
     failures: tuple[str, ...]
 
@@ -58,6 +61,9 @@ def evaluate_tape_health(
             rss_bytes=0,
             receipt_lag_ms=None,
             reconstruction_errors=0,
+            discovery_refreshes=0,
+            latest_discovery_status=None,
+            unhealthy_discovery_refreshes=0,
             coverage_counts={},
             failures=("no_sessions",),
         )
@@ -103,12 +109,29 @@ def evaluate_tape_health(
             "select count(*) from tape_reconstruction_errors where session_id = ?", (session_id,)
         ).fetchone()[0]
     )
+    discovery_rows = catalog.connection.execute(
+        """
+        select status from tape_discovery_refreshes
+        where session_id = ? order by id
+        """,
+        (session_id,),
+    ).fetchall()
+    latest_discovery_status = (
+        str(discovery_rows[-1]["status"]) if discovery_rows else None
+    )
+    unhealthy_discovery_refreshes = sum(
+        str(row["status"]) != "COMPLETE" for row in discovery_rows
+    )
     failures: list[str] = []
     finish_reason = session["finish_reason"]
     if finish_reason == "error":
         failures.append("session_finished_with_error")
     if reconstruction_errors:
         failures.append("reconstruction_errors")
+    if not discovery_rows:
+        failures.append("missing_discovery_refresh_health")
+    elif latest_discovery_status != "COMPLETE":
+        failures.append("latest_discovery_refresh_unhealthy")
     if metric is None:
         failures.append("missing_telemetry")
         messages = events = raw_disk_bytes = queue_high_water = queue_capacity = rss_bytes = 0
@@ -177,6 +200,9 @@ def evaluate_tape_health(
         rss_bytes=rss_bytes,
         receipt_lag_ms=float(receipt_lag_ms) if receipt_lag_ms is not None else None,
         reconstruction_errors=reconstruction_errors,
+        discovery_refreshes=len(discovery_rows),
+        latest_discovery_status=latest_discovery_status,
+        unhealthy_discovery_refreshes=unhealthy_discovery_refreshes,
         coverage_counts=coverage_counts,
         failures=tuple(failures),
     )

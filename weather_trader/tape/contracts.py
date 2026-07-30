@@ -125,11 +125,17 @@ class CollectorSession:
     started_monotonic_ns: int
     collector_version: str
     hostname: str
+    validation_run_id: str = "unspecified"
+    build_fingerprint: str = "unspecified"
+    config_fingerprint: str = "unspecified"
     finished_at_utc: str | None = None
     finish_reason: str | None = None
 
     def __post_init__(self) -> None:
         _require(self.session_id, "session_id")
+        _require(self.validation_run_id, "validation_run_id")
+        _require(self.build_fingerprint, "build_fingerprint")
+        _require(self.config_fingerprint, "config_fingerprint")
         if self.started_monotonic_ns < 0:
             raise ValueError("started_monotonic_ns must be non-negative")
 

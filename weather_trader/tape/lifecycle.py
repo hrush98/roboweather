@@ -31,7 +31,10 @@ class TapeLifecycleReport:
     passed: bool
     validation_start_at_utc: str | None
     validation_end_at_utc: str | None
+    selected_validation_run_id: str | None
     selected_session_ids: tuple[str, ...]
+    build_fingerprints: tuple[str, ...]
+    config_fingerprints: tuple[str, ...]
     sessions: int
     successful_sessions: int
     observed_start_at_utc: str | None
@@ -51,7 +54,13 @@ class TapeLifecycleReport:
     max_receipt_lag_ms_observed: float | None
     max_receipt_lag_ms_budget: float
     reconstruction_errors: int
+    discovery_refreshes: int
+    complete_discovery_refreshes: int
+    incomplete_discovery_refreshes: int
+    failed_discovery_refreshes: int
     listing_source_counts: dict[str, int]
+    cohort_markets: int
+    incomplete_cohort_markets: int
     eligible_closed_markets: int
     complete_markets: int
     required_station_families: tuple[str, ...]
@@ -66,6 +75,7 @@ def evaluate_tape_lifecycle(
     validation_start_at: datetime | None = None,
     validation_end_at: datetime | None = None,
     validation_session_ids: tuple[str, ...] | None = None,
+    validation_run_id: str | None = None,
     min_recorded_hours: float = 12.0,
     max_discovery_lag_seconds: float = 300.0,
     max_coverage_gap_seconds: float = 5.0,
@@ -90,6 +100,11 @@ def evaluate_tape_lifecycle(
     )
     if validation_session_ids is not None and not requested_session_ids:
         raise ValueError("validation_session_ids must contain at least one non-empty id")
+    requested_validation_run_id = (
+        str(validation_run_id).strip() if validation_run_id is not None else None
+    )
+    if validation_run_id is not None and not requested_validation_run_id:
+        raise ValueError("validation_run_id must be non-empty")
     connection = catalog.connection
     all_sessions = connection.execute(
         "select * from tape_collector_sessions order by started_at_utc"
@@ -101,12 +116,24 @@ def evaluate_tape_lifecycle(
             raise ValueError(
                 "validation_session_ids not found: " + ", ".join(unknown_session_ids)
             )
+    if requested_validation_run_id is not None:
+        known_validation_run_ids = {
+            str(row["validation_run_id"]) for row in all_sessions
+        }
+        if requested_validation_run_id not in known_validation_run_ids:
+            raise ValueError(
+                f"validation_run_id not found: {requested_validation_run_id}"
+            )
     sessions = [
         row
         for row in all_sessions
         if (
             requested_session_ids is None
             or str(row["session_id"]) in requested_session_ids
+        )
+        and (
+            requested_validation_run_id is None
+            or str(row["validation_run_id"]) == requested_validation_run_id
         )
         and (
             validation_start is None
@@ -133,6 +160,18 @@ def evaluate_tape_lifecycle(
     current_time = current_time.astimezone(timezone.utc)
     selected_session_ids = tuple(str(row["session_id"]) for row in sessions)
     selected_session_id_set = set(selected_session_ids)
+    validation_run_ids = {
+        str(row["validation_run_id"]) for row in sessions
+    }
+    build_fingerprints = tuple(
+        sorted({str(row["build_fingerprint"]) for row in sessions})
+    )
+    config_fingerprints = tuple(
+        sorted({str(row["config_fingerprint"]) for row in sessions})
+    )
+    selected_validation_run_id = (
+        next(iter(validation_run_ids)) if len(validation_run_ids) == 1 else None
+    )
     metric_rows = [
         row
         for row in connection.execute(
@@ -213,18 +252,34 @@ def evaluate_tape_lifecycle(
         )
     )
 
+    discovery_refresh_rows = [
+        row
+        for row in connection.execute(
+            "select * from tape_discovery_refreshes order by attempted_at_utc, id"
+        ).fetchall()
+        if str(row["session_id"]) in selected_session_id_set
+        and (
+            validation_end is None
+            or _parse_utc(str(row["attempted_at_utc"])) <= validation_end
+        )
+    ]
+    selected_refresh_ids = {int(row["id"]) for row in discovery_refresh_rows}
+    cohort_token_ids = {
+        str(row["token_id"])
+        for row in connection.execute(
+            "select refresh_id, token_id from tape_discovery_refresh_members"
+        ).fetchall()
+        if int(row["refresh_id"]) in selected_refresh_ids
+    }
     token_rows = [
         row
         for row in connection.execute(
             "select * from tape_tokens order by market_id, token_id"
         ).fetchall()
-        if _parse_utc(str(row["discovered_at_utc"])) >= observed_start
-        and _parse_utc(str(row["discovered_at_utc"])) <= observed_end
+        if str(row["token_id"]) in cohort_token_ids
     ]
-    listing_source_counts: dict[str, int] = defaultdict(int)
     by_market: dict[str, list[Any]] = defaultdict(list)
     for row in token_rows:
-        listing_source_counts[str(row["listing_timestamp_source"])] += 1
         by_market[str(row["market_id"])].append(row)
 
     coverage_by_token: dict[str, list[tuple[datetime, datetime]]] = defaultdict(list)
@@ -254,20 +309,44 @@ def evaluate_tape_lifecycle(
         )
         for market_id, rows in sorted(by_market.items())
     )
-    eligible = tuple(
+    cohort_evidence = tuple(
         item
         for item in market_evidence
+        if _parse_utc(item.listing_at_utc) >= observed_start
+        and _parse_utc(item.listing_at_utc) <= observed_end
+    )
+    cohort_market_ids = {item.market_id for item in cohort_evidence}
+    listing_source_counts: dict[str, int] = defaultdict(int)
+    for row in token_rows:
+        if str(row["market_id"]) in cohort_market_ids:
+            listing_source_counts[str(row["listing_timestamp_source"])] += 1
+    eligible = tuple(
+        item
+        for item in cohort_evidence
         if "listing_timestamp_not_authoritative" not in item.failures
         and "discovery_lag_over_budget" not in item.failures
         and "market_not_closed_in_observation_window" not in item.failures
-        and "market_listed_before_observation_window" not in item.failures
     )
-    required_families = tuple(sorted({f"{item.station}:{item.market_family}" for item in eligible}))
+    required_families = tuple(
+        sorted({f"{item.station}:{item.market_family}" for item in cohort_evidence})
+    )
     complete_families = tuple(
-        sorted({f"{item.station}:{item.market_family}" for item in eligible if item.complete})
+        sorted(
+            {
+                f"{item.station}:{item.market_family}"
+                for item in cohort_evidence
+                if item.complete
+            }
+        )
     )
 
     failures: list[str] = []
+    if len(validation_run_ids) != 1 or "unspecified" in validation_run_ids:
+        failures.append("validation_run_identity_missing_or_mixed")
+    if len(build_fingerprints) != 1 or "unspecified" in build_fingerprints:
+        failures.append("build_fingerprint_missing_or_mixed")
+    if len(config_fingerprints) != 1 or "unspecified" in config_fingerprints:
+        failures.append("config_fingerprint_missing_or_mixed")
     if recorded_hours < min_recorded_hours:
         failures.append("recorded_duration_below_gate")
     if session_errors:
@@ -284,8 +363,29 @@ def evaluate_tape_lifecycle(
         failures.append("receipt_lag_over_budget")
     if reconstruction_errors:
         failures.append("reconstruction_errors")
+    complete_refreshes = sum(
+        str(row["status"]) == "COMPLETE" for row in discovery_refresh_rows
+    )
+    incomplete_refreshes = sum(
+        str(row["status"]) == "INCOMPLETE" for row in discovery_refresh_rows
+    )
+    failed_refreshes = sum(
+        str(row["status"]) == "ERROR" for row in discovery_refresh_rows
+    )
+    if not discovery_refresh_rows:
+        failures.append("no_discovery_refreshes")
+    elif len(discovery_refresh_rows) < 2:
+        failures.append("discovery_refresh_not_repeated")
+    if incomplete_refreshes:
+        failures.append("incomplete_discovery_refreshes")
+    if failed_refreshes:
+        failures.append("failed_discovery_refreshes")
     if listing_source_counts.get("gamma_created_at", 0) == 0:
         failures.append("no_authoritative_listing_timestamps")
+    if not cohort_evidence:
+        failures.append("no_validation_cohort_markets")
+    if any(not item.complete for item in cohort_evidence):
+        failures.append("incomplete_validation_cohort_markets")
     if not eligible:
         failures.append("no_eligible_closed_markets")
     missing_families = sorted(set(required_families) - set(complete_families))
@@ -298,7 +398,10 @@ def evaluate_tape_lifecycle(
         passed=not failures,
         validation_start_at_utc=_iso_utc(validation_start) if validation_start else None,
         validation_end_at_utc=_iso_utc(validation_end) if validation_end else None,
+        selected_validation_run_id=selected_validation_run_id,
         selected_session_ids=selected_session_ids,
+        build_fingerprints=build_fingerprints,
+        config_fingerprints=config_fingerprints,
         sessions=len(sessions),
         successful_sessions=successful_sessions,
         observed_start_at_utc=_iso_utc(observed_start),
@@ -318,7 +421,15 @@ def evaluate_tape_lifecycle(
         max_receipt_lag_ms_observed=receipt_lag_observed,
         max_receipt_lag_ms_budget=max_receipt_lag_ms,
         reconstruction_errors=reconstruction_errors,
+        discovery_refreshes=len(discovery_refresh_rows),
+        complete_discovery_refreshes=complete_refreshes,
+        incomplete_discovery_refreshes=incomplete_refreshes,
+        failed_discovery_refreshes=failed_refreshes,
         listing_source_counts=dict(sorted(listing_source_counts.items())),
+        cohort_markets=len(cohort_evidence),
+        incomplete_cohort_markets=sum(
+            not item.complete for item in cohort_evidence
+        ),
         eligible_closed_markets=len(eligible),
         complete_markets=sum(item.complete for item in eligible),
         required_station_families=required_families,
@@ -432,7 +543,10 @@ def _empty_report(
         passed=False,
         validation_start_at_utc=_iso_utc(validation_start) if validation_start else None,
         validation_end_at_utc=_iso_utc(validation_end) if validation_end else None,
+        selected_validation_run_id=None,
         selected_session_ids=(),
+        build_fingerprints=(),
+        config_fingerprints=(),
         sessions=0,
         successful_sessions=0,
         observed_start_at_utc=None,
@@ -452,7 +566,13 @@ def _empty_report(
         max_receipt_lag_ms_observed=None,
         max_receipt_lag_ms_budget=max_receipt_lag_ms,
         reconstruction_errors=0,
+        discovery_refreshes=0,
+        complete_discovery_refreshes=0,
+        incomplete_discovery_refreshes=0,
+        failed_discovery_refreshes=0,
         listing_source_counts={},
+        cohort_markets=0,
+        incomplete_cohort_markets=0,
         eligible_closed_markets=0,
         complete_markets=0,
         required_station_families=(),

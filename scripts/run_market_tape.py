@@ -6,9 +6,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 from pathlib import Path
+import subprocess
 import sys
+import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -36,6 +39,9 @@ def _remaining_overall_seconds(
         payload = {
             "started_at_utc": current.isoformat(),
             "deadline_at_utc": deadline.isoformat(),
+            "validation_run_id": (
+                f"tape-validation-{current:%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:8]}"
+            ),
         }
         try:
             with state_path.open("x") as handle:
@@ -49,6 +55,36 @@ def _remaining_overall_seconds(
     if deadline.tzinfo is None:
         raise ValueError(f"lifecycle deadline must be timezone-aware: {state_path}")
     return max(0.0, (deadline - current).total_seconds())
+
+
+def _validation_run_id_from_state(state_path: Path) -> str:
+    payload = json.loads(state_path.read_text())
+    value = payload.get("validation_run_id")
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            f"lifecycle deadline state lacks validation_run_id: {state_path}"
+        )
+    return value
+
+
+def _build_fingerprint(repository_root: Path) -> str:
+    """Fingerprint the exact Git commit plus tracked working-tree delta."""
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+        ).stdout.strip()
+        diff = subprocess.run(
+            ["git", "diff", "--no-ext-diff", "--binary", "HEAD"],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError("cannot fingerprint recorder build from Git") from exc
+    return hashlib.sha256(head + b"\0" + diff).hexdigest()
 
 
 def main() -> None:
@@ -77,19 +113,43 @@ def main() -> None:
     parser.add_argument("--reconnect-max-seconds", type=float, default=30.0)
     parser.add_argument("--max-receipt-lag-seconds", type=float, default=10.0)
     parser.add_argument("--checkpoint-every", type=int, default=1000)
+    parser.add_argument(
+        "--validation-run-id",
+        help="Stable validation cohort identifier shared by supervised restarts.",
+    )
     args = parser.parse_args()
     if (args.overall_max_seconds is None) != (args.deadline_state_file is None):
         parser.error("--overall-max-seconds and --deadline-state-file must be used together")
     max_seconds = args.max_seconds
+    validation_run_id = args.validation_run_id
     if args.overall_max_seconds is not None:
+        deadline_state_path = args.deadline_state_file.expanduser()
         remaining = _remaining_overall_seconds(
-            args.deadline_state_file.expanduser(),
+            deadline_state_path,
             args.overall_max_seconds,
         )
+        state_validation_run_id = _validation_run_id_from_state(deadline_state_path)
+        if (
+            validation_run_id is not None
+            and validation_run_id != state_validation_run_id
+        ):
+            parser.error(
+                "--validation-run-id does not match the persisted deadline-state cohort"
+            )
+        validation_run_id = state_validation_run_id
         if remaining <= 0:
-            print(json.dumps({"finish_reason": "overall_deadline_elapsed"}, indent=2))
+            print(
+                json.dumps(
+                    {
+                        "finish_reason": "overall_deadline_elapsed",
+                        "validation_run_id": validation_run_id,
+                    },
+                    indent=2,
+                )
+            )
             return
         max_seconds = remaining if max_seconds is None else min(max_seconds, remaining)
+    repository_root = Path(__file__).resolve().parents[1]
     with TapeCatalog(args.catalog.expanduser()) as catalog:
         stats = asyncio.run(
             collect_market_tape(
@@ -107,6 +167,8 @@ def main() -> None:
                 reconnect_max_seconds=args.reconnect_max_seconds,
                 max_receipt_lag_seconds=args.max_receipt_lag_seconds,
                 checkpoint_every=args.checkpoint_every,
+                validation_run_id=validation_run_id,
+                build_fingerprint=_build_fingerprint(repository_root),
             )
         )
     payload = {

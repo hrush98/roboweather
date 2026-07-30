@@ -24,6 +24,10 @@ def test_lifecycle_report_passes_complete_market_and_resource_gates(tmp_path: Pa
     assert report.passed is True
     assert report.recorded_hours == 24.033333
     assert report.eligible_closed_markets == 1
+    assert report.cohort_markets == 1
+    assert report.incomplete_cohort_markets == 0
+    assert report.discovery_refreshes == 2
+    assert report.selected_validation_run_id == "validation-1"
     assert report.complete_markets == 1
     assert report.required_station_families == ("KATL:HIGH_TEMP",)
     assert report.required_station_families == report.complete_station_families
@@ -191,6 +195,118 @@ def test_lifecycle_report_rejects_unknown_selected_session(tmp_path: Path) -> No
     catalog.close()
 
 
+def test_lifecycle_report_keeps_late_fallback_and_open_markets_in_denominator(
+    tmp_path: Path,
+) -> None:
+    catalog = _complete_catalog(tmp_path)
+    late = MarketSnapshot(
+        market_id="late-market",
+        condition_id="late-condition",
+        question="Highest temperature in Atlanta?",
+        slug="atlanta-late",
+        city="Atlanta",
+        station="KATL",
+        market_date=date(2026, 7, 17),
+        lower_f=91.0,
+        upper_f=92.0,
+        yes_token_id="late-yes",
+        no_token_id="late-no",
+        end_date="2026-07-18T12:00:00+00:00",
+        resolution_source="Weather Underground",
+        discovered_at="2026-07-16T12:10:01+00:00",
+        market_family=MarketFamily.HIGH_TEMP,
+        listed_at="2026-07-16T12:02:00+00:00",
+    )
+    fallback = MarketSnapshot(
+        market_id="fallback-market",
+        condition_id="fallback-condition",
+        question="Highest temperature in Atlanta?",
+        slug="atlanta-fallback",
+        city="Atlanta",
+        station="KATL",
+        market_date=date(2026, 7, 17),
+        lower_f=92.0,
+        upper_f=93.0,
+        yes_token_id="fallback-yes",
+        no_token_id="fallback-no",
+        end_date="2026-07-18T12:00:00+00:00",
+        resolution_source="Weather Underground",
+        discovered_at="2026-07-16T12:03:00+00:00",
+        market_family=MarketFamily.HIGH_TEMP,
+        listed_at=None,
+    )
+    tokens = _tokens_from_markets([late, fallback])
+    catalog.upsert_tokens(tokens)
+    catalog.record_discovery_refresh(
+        session_id="session-1",
+        attempted_at_utc="2026-07-16T12:10:01+00:00",
+        completed_at_utc="2026-07-16T12:10:01+00:00",
+        complete=True,
+        token_ids_and_markets=tuple(
+            (token.token_id, token.market_id) for token in tokens
+        ),
+    )
+
+    report = evaluate_tape_lifecycle(catalog)
+
+    assert report.cohort_markets == 3
+    assert report.incomplete_cohort_markets == 2
+    assert "incomplete_validation_cohort_markets" in report.failures
+    failures_by_market = {
+        market.market_id: market.failures for market in report.markets
+    }
+    assert "discovery_lag_over_budget" in failures_by_market["late-market"]
+    assert (
+        "listing_timestamp_not_authoritative"
+        in failures_by_market["fallback-market"]
+    )
+    assert (
+        "market_not_closed_in_observation_window"
+        in failures_by_market["fallback-market"]
+    )
+    catalog.close()
+
+
+def test_lifecycle_report_fails_on_incomplete_refresh_and_mixed_build(
+    tmp_path: Path,
+) -> None:
+    catalog = _complete_catalog(tmp_path)
+    catalog.record_discovery_refresh(
+        session_id="session-1",
+        attempted_at_utc="2026-07-16T12:06:00+00:00",
+        completed_at_utc="2026-07-16T12:06:01+00:00",
+        complete=False,
+        warnings=("broad_market_discovery_empty",),
+    )
+    second = CollectorSession(
+        session_id="session-2",
+        started_at_utc="2026-07-16T12:30:00+00:00",
+        started_monotonic_ns=2,
+        collector_version="test",
+        hostname="host",
+        validation_run_id="validation-1",
+        build_fingerprint="build-2",
+        config_fingerprint="config-1",
+    )
+    catalog.start_session(second)
+    catalog.finish_session(
+        second.session_id,
+        finished_at_utc="2026-07-16T13:00:00+00:00",
+        reason="max_seconds",
+    )
+
+    report = evaluate_tape_lifecycle(
+        catalog,
+        validation_run_id="validation-1",
+    )
+
+    assert report.incomplete_discovery_refreshes == 1
+    assert "incomplete_discovery_refreshes" in report.failures
+    assert "build_fingerprint_missing_or_mixed" in report.failures
+    assert report.build_fingerprints == ("build-1", "build-2")
+    catalog.close()
+
+
 def _complete_catalog(
     tmp_path: Path,
     *,
@@ -204,6 +320,9 @@ def _complete_catalog(
         started_monotonic_ns=1,
         collector_version="test",
         hostname="host",
+        validation_run_id="validation-1",
+        build_fingerprint="build-1",
+        config_fingerprint="config-1",
     )
     catalog.start_session(session)
     market = MarketSnapshot(
@@ -228,6 +347,19 @@ def _complete_catalog(
     if listing_source == "discovery_fallback":
         assert all(token.listing_timestamp_source == listing_source for token in tokens)
     catalog.upsert_tokens(tokens)
+    for refreshed_at in (
+        "2026-07-16T12:01:00+00:00",
+        "2026-07-16T12:06:00+00:00",
+    ):
+        catalog.record_discovery_refresh(
+            session_id="session-1",
+            attempted_at_utc=refreshed_at,
+            completed_at_utc=refreshed_at,
+            complete=True,
+            token_ids_and_markets=tuple(
+                (token.token_id, token.market_id) for token in tokens
+            ),
+        )
     for token in tokens:
         catalog.transition_coverage(
             CoverageInterval(

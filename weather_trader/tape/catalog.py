@@ -75,6 +75,9 @@ class TapeCatalog:
                 started_monotonic_ns integer not null,
                 collector_version text not null,
                 hostname text not null,
+                validation_run_id text not null default 'unspecified',
+                build_fingerprint text not null default 'unspecified',
+                config_fingerprint text not null default 'unspecified',
                 finished_at_utc text,
                 finish_reason text,
                 raw_json text not null
@@ -149,6 +152,33 @@ class TapeCatalog:
             create index if not exists idx_tape_metrics_session_time
                 on tape_collector_metrics(session_id, captured_at_utc);
 
+            create table if not exists tape_discovery_refreshes (
+                id integer primary key autoincrement,
+                session_id text not null,
+                attempted_at_utc text not null,
+                completed_at_utc text not null,
+                status text not null,
+                complete integer not null,
+                token_count integer not null,
+                market_count integer not null,
+                warning_count integer not null,
+                error text,
+                raw_json text not null,
+                foreign key (session_id) references tape_collector_sessions(session_id)
+            );
+
+            create index if not exists idx_tape_discovery_refreshes_session_time
+                on tape_discovery_refreshes(session_id, attempted_at_utc);
+
+            create table if not exists tape_discovery_refresh_members (
+                refresh_id integer not null,
+                token_id text not null,
+                market_id text not null,
+                primary key (refresh_id, token_id),
+                foreign key (refresh_id) references tape_discovery_refreshes(id),
+                foreign key (token_id) references tape_tokens(token_id)
+            );
+
             create table if not exists tape_book_checkpoints (
                 checkpoint_id text primary key,
                 session_id text not null,
@@ -201,9 +231,28 @@ class TapeCatalog:
             );
             """
         )
+        self._migrate_session_schema()
         self._migrate_token_schema()
         self._migrate_decision_join_schema()
         self.connection.commit()
+
+    def _migrate_session_schema(self) -> None:
+        columns = {
+            str(row["name"])
+            for row in self.connection.execute(
+                "pragma table_info(tape_collector_sessions)"
+            ).fetchall()
+        }
+        additions = {
+            "validation_run_id": "text not null default 'unspecified'",
+            "build_fingerprint": "text not null default 'unspecified'",
+            "config_fingerprint": "text not null default 'unspecified'",
+        }
+        for name, sql_type in additions.items():
+            if name not in columns:
+                self.connection.execute(
+                    f"alter table tape_collector_sessions add column {name} {sql_type}"
+                )
 
     def _migrate_token_schema(self) -> None:
         columns = {
@@ -343,16 +392,78 @@ class TapeCatalog:
                 """
                 insert into tape_collector_sessions (
                     session_id, started_at_utc, started_monotonic_ns,
-                    collector_version, hostname, finished_at_utc, finish_reason,
-                    raw_json
+                    collector_version, hostname, validation_run_id,
+                    build_fingerprint, config_fingerprint, finished_at_utc,
+                    finish_reason, raw_json
                 ) values (
                     :session_id, :started_at_utc, :started_monotonic_ns,
-                    :collector_version, :hostname, :finished_at_utc, :finish_reason,
-                    :raw_json
+                    :collector_version, :hostname, :validation_run_id,
+                    :build_fingerprint, :config_fingerprint, :finished_at_utc,
+                    :finish_reason, :raw_json
                 )
                 """,
                 {**payload, "raw_json": _json(payload)},
             )
+
+    def record_discovery_refresh(
+        self,
+        *,
+        session_id: str,
+        attempted_at_utc: str,
+        completed_at_utc: str,
+        complete: bool,
+        token_ids_and_markets: tuple[tuple[str, str], ...] = (),
+        warnings: tuple[str, ...] = (),
+        error: str | None = None,
+    ) -> int:
+        normalized = tuple(sorted(set(token_ids_and_markets)))
+        status = "ERROR" if error else ("COMPLETE" if complete else "INCOMPLETE")
+        payload = {
+            "session_id": session_id,
+            "attempted_at_utc": attempted_at_utc,
+            "completed_at_utc": completed_at_utc,
+            "status": status,
+            "complete": bool(complete),
+            "token_count": len(normalized),
+            "market_count": len({market_id for _, market_id in normalized}),
+            "warnings": list(warnings),
+            "error": error,
+        }
+        with self.connection:
+            cursor = self.connection.execute(
+                """
+                insert into tape_discovery_refreshes (
+                    session_id, attempted_at_utc, completed_at_utc, status,
+                    complete, token_count, market_count, warning_count, error,
+                    raw_json
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    attempted_at_utc,
+                    completed_at_utc,
+                    status,
+                    int(complete),
+                    payload["token_count"],
+                    payload["market_count"],
+                    len(warnings),
+                    error,
+                    _json(payload),
+                ),
+            )
+            refresh_id = int(cursor.lastrowid)
+            self.connection.executemany(
+                """
+                insert into tape_discovery_refresh_members (
+                    refresh_id, token_id, market_id
+                ) values (?, ?, ?)
+                """,
+                (
+                    (refresh_id, token_id, market_id)
+                    for token_id, market_id in normalized
+                ),
+            )
+        return refresh_id
 
     def finish_session(self, session_id: str, *, finished_at_utc: str, reason: str) -> None:
         with self.connection:
