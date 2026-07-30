@@ -504,6 +504,8 @@ authorize a quote, or satisfy the later positive-EV gate.
 
 ### Slice 3: Conservative Fair And V2a Price
 
+Status: repository implementation and current-remote-database smoke complete on 2026-07-30; both pilot signals remain research-only pending a frozen calibrator and untouched forward window.
+
 - Implement uncertainty, profit, and cost reserves as separate versioned components.
 - Generate V2a maximum quote and skip reasons.
 - Build the current/broad/forward price-sheet report.
@@ -555,10 +557,10 @@ Exit: the exact tactic and tested size meet the Phase 4 promotion standard or ar
 - [x] Every out-of-fold prediction uses only earlier resolved dates.
 - [x] Repeated snapshots do not inflate effective sample size.
 - [x] Market references are causal, typed, and stale-aware.
-- [ ] Raw, market, calibrated, and conservative probability metrics are reported.
-- [ ] Probability, uncertainty, profit, and cost components remain separate.
-- [ ] V2a theoretical quoted-price EV is positive in predeclared evaluation windows or the signal remains research-only.
-- [ ] No diagnostic station/regime slice silently becomes a trading filter.
+- [x] Raw, market, calibrated, and conservative probability metrics are reported.
+- [x] Probability, uncertainty, profit, and cost components remain separate.
+- [x] V2a theoretical quoted-price EV is positive in predeclared evaluation windows or the signal remains research-only.
+- [x] No diagnostic station/regime slice silently becomes a trading filter.
 - [x] V1 remains available as a non-funded comparison/rollback path.
 
 ### V2b
@@ -609,6 +611,7 @@ Required integration tests:
 ## Decision Log
 
 - 2026-07-30: Clarified the full-lifecycle destination: one continuously operating, event-driven pricing and inventory engine from listing through settlement. Lifecycle horizons remain separately validated and progressively activated calibration/uncertainty states, not permanent isolated time-of-day strategies.
+- 2026-07-30: Completed V2a Slice 3 repository implementation and current-database smoke. Added an 80th-percentile one-sided market-date residual reserve using only prior out-of-fold dates, separately versioned minimum uncertainty/profit/known-cost reserves, tick-rounded maximum quotes, explicit fail-closed skips, reconstructable artifacts, and broad/current/untouched-forward reports. HRRR-rich did not clear robust economics; HRRR-v2 candidate configurations were theoretically positive at their quote caps, but no fills are implied and no calibrator or untouched forward start was frozen. Both pilots therefore remain research-only.
 - 2026-07-30: Completed V2a Slice 2 repository implementation and current-remote-database smoke. Added deterministic expanding-date pooled-Platt and market-aware regularized calibrators, raw/market baselines, stable per-fold hashes and exclusive cutoffs, explicit sparse/missing-market fallbacks, cluster-weighted Brier/log-loss/calibration/reliability reporting, artifact I/O, and future-label mutation tests. The 98 frozen July 16-29 evaluation rows confirmed raw-model overconfidence but showed the market baseline outperforming both fitted calibrators, so no calibrator or quote was promoted and Slice 3 remains gated by conservative out-of-fold economics.
 - 2026-07-22: Completed the repository implementation for V2a Slices 0 and 1. Froze separate late HRRR-rich tuned-dynamic and HRRR-v2 dynamic `BUY_NO` signal specs with activation/version hashes, exact policy scope, and explicit V1 rollback. Added leak-safe fit/evaluation artifacts with a default fit cutoff strictly before evaluation, causal timestamp checks, typed stale-aware market references, hierarchical market-date/station-date weights, deterministic decision/row hashes, source reconstruction IDs, and explicit non-venue-aligned IEM label diagnostics. Synthetic tests pass and the local legacy DB schema is compatible; a nonempty smoke on the current remote research DB remains before closing real-data evidence.
 - 2026-07-17: Approved a future full-market-lifecycle extension one frozen horizon at a time. Kept the initial late pilot unchanged as the immediate critical path and required separate forecast, calibration, inventory, quote-update/cancel, exit, and tape evidence for every earlier horizon.
