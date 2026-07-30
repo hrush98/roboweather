@@ -49,7 +49,11 @@ looking for opportunities.
 - V2a is the reopened Phase 1 pricing gate and is the current implementation priority.
 - Phase 3 market-tape collection continues while V2a is built.
 - V2b consumes valid Phase 3 book/tape windows and can begin incrementally as those features are available.
-- Phase 4 funded validation remains blocked until one exact V2a + V2b configuration passes shadow replay.
+- Phase 3D policy-neutral discovery consumes the broad V2b feature view and
+  freezes at most one primary winner before untouched forward replay. Its
+  contract is `docs/implementation/tape-strategy-discovery.md`.
+- Phase 4 funded validation remains blocked until one immutable Phase 3D
+  manifest with exact V2a + V2b pricing/execution passes forward shadow replay.
 - Phase 5 learned quote policy remains out of scope; V2b starts as a conservative, interpretable overlay.
 - The approved full-market-lifecycle program will extend this contract one horizon at a time after the initial late pilot; it is specified in `docs/implementation/full-market-lifecycle-trading.md`.
 
@@ -75,6 +79,10 @@ Initial frozen signal families:
 
 - late HRRR-v2 dynamic;
 - late HRRR-rich tuned dynamic as a separate challenger, not an ensemble duplicate.
+
+These pilots are vertical controls for calibration, persistence, tape joins,
+and reports. Neither receives a presumption that it must be the strategy chosen
+by policy-neutral Phase 3D discovery.
 
 Initial trading scope:
 
@@ -141,6 +149,23 @@ Phase 3 valid book/tape window ----------------------+----------+
 ```
 
 ## Common Contracts
+
+### Discovery Views
+
+The V2b tape-feature materializer must expose the same causal fields through
+two scopes:
+
+1. A broad policy-neutral discovery view over every eligible
+   `prediction_snapshots` token decision, independent of current policies and
+   V2 pilots.
+2. A frozen evaluation view containing only decisions selected by an immutable
+   V2 signal or Phase 3D strategy manifest.
+
+Both views must use identical quote-ready cutoffs, tape reconstruction,
+coverage, execution-label, markout, capacity, and settlement semantics. The
+broad view is a derived index over existing snapshots and tape, not another raw
+event store. Invalid rows remain available with explicit skip reasons and no
+fill label.
 
 ### Signal Specification
 
@@ -325,6 +350,7 @@ Invalid or ambiguous tape windows must return `SKIP_INVALID_TAPE`, not an optimi
 
 ### Decision-Time Inputs
 
+- source snapshot/model/observation identities and causal timestamps;
 - V2a maximum quote and conservative outcome fair;
 - bid/ask, spread, tick size, and depth by level;
 - same-price and better-price queue ahead;
@@ -407,7 +433,7 @@ Minimum-risk canaries validate replay fidelity only. `$50` and `$100` execution/
 
 ### V2b Report
 
-For each frozen signal + V2a version + execution arm:
+For each frozen signal or Phase 3D manifest + V2a version + execution arm:
 
 - selected and tape-valid opportunities;
 - postable/reachable rate;
@@ -522,13 +548,23 @@ Exit: at least one frozen signal has positive out-of-fold theoretical quoted-pri
 
 Exit: a random V2 quote can be traced from raw signal through calibration artifact, maximum price, tape interval, and pending replay state.
 
+The two current pilots are integration controls only. Completing this slice
+does not select a strategy or constrain the later discovery universe.
+
 ### Slice 5: V2b Tape Feature Materializer
 
-- Materialize decision-time book, queue, flow, latency, stale/gap, and capacity features.
+- Materialize decision-time book, queue, flow, latency, stale/gap, capacity,
+  markout, and settlement-provenance fields over all eligible causal
+  snapshot/token decisions.
 - Enforce quote-ready cutoffs.
-- Create passive and stable-taker replay inputs from the same V2a sheet.
+- Emit a broad policy-neutral discovery view and a frozen V2/manifest
+  evaluation view with identical semantics.
+- Create passive and stable-taker replay inputs under the same economic price
+  ceiling without persisting an exhaustive quote grid.
 
-Exit: repeated feature materialization is deterministic and invalid intervals fail closed.
+Exit: repeated broad and frozen feature materialization is deterministic,
+sampled rows reconstruct to snapshots/tape/settlement, policy selection does
+not limit the broad view, and invalid intervals fail closed.
 
 ### Slice 6: Interpretable Execution Overlay
 
@@ -565,6 +601,10 @@ Exit: the exact tactic and tested size meet the Phase 4 promotion standard or ar
 
 ### V2b
 
+- [ ] The broad feature view covers eligible causal snapshot/token decisions
+      independent of current policy and V2 pilot selection.
+- [ ] Broad and frozen views use identical source, quote-ready, coverage,
+      markout, capacity, and settlement semantics.
 - [ ] Only valid Phase 3 coverage intervals receive execution labels.
 - [ ] All decision features stop at quote readiness.
 - [ ] Placements, cancellations, price changes, and trades remain distinct.
@@ -596,6 +636,10 @@ Required integration tests:
 - raw snapshot to V2a sheet reconstruction;
 - V2a sheet persistence and V1 coexistence;
 - V2a decision to Phase 3 tape join;
+- policy-neutral broad-view materialization is unchanged when frozen policy or
+  pilot selection changes;
+- broad and frozen rows reconstruct to identical causal features for the same
+  source decision;
 - deterministic V2b replay;
 - report generation with pending, invalid, shadow-filled, missed, and actual-filled rows.
 
@@ -610,6 +654,10 @@ Required integration tests:
 
 ## Decision Log
 
+- 2026-07-30: Generalized V2b Slice 5 into the reusable feature materializer
+  for Phase 3D policy-neutral discovery. Required broad and frozen views with
+  identical causal/tape/settlement semantics and reclassified the named V2a
+  pilots as vertical integration controls rather than predetermined winners.
 - 2026-07-30: Clarified the full-lifecycle destination: one continuously operating, event-driven pricing and inventory engine from listing through settlement. Lifecycle horizons remain separately validated and progressively activated calibration/uncertainty states, not permanent isolated time-of-day strategies.
 - 2026-07-30: Completed V2a Slice 3 repository implementation and current-database smoke. Added an 80th-percentile one-sided market-date residual reserve using only prior out-of-fold dates, separately versioned minimum uncertainty/profit/known-cost reserves, tick-rounded maximum quotes, explicit fail-closed skips, reconstructable artifacts, and broad/current/untouched-forward reports. HRRR-rich did not clear robust economics; HRRR-v2 candidate configurations were theoretically positive at their quote caps, but no fills are implied and no calibrator or untouched forward start was frozen. Both pilots therefore remain research-only.
 - 2026-07-30: Completed V2a Slice 2 repository implementation and current-remote-database smoke. Added deterministic expanding-date pooled-Platt and market-aware regularized calibrators, raw/market baselines, stable per-fold hashes and exclusive cutoffs, explicit sparse/missing-market fallbacks, cluster-weighted Brier/log-loss/calibration/reliability reporting, artifact I/O, and future-label mutation tests. The 98 frozen July 16-29 evaluation rows confirmed raw-model overconfidence but showed the market baseline outperforming both fitted calibrators, so no calibrator or quote was promoted and Slice 3 remains gated by conservative out-of-fold economics.

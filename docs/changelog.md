@@ -4,6 +4,16 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-07-30
 
+- Made policy-neutral strategy discovery a first-class Phase 3D gate between
+  measurement and funded validation. Added a dedicated implementation contract
+  for a broad causal snapshot + tape + settlement substrate, predeclared
+  simple-rule grammar, date-clustered walk-forward search, complexity penalty,
+  correlated-family collapse, at most one immutable primary winner, and
+  untouched post-activation tape. Generalized the planned V2b Slice 5
+  materializer into broad discovery and frozen evaluation views, reclassified
+  current V2a pilots as vertical controls rather than predetermined winners,
+  and blocked Phase 4 on a passing exact manifest. Funded behavior is
+  unchanged.
 - Hardened Phase 3 validation-cohort integrity. Collector sessions now persist restart-stable validation-run, exact tracked-build, and config fingerprints; every discovery attempt persists status, warnings, and exact membership; strict health reports refresh status; and lifecycle acceptance fails on identity/config drift, unhealthy refreshes, or late/fallback/open/coverage-incomplete within-window cohort markets instead of filtering them out of the denominator. A 200-second, three-refresh live probe recorded 157,807 events across 1,364 tokens and passed exact strict health; complete lifecycle acceptance remains open.
 - Completed Price Sheet V2a Slice 3. Added versioned causal uncertainty, profit, and known-cost reserves; conservative outcome fairs; tick-rounded maximum quotes; explicit no-selection, insufficient-history, missing-market, and no-positive-quote skips; reconstructable pricing artifacts; and broad/current/forward probability and theoretical-economic reports. The default report compares pooled and market-aware candidates but fails closed until a calibrator and untouched forward start are frozen.
 - Ran the Slice 3 current-database smoke on the 98 July 16-29 pilot decisions. HRRR-rich did not clear the robust gate; HRRR-v2 had positive theoretical maximum-quote diagnostics for both fitted candidates, but those results make no fill claim and no baseline or untouched forward window was predeclared. Both pilots remain research-only and funded behavior is unchanged.

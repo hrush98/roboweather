@@ -8,11 +8,13 @@ Last updated: 2026-07-30
 
 Build one causal, continuously operating research and execution framework that observes each supported weather market from first listing through settlement, updates station-high distributions as information changes, and evaluates complete quote and inventory lifecycles at useful size.
 
-This plan coordinates four existing programs:
+This plan coordinates five existing programs:
 
 - forecast and observation sources: `docs/implementation/forecast-edge-data-program.md`;
 - shared market tape and replay: `docs/implementation/phase-3-market-tape-replay.md`;
 - conservative price construction: `docs/implementation/price-sheet-v2.md`;
+- policy-neutral strategy discovery and freezing:
+  `docs/implementation/tape-strategy-discovery.md`;
 - phase sequencing: `docs/execution-rebuild-roadmap.md`.
 
 The economic claim and falsification live in `docs/hypotheses/2026-07-17-full-market-lifecycle-trading.md`. The strategy rationale is preserved in `reports/full-market-lifecycle-trading-strategy-2026-07-17.md`.
@@ -26,6 +28,8 @@ The economic claim and falsification live in `docs/hypotheses/2026-07-17-full-ma
 - Do not let an opening sleeve consume later risk capacity without explicit portfolio replay.
 - Do not average down automatically after adverse forecast revisions.
 - Do not promote all lifecycle horizons when one exact horizon/tactic passes.
+- Do not preselect a lifecycle horizon, model family, or quote tactic as the
+  winner before constrained policy-neutral discovery.
 - Do not store bulky raw forecasts, tape segments, model artifacts, or runtime databases in Git.
 
 ## Lifecycle Schematic
@@ -361,10 +365,12 @@ Research defaults should express the following principles:
 - Replay opening, update, early, and late arms.
 - Add cancellation latency, fill bounds, markouts, exits, and shared caps.
 - Report useful-size and incremental portfolio economics.
+- Feed valid causal rows into the Phase 3D broad discovery view without
+  privileging the current late control or a named early arm.
 
-### Slice 5: Forward Shadow
+### Slice 5: Forward Shadow From Discovery Manifest
 
-- Activate one exact early-horizon specification.
+- Consume at most one exact Phase 3D winner frozen before activation.
 - Collect through the frozen evaluation window.
 - Hold all rules fixed and publish pass/fail evidence.
 
@@ -387,11 +393,16 @@ Research defaults should express the following principles:
 - [ ] Actual volume and fill opportunity replace snapshot inference.
 - [ ] `$50` and `$100` capacity results are separated.
 - [ ] Portfolio replay preserves later-horizon capacity.
-- [ ] One immutable forward shadow arm completes.
+- [ ] Policy-neutral constrained discovery selects and freezes at most one
+      simple lifecycle winner before activation.
+- [ ] One immutable post-activation forward shadow arm completes.
 - [ ] No funded behavior changes without Phase 4 authorization.
 
 ## Decision Log
 
+- 2026-07-30: Routed full-lifecycle candidate selection through the Phase 3D
+  policy-neutral discovery/freeze gate. Lifecycle replay now feeds the broad
+  substrate, while Slice 5 consumes only an immutable pre-activation winner.
 - 2026-07-30: Clarified that the steady-state system is one continuously operating event-driven lifecycle engine. Named horizons are leakage-safe calibration, reporting, risk, activation, and rollback boundaries inside that engine rather than permanent standalone clock-window strategies.
 - 2026-07-17: Approved full-market-lifecycle collection and research.
 - 2026-07-17: Defined D-1 as a separate passive, uncertainty-aware sleeve rather than an earlier invocation of the late strategy.

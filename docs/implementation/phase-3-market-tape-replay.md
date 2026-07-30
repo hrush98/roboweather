@@ -12,6 +12,12 @@ This document is the implementation contract. The economic rationale and falsifi
 
 The current pricing consumer is specified in `docs/implementation/price-sheet-v2.md`. V2a can proceed independently; V2b must use only tape windows that pass this document's validity contracts.
 
+Policy-neutral candidate discovery, complexity control, immutable winner
+selection, and untouched holdout activation are specified in
+`docs/implementation/tape-strategy-discovery.md`. This tape must support that
+broad discovery substrate without requiring a strategy to exist during
+collection.
+
 The lifecycle expansion consuming this tape is specified in `docs/implementation/full-market-lifecycle-trading.md`. It adds no new fill assumption: every horizon must still satisfy this document's continuous-coverage and replay gates.
 
 ## Non-Goals
@@ -20,6 +26,8 @@ The lifecycle expansion consuming this tape is specified in `docs/implementation
 - Do not treat public L2 replay as exact passive-fill truth.
 - Do not build a learned quote model in this phase.
 - Do not register a large quote grid as funded strategies.
+- Do not restrict reusable decision/tape materialization to named V2 pilots or
+  policies.
 - Do not make the current research or live SQLite database an unbounded raw-event store.
 - Do not use existing candidate-scoped shadow labels as promotion evidence.
 
@@ -44,6 +52,15 @@ market WebSocket sessions -> bounded event queue -> raw partition writer
                          book checkpoints + gap ledger
                                       |
 model/observation snapshots -> causal decision join  |
+venue settlement --------------------+               |
+                                      v               |
+                         broad joined discovery view  |
+                                      |               |
+                                      v               |
+                         constrained strategy search  |
+                                      |               |
+                                      v               |
+                         immutable strategy manifest  |
                                       |               |
                                       +-------> deterministic replay
                                                     |
@@ -53,7 +70,7 @@ frozen quote specifications ------------------------+
                                 fill bounds + cancellation + markouts
                                                     |
                                                     v
-                                     forward evidence/audit report
+                              untouched forward evidence/audit report
 
 private user/order channel -> real canary lifecycle -> replay validation truth
 ```
@@ -118,6 +135,21 @@ Required timing fields:
 - quote-ready timestamp;
 - configured latency arm;
 - first tape event visible after quote availability.
+
+### Broad Discovery View
+
+The causal join must support every eligible snapshot/token decision, not only a
+decision already admitted by a named policy or V2 pilot. The derived view must
+retain source snapshot/model/observation IDs and timestamps, quote-ready market
+state, coverage and reconstruction references, execution/markout fields, and
+settlement provenance. Invalid rows remain visible with explicit reasons and
+receive no executable label.
+
+The view is derived from existing immutable sources and must not duplicate raw
+tape. It must expose both broad discovery rows and an identically defined
+frozen-manifest evaluation view. Detailed search, complexity, selection, and
+manifest contracts live in
+`docs/implementation/tape-strategy-discovery.md`.
 
 ## Storage Design
 
@@ -315,6 +347,8 @@ Implementation status, 2026-07-16:
 ### Slice 4: Causal Decision Join
 
 - Link research decisions by token and quote-ready time.
+- Support policy-neutral bulk joins across all eligible causal snapshot/token
+  decisions, with selected V2 quotes as a narrower consumer.
 - Add configurable latency arms.
 - Prove pre-signal coverage for joined decisions.
 
@@ -340,11 +374,12 @@ Implementation status, 2026-07-17:
 
 Exit: repeated replay is deterministic and known false-fill cases remain unfilled.
 
-### Slice 6: Forward Shadow Report
+### Slice 6: Forward Shadow From Frozen Discovery Manifest
 
-- Freeze initial signal and quote-policy versions.
-- Materialize only their replay outcomes.
+- Consume an immutable Phase 3D strategy manifest frozen before activation.
+- Materialize only its replay outcomes.
 - Report selected, valid, postable, filled/missed, markout, settlement, capacity, and effective market-date sample.
+- Reject pre-activation rows and prohibit holdout-derived retuning.
 
 Exit: the report answers whether base-case fill-conditioned PnL is positive without using optimistic-only labels.
 
@@ -366,13 +401,20 @@ Implementation status, 2026-07-29:
 - [ ] Book reconstruction is deterministic.
 - [ ] Trade flow excludes placements, cancellations, and plain price changes.
 - [ ] Decision joins use realistic quote availability and latency.
+- [ ] Broad joined discovery rows are independent of current policy and V2
+      pilot selection.
 - [ ] Fill scenarios, cancellations, and markouts are reproducible.
+- [ ] A Phase 3D manifest is frozen before its forward activation boundary.
 - [ ] Forward reports use frozen hypothesis versions and activation timestamps.
 - [ ] Private user-channel design is ready before any funded canary.
 - [ ] Existing shadow labels are not used as promotion evidence.
 
 ## Decision Log
 
+- 2026-07-30: Made Phase 3 a policy-neutral measurement substrate for the new
+  Phase 3D discovery/freeze gate. Required broad causal snapshot/tape/settlement
+  rows and changed Slice 6 to consume an immutable pre-activation manifest
+  rather than presuming a named pilot is the final strategy.
 - 2026-07-30: Repaired the long-probe failures without weakening replay validity. Added direct future-event discovery, in-process reconnect/resync, incremental-event lag enforcement, restart-stable bounds, chunked subscription seeding, strict generation health, scoped lifecycle acceptance, and expected pre-seed delta handling. A 1,364-token short probe passed; the complete lifecycle gate remains open.
 - 2026-07-29: Added the first reusable frozen-portfolio taker holdout over later valid tape. Recorded its preliminary positive result while keeping Slice 2 failed and Slices 5-6 open for lifecycle validity, passive-fill bounds, markouts, settlement, and true forward activation.
 - 2026-07-23: Audited the remote host and corrected the prior “running” assumption: no recorder was active and all retained catalogs were approximately 18-second probes. Completed the missing future-market discovery, listing-provenance, lifecycle-gate, and bounded-supervision repository work; kept Slice 2 open pending elapsed host evidence rather than treating the short probes as a pass.

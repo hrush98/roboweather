@@ -134,8 +134,11 @@ The expansion follows these gates:
 2. Build causally timestamped, station-specific D-1 distributions from WeatherNext/NBM and eligible short-range sources.
 3. Extend the continuous Price Sheet V2 consumer one validated lifecycle region at a time, using horizon-sensitive or explicitly pooled calibration and uncertainty/inventory reserves.
 4. Replay quote activation, scheduled-release cancellation/repricing, filled inventory, exit, and hold-to-settlement behavior.
-5. Freeze one exact early-horizon shadow arm and compare it with the late control under shared portfolio caps.
-6. Request controlled funded validation only for the exact horizon, tactic, inventory cap, exit rule, and size that pass.
+5. Feed eligible lifecycle rows into Phase 3D, freeze at most one simple winner
+   before activation, and compare its untouched forward evidence with the late
+   control under shared portfolio caps.
+6. Request controlled funded validation only for the exact immutable horizon,
+   tactic, inventory cap, exit rule, and size that pass.
 
 The complete implementation contract is `docs/implementation/full-market-lifecycle-trading.md`.
 

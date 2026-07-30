@@ -12,6 +12,14 @@ RoboWeather is an execution-first research system with funded trading paused. Th
 
 The shared weather market tape contains retained data from July 23 onward and supports exact quote-ready taker-book replay. The first long probe exceeded the duration gate but exposed late future-market discovery, process-ending network errors, stale-frame handling, restart-reset runtime bounds, and catalog-wide acceptance scoping defects. Those repository defects were repaired on July 30. Validation sessions now persist restart-stable run/build/config identity and every discovery refresh with its exact membership; the lifecycle denominator retains late, fallback-listed, open, and coverage-incomplete within-window markets as failures. A 200-second live probe crossed two scheduled refresh boundaries, persisted three complete 682-market/1,364-token discoveries, brought all 1,364 tokens through full-book `VALID` coverage, recorded 157,807 events with zero reconstruction errors or reconnects, and passed strict health. Its lifecycle report still failed the expected duration/no-new-listing gates. The old probe is stopped and preserved for replay; Slice 2 still requires a new scoped first-listing-through-close lifecycle run before its exit can pass. The tape can remove policy-specific collection bias, but it does not prove exact passive fills, settlement-aligned PnL, capacity, or funded readiness.
 
+Policy-neutral constrained strategy discovery is now a required Phase 3D gate.
+The strategy should emerge from broad causal snapshot + tape + settlement rows,
+not be selected before measurement. The search grammar, cutoff, folds, costs,
+complexity penalty, family collapse, winner rule, and activation boundary must
+be frozen before ranking or forward evaluation. Named V2a pilots remain
+vertical controls; at most one simple primary winner advances to untouched
+future tape.
+
 Current confidence by layer:
 
 | Layer | Assessment | Decision |
@@ -23,6 +31,7 @@ Current confidence by layer:
 | New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
 | Fair-value/price sheet | V2a Slices 0-3 now produce leak-safe calibration, causal uncertainty reserves, conservative fairs, maximum quotes, and economic gates. The first 98-row Slice 3 read leaves both pilots research-only because no calibrator or untouched forward window was frozen. | Freeze a baseline and forward start before new outcomes; do not promote from the July 16-29 comparison. |
 | Phase 3 shared tape | Slices 1-4 are implemented. Recorder discovery/reconnect/health/cohort-integrity defects are repaired and a 1,364-token multi-refresh short probe passed, but no post-fix first-listing-through-close lifecycle has passed; Slice 4 also lacks one real persisted-quote join. | Install the repaired unit and run one fresh scoped lifecycle probe; continue to fail closed on gaps. |
+| Phase 3D strategy discovery | The architecture now requires broad policy-neutral joined rows, constrained walk-forward search, complexity control, one immutable winner, and untouched forward tape. The materializer and discovery engine are not yet implemented. | Build the broad view and discovery/freeze path; do not presume a named pilot is the winner. |
 | Existing candidate-token shadow collector | Useful plumbing prototype, but candidate-scoped and not a continuous causal market tape. | Do not use its fill labels as promotion evidence. |
 | Fillability and adverse selection | Still unresolved. Public L2 data can provide bounds, not exact hypothetical queue position. | Validate shared-tape replay, then run controlled real-order canaries. |
 | Funded readiness | No exact signal + quote policy + size has passed current fill-conditioned gates. | Keep funded trading paused. |
@@ -64,6 +73,9 @@ The result is reproducible with `scripts/tape_strategy_holdout_report.py`; the f
 - Funded trading is paused rather than allowing positive historical replay to override negative current or fill-conditioned evidence.
 - The documentation already distinguishes selected replay, filled replay, actual PnL, and venue settlement.
 - The new market-tape hypothesis correctly moves collection from model/policy-specific rows to a reusable token-level event stream.
+- The Phase 3D contract now keeps strategy selection downstream of measurement:
+  rich offline discovery may search broadly, while the selected runtime
+  strategy must be simple, immutable, and tested on untouched later tape.
 - The current weather feature stack is a credible point-observation/HRRR baseline, which makes controlled source ablation possible; the next forecast gains should come from target fidelity, probabilistic ensembles, spatial residuals, and observed heating surprise rather than more model variants over the same inputs.
 - The approved lifecycle design connects forecast revisions, first-listing tape, conservative price sheets, quote cancellation/repricing, and inventory/exit replay without pretending that the current late model can simply run a day earlier.
 
@@ -75,11 +87,12 @@ The result is reproducible with `scripts/tape_strategy_holdout_report.py`; the f
 | 2 | Signal miscalibration | A fillable negative-EV quote still loses money. | Positive recent walk-forward quoted-price EV using calibrated or shrunk fairs. |
 | 3 | Adverse fill selection | Filled rows have historically underperformed missed rows. | Positive filled-subset EV and non-toxic markouts for the exact quote rule. |
 | 4 | Small correlated samples | Stations, models, and sleeves often express the same weather-date risk. | Evaluate effective sample by market date/regime and use uncertainty bounds, not raw snapshot counts. |
-| 5 | Settlement and sensor mismatch | Research truth currently uses the maximum IEM report, while active US markets reference Weather Underground and official ASOS maxima follow rolling-average/reporting rules. A one-degree mismatch can change the winning bucket. | Station/date comparison of venue, Weather Underground, CLI, routine METAR, and high-frequency ASOS outcomes; then venue-authoritative linkage or a versioned settlement mapping. |
-| 6 | Capacity | Positive tiny fills do not prove `$50-$100` tradability. | Direct fill/miss evidence at the intended size. |
-| 7 | Portfolio concentration | Regional or model-common errors can hit several positions together. | Market-date/regime stress limits and incremental portfolio replay. |
-| 8 | Operational integrity | Gaps, clock drift, lag, backpressure, or storage growth can invalidate replay. | Collector health budget and invalid-data rules that fail closed. |
-| 9 | Lifecycle stale-quote and inventory risk | D-1 quotes can be adversely selected around scheduled forecast releases, while filled inventory cannot be canceled and may be costly to exit. | Horizon-specific uncertainty/inventory reserves, release-aware cancel/reprice replay, exit-versus-hold evidence, and aggregate capacity caps. |
+| 5 | Discovery overfit and hidden policy selection | A rich tape can generate many correlated winners, especially when the feature materializer is limited to already favored pilots. | Policy-neutral broad rows, predeclared grammar/folds/complexity, correlated-family collapse, one immutable winner, and untouched post-activation tape. |
+| 6 | Settlement and sensor mismatch | Research truth currently uses the maximum IEM report, while active US markets reference Weather Underground and official ASOS maxima follow rolling-average/reporting rules. A one-degree mismatch can change the winning bucket. | Station/date comparison of venue, Weather Underground, CLI, routine METAR, and high-frequency ASOS outcomes; then venue-authoritative linkage or a versioned settlement mapping. |
+| 7 | Capacity | Positive tiny fills do not prove `$50-$100` tradability. | Direct fill/miss evidence at the intended size. |
+| 8 | Portfolio concentration | Regional or model-common errors can hit several positions together. | Market-date/regime stress limits and incremental portfolio replay. |
+| 9 | Operational integrity | Gaps, clock drift, lag, backpressure, or storage growth can invalidate replay. | Collector health budget and invalid-data rules that fail closed. |
+| 10 | Lifecycle stale-quote and inventory risk | D-1 quotes can be adversely selected around scheduled forecast releases, while filled inventory cannot be canceled and may be costly to exit. | Horizon-specific uncertainty/inventory reserves, release-aware cancel/reprice replay, exit-versus-hold evidence, and aggregate capacity caps. |
 
 ## Current Decisions
 
@@ -88,13 +101,14 @@ The result is reproducible with `scripts/tape_strategy_holdout_report.py`; the f
 3. Stop adding model families merely to expand the leaderboard. New models need demonstrably different predictions or incremental information.
 4. Keep the obsolete shared market-tape probe stopped. Install the repaired bounded unit, start one fresh scoped validation cohort, and require the scoped strict lifecycle report to pass before calling Slice 2 complete. Do not promote the probe into an unattended production service.
 5. Treat the current candidate-token collector and shadow labeler as a prototype only.
-6. Keep the late HRRR-rich tuned dynamic and HRRR-v2 dynamic policies as forward signal hypotheses. Add the frozen three-family late taker portfolio as a separate tape-backed forward-shadow hypothesis; do not fund or retune it on the July 23-28 holdout.
+6. Keep the late HRRR-rich tuned dynamic and HRRR-v2 dynamic policies as V2 vertical controls and forward signal hypotheses. Add the frozen three-family late taker portfolio as separate preliminary evidence; do not presume any is the Phase 3D winner, fund it, or retune it on the July 23-28 holdout.
 7. Implement `docs/implementation/price-sheet-v2.md`: V2a walk-forward outcome pricing now, then V2b execution reductions/skips on valid tape windows.
-8. Evaluate passive price-making and a separately tagged stable-taker control from the same tape.
-9. Run the approved research-only forecast-edge program in parallel without changing the execution critical path: target/sensor truth audit first, then identical-coverage WeatherNext/NBM benchmarks, high-frequency spatial residuals, and GOES radiation/cloud surprise.
-10. Keep weather-only probability, settlement mapping, market-aware calibration, and execution adjustment separately versioned. No new forecast source enters funded pricing until it demonstrates causal incremental skill.
-11. Extend research and collection to the full market lifecycle. Treat D-1 open, D-1 revision, D0 early, intraday, and late as separate horizons; add them one at a time behind forecast, tape, quote, inventory, exit, and portfolio gates.
-12. For V2a, freeze one calibrator and untouched forward start before additional outcomes are inspected. Do not use the July 16-29 candidate comparison as its own promotion window.
+8. Implement `docs/implementation/tape-strategy-discovery.md`: build broad policy-neutral joined rows, run predeclared constrained discovery, freeze at most one simple winner, and use only untouched post-activation tape for confirmation.
+9. Evaluate passive price-making and a separately tagged stable-taker control from the same tape and economic price ceiling.
+10. Run the approved research-only forecast-edge program in parallel without changing the execution critical path: target/sensor truth audit first, then identical-coverage WeatherNext/NBM benchmarks, high-frequency spatial residuals, and GOES radiation/cloud surprise.
+11. Keep weather-only probability, settlement mapping, market-aware calibration, and execution adjustment separately versioned. No new forecast source enters funded pricing until it demonstrates causal incremental skill.
+12. Extend research and collection to the full market lifecycle. Treat D-1 open, D-1 revision, D0 early, intraday, and late as separate horizons; add them one at a time behind forecast, tape, quote, inventory, exit, and portfolio gates.
+13. For V2a, freeze one calibrator and untouched forward start before additional outcomes are inspected. Do not use the July 16-29 candidate comparison as its own promotion window.
 
 ## Promotion Standard
 
@@ -107,6 +121,9 @@ lifecycle horizon + signal/forecast version + fair-value version
 
 Normal funded sizing requires all of the following:
 
+- the strategy came from a versioned policy-neutral discovery run with frozen
+  sources, cutoff, grammar, folds, costs, complexity, and winner rule;
+- its immutable manifest and activation timestamp predate every forward row;
 - current-window and all-loaded selected replay are positive;
 - quoted-price replay is positive after calibration, costs, and haircuts;
 - continuous valid tape coverage exists from before decision through quote termination;
@@ -136,6 +153,11 @@ Update the body of this document when the current assessment changes. Append one
 
 ## Audit Log
 
+- 2026-07-30: Made constrained policy-neutral strategy discovery a required
+  Phase 3D gate. Added a broad snapshot/tape/settlement substrate, predeclared
+  walk-forward and complexity rules, at most one immutable primary winner, and
+  untouched post-activation tape before Phase 4; current V2a pilots remain
+  vertical controls rather than predetermined strategies.
 - 2026-07-30: Closed the validation-cohort integrity gaps by persisting restart-stable run/build/config fingerprints and discovery-refresh membership/health, and by retaining late, fallback, open, and incomplete within-window markets in the acceptance denominator. A 200-second probe crossed two refresh boundaries and passed strict health; the full lifecycle gate remains open.
 - 2026-07-30: Repaired the Phase 3 recorder failures exposed by the July 23-30 probe: direct D+1/D+2 discovery, in-process disconnect recovery, stale incremental-frame resync, restart-stable runtime bounds, chunked subscriptions, strict full-book health, expected pre-seed delta accounting, and scoped lifecycle acceptance. A clean 1,364-token short live probe passed strict health with all tokens `VALID`; the complete lifecycle gate remains open.
 - 2026-07-29: Replayed a portfolio discovered only from pre-July-23 raw snapshots against later exact market tape. Twelve of 19 deduplicated signals executed for `+$93.22` on `$205.51` cost across six resolved dates; seven failed closed on coverage or capped liquidity. Recorded the result as preliminary forward-shadow evidence while the lifecycle report remains failed and funded trading remains paused.
