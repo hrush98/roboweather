@@ -264,6 +264,74 @@ Begin with interpretable, regularized methods appropriate to the effective sampl
 - Bayesian/model averaging with weights learned only from past outcomes;
 - a zero-inflated additional-heating component for `Delta=0`.
 
+### Hierarchical Bayesian Trees
+
+Hierarchical Bayesian additive regression trees are a plausible later
+challenger, especially for nonlinear station, horizon, forecast-disagreement,
+cloud, radiation, and recent-heating interactions. They should not be the
+initial core model.
+
+The hierarchy and the trees solve different problems:
+
+- station, climate-region, lifecycle-horizon, season, and regime effects need
+  partial pooling so thin groups borrow strength without being treated as
+  identical;
+- trees may capture residual interactions that remain after the physical and
+  probabilistic structure is represented explicitly;
+- a posterior predictive distribution may support a reproducible uncertainty
+  reserve, but only after its coverage is validated on independent weather
+  dates and regional events.
+
+Arguments against using a hierarchical tree ensemble as the primary model:
+
+- the effective sample is independent station/dates and weather regimes, not
+  the much larger count of correlated intraday snapshots;
+- Bayesian regularization cannot create information where few independent
+  outcomes exist, and an iid likelihood can still produce falsely narrow
+  posteriors;
+- vanilla per-token trees do not enforce an ordered, normalized temperature
+  ladder and can assign mutually inconsistent bucket probabilities;
+- tree partitions extrapolate poorly into record temperatures, unseen source
+  versions, and weather regimes outside their training support;
+- hierarchy, tree structure, priors, likelihood, feature selection, and
+  probability transformation introduce many research degrees of freedom;
+- posterior uncertainty does not include settlement-source error, model/source
+  drift, market regime change, or adverse execution unless those are modeled
+  and validated separately;
+- a flexible market-aware tree can imitate historical market deviations
+  without demonstrating meteorological information that persists forward;
+- a better weather posterior does not establish that its edge is fillable or
+  survives fill-conditioned markouts.
+
+The preferred initial architecture is a structured hierarchical
+distributional ensemble:
+
+```text
+NBM + WeatherNext + HRRR distributions
+-> past-outcome-only horizon-specific ensemble weights
+-> station/climate-region partial pooling and localization
+-> peak-passed plus conditional additional-heating distribution
+-> coherent integer final-high distribution
+-> separately versioned settlement-source mapping
+-> separately versioned market-aware Price Sheet V2 calibration/reserves
+-> separately versioned execution overlay
+```
+
+Use a hierarchical logistic or additive model first for
+`P(peak already occurred)` and a hierarchical ordinal or distributional model
+for additional heating conditional on the peak not having occurred. This is
+more data-efficient, auditable, and naturally compatible with the
+`final_high >= high_so_far` constraint.
+
+After that structured baseline is frozen, compare gradient-boosted and
+hierarchical Bayesian tree models only as residual challengers on identical
+chronological coverage. A tree challenger advances only if it improves proper
+probability scores, calibration, recent and regime stability, and
+market-relative information after weather-date clustering. Its forecast must
+then pass Price Sheet V2 quoted-price and tape-backed execution gates; a direct
+tree model of historical trade/no-trade or PnL is out of scope because it would
+entangle forecast quality, policy selection, and execution selection.
+
 Keep these stages separately versioned:
 
 ```text
@@ -418,3 +486,4 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
 - 2026-07-17: Extended the output contract from a single intraday decision window to causally versioned D-1-through-settlement distributions and forecast revisions.
 - 2026-07-17: Positioned WeatherNext and NBM as day-before probabilistic priors, with short-range models and observations carrying more weight as the lifecycle advances.
 - 2026-07-17: Kept the late Price Sheet V2a pilot as the immediate pricing critical path and required earlier horizons to enter one at a time.
+- 2026-07-30: Positioned hierarchical Bayesian trees as residual challengers rather than the initial core model. Preferred a structured hierarchical distributional ensemble with coherent remaining-heating probabilities, simple partial pooling first, and separate market-aware pricing and execution gates.
