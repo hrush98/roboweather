@@ -95,6 +95,9 @@
 
 - Build generated V2a fit/evaluation artifacts read-only from the current remote research database. The default frozen evaluation starts on the pilot activation date and the fit corpus ends strictly before it:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/build_price_sheet_v2_dataset.py --db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --out reports/price-sheet-v2a-datasets/current`
+- Build one signal's generated Slice 2 walk-forward calibration artifacts from that dataset directory:
+  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/price_sheet_v2_report.py --dataset-dir reports/price-sheet-v2a-datasets/current/late_hrrr_rich_tuned_dynamic_buy_no_v1 --out reports/price-sheet-v2a-calibration/current/late_hrrr_rich_tuned_dynamic_buy_no_v1`
+- The calibration report expands with resolved prior evaluation dates only, persists an exclusive cutoff and hash for every fitted fold, and reports raw-model, market, pooled-Platt, and market-aware probability quality. A market-aware result that fails to beat the causal market baseline is a negative result, not permission to quote at the market price.
 - Generated manifests and JSONL rows are research outputs. Inspect them for nonzero fit/evaluation counts and label/reference diagnostics, but leave the output directory uncommitted.
 - On the local `/home/hmrush` checkout, use `/home/hmrush/Desktop/personal/roboweather/.conda/roboweather/bin/python` with a locally available DB. The checked-in May DB predates the pilot HRRR-rich/HRRR-v2 families and is useful for schema compatibility only; zero pilot rows there are expected.
 

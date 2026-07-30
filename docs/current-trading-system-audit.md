@@ -4,7 +4,7 @@ This is the living financial and systems audit for RoboWeather. Update this docu
 
 Generated or ad hoc analysis may live under `reports/`, but durable conclusions, open risks, and decisions belong here. The current implementation sequence belongs in `docs/execution-rebuild-roadmap.md`; funded operating state belongs in `docs/live-trading-journal.md`.
 
-Last reviewed: 2026-07-29
+Last reviewed: 2026-07-30
 
 ## Current Verdict
 
@@ -21,7 +21,7 @@ Current confidence by layer:
 | Full-market-lifecycle edge | Morning snapshots show more displayed depth than late afternoon, but current data do not establish D-1 traded volume, passive fills, round-trip capacity, or an early calibrated forecast. | Collect from first listing and test separate D-1/early arms against the frozen late control. |
 | Current configured portfolio | Failed the fresh July 9-14 cap-aware replay. | Do not restart it. |
 | New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
-| Fair-value/price sheet | Existing scoped price sheet failed its updated theoretical gate. | Redesign around walk-forward calibration and market-aware shrinkage. |
+| Fair-value/price sheet | Existing scoped price sheet failed its updated theoretical gate. V2a Slice 2 now proves leak-safe walk-forward calibration, but its first 98-row evaluation found the market baseline better than pooled or market-aware calibration. | Continue to conservative Slice 3 pricing without promoting a calibrator; allow the pilot signals to fail the quoted-EV gate. |
 | Phase 3 shared tape | Slices 1-4 are implemented. Retained July 23-29 tape supports exact batch taker replay, but the lifecycle report fails on collector errors, receipt lag, and absent eligible closed markets; Slice 4 also lacks one real persisted-quote join. | Continue bounded collection and fail closed on gaps; repair lifecycle failures before claiming a pass. |
 | Existing candidate-token shadow collector | Useful plumbing prototype, but candidate-scoped and not a continuous causal market tape. | Do not use its fill labels as promotion evidence. |
 | Fillability and adverse selection | Still unresolved. Public L2 data can provide bounds, not exact hypothetical queue position. | Validate shared-tape replay, then run controlled real-order canaries. |
@@ -37,6 +37,7 @@ Durable conclusions from that review:
 - The existing Phase 1 price sheet fell to `-0.007 R/R` all-history, `-0.020` over the last 30 days, and `-1.000` on its only fresh-window row.
 - HRRR-rich tuned dynamic late and HRRR-v2 dynamic late were the most stable new standardized signal candidates, but their strongest fresh evidence covers only six weather dates.
 - Broad recent model fairs remained overconfident. New price sheets should use walk-forward empirical calibration or market-aware shrinkage rather than raw model fairs.
+- The first V2a walk-forward read on 98 frozen July 16-29 decisions confirmed that overconfidence: raw-model Brier scores were `0.380` for HRRR-rich and `0.348` for HRRR-v2. Pooled and market-aware calibration improved those scores, but the causal market baseline remained better (`0.255` and `0.260`) than market-aware calibration (`0.288` for both). This is a build-validation result, not evidence to quote at the market price; the labels remain IEM weather outcomes rather than venue settlement.
 - Static ask depth was useful for triage but did not establish actual or passive fillability.
 - A deduplicated snapshot diagnostic since June 1 found mean displayed `$50` ask-sweep fillable notional of about `$46.94` at station-local 07, `$39.61` at 12, and `$27.84` at 17; corresponding full-`$50` rates were `26.7%`, `16.4%`, and `1.1%`. This supports earlier collection but is not actual volume or fill evidence, and current snapshots do not cover D-1 adequately.
 - The METAR+HRRR tuned-dynamic artifact was behaviorally identical to its HRRR-rich counterpart in the fresh window and must not be counted as independent confirmation.
@@ -134,6 +135,7 @@ Update the body of this document when the current assessment changes. Append one
 ## Audit Log
 
 - 2026-07-29: Replayed a portfolio discovered only from pre-July-23 raw snapshots against later exact market tape. Twelve of 19 deduplicated signals executed for `+$93.22` on `$205.51` cost across six resolved dates; seven failed closed on coverage or capped liquidity. Recorded the result as preliminary forward-shadow evidence while the lifecycle report remains failed and funded trading remains paused.
+- 2026-07-30: Completed Price Sheet V2a Slice 2 and a nonempty current-database smoke. All 98 frozen predictions used per-date calibrators trained strictly on earlier dates. Calibration reduced raw overconfidence but underperformed the decision-time market baseline on both pilots, so no pricing model was promoted and funded status did not change.
 - 2026-07-23: Reconciled the Phase 3 build claims against the remote host. No recorder was active and retained evidence covered only approximately 18-second probes, so Slice 2 had not passed. Completed the missing future discovery, listing provenance, bounded-supervision, and executable lifecycle-gate paths while keeping the exit open for real elapsed coverage.
 - 2026-07-16: Created the living audit from the July 15 research collection review and the market-tape systems audit. Confirmed the research memory-growth prerequisite is resolved and approved Phase 3 market-tape implementation while keeping funded trading paused.
 - 2026-07-16: Recorded operator confirmation that Phase 3 is built and running, with exit evidence still accumulating. Made Price Sheet V2a the current implementation priority and approved the V2b tape-overlay plan.

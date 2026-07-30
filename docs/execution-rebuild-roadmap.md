@@ -2,7 +2,7 @@
 
 This is the living roadmap for turning RoboWeather research signals into measurable, fill-conditioned trading evidence. Update this document when phase status, sequencing, or exit gates change. Detailed economic ideas belong in `docs/hypotheses/`; active feature design belongs in `docs/implementation/`.
 
-Last updated: 2026-07-29
+Last updated: 2026-07-30
 
 ## Objective
 
@@ -21,7 +21,7 @@ market listing + causal forecast state
 
 ## Current Phase
 
-The Phase 3 market-tape recorder has retained policy-independent data since July 23 and the repository now includes a frozen-portfolio batch taker holdout. The first pre-cutoff discovery/post-cutoff replay reconstructed 12 executable positions across six resolved dates and was positive, establishing that later strategy extraction from the shared snapshot/tape data is technically viable. This is not a Slice 2 or Slice 6 pass: the July 29 lifecycle report failed on collector-session errors, receipt lag above 10 seconds, and no eligible complete listing-to-close market, while the batch replay does not model passive fills, markouts, or venue settlement. One real persisted quote/tape reconstruction also remains open. Price Sheet V2a contracts and causal fit/evaluation materialization are implemented; walk-forward calibration baselines are the next pricing build slice. V2b will consume only valid Phase 3 tape windows.
+The Phase 3 market-tape recorder has retained policy-independent data since July 23 and the repository now includes a frozen-portfolio batch taker holdout. The first pre-cutoff discovery/post-cutoff replay reconstructed 12 executable positions across six resolved dates and was positive, establishing that later strategy extraction from the shared snapshot/tape data is technically viable. This is not a Slice 2 or Slice 6 pass: the July 29 lifecycle report failed on collector-session errors, receipt lag above 10 seconds, and no eligible complete listing-to-close market, while the batch replay does not model passive fills, markouts, or venue settlement. One real persisted quote/tape reconstruction also remains open. Price Sheet V2a Slices 0-2 are implemented and have nonempty current-database evidence. The first 98-row walk-forward calibration read found that fitted calibrators improved materially over raw model fairs but did not beat the decision-time market baseline, so Slice 3 conservative pricing must remain fail-closed and may reject both pilot signals. V2b will consume only valid Phase 3 tape windows.
 
 A full-market-lifecycle forecast/data program is approved as a parallel research build. It extends collection to first listing and builds distinct D-1, early-day, intraday, and late distributions and tactics. It does not change the current critical path: the bounded late Price Sheet V2a pilot remains first, with earlier horizons added one at a time after their forecast, tape, inventory, and execution gates pass. Funded trading remains paused.
 
@@ -42,7 +42,7 @@ Canonical records:
 | Phase | Purpose | Status | Exit condition |
 | --- | --- | --- | --- |
 | 0. Whole-chain instrumentation | Link candidates, decisions, orders, fills, and settlement. | Prototype complete | Exact live candidate-to-settlement reconstruction exists. |
-| 1. Quoteable fair/price sheet | Convert model output into a conservative maximum price. | V2a Slices 0-1 repository complete; Slice 2 walk-forward calibration next | Positive walk-forward quoted-price EV without extreme uncalibrated fairs. |
+| 1. Quoteable fair/price sheet | Convert model output into a conservative maximum price. | V2a Slices 0-2 repository complete; Slice 3 conservative fair/price next, with no calibrator promoted | Positive walk-forward quoted-price EV without extreme uncalibrated fairs. |
 | 2. Shadow quote construction | Generate auditable quote intents and cancellation metadata. | Plumbing prototype complete | Deterministic intent construction tests pass. No profitability claim. |
 | 3. Shared market tape and replay | Collect pre-signal active-universe market events and replay quote tactics causally. | Slices 1-4 implemented; first batch taker holdout complete; Slice 2 lifecycle, Slice 4 real join, and passive/markout Slices 5-6 remain open | Tape validity, deterministic book replay, conservative fill bounds, and forward shadow reporting pass. |
 | F. Full-lifecycle forecast/data foundation | Observe weather and market state from first listing and price horizon-specific distributions. | Approved parallel research build; no production consumer | Venue-aligned truth, causal D-1 sources, first-listing tape, horizon calibration, and inventory-aware replay pass. |
@@ -53,8 +53,8 @@ Canonical records:
 
 1. V2a outcome pricing is the immediate critical path:
    - freeze the initial late HRRR signal definitions (complete);
-   - build causal fit and evaluation datasets (repository complete; current remote DB smoke pending);
-   - run expanding-window calibration with a decision-time market reference;
+   - build causal fit and evaluation datasets (complete, including current remote DB smoke);
+   - run expanding-window calibration with a decision-time market reference (complete; fitted baselines did not beat market);
    - produce a conservative outcome fair and maximum economic quote price;
    - require positive out-of-fold theoretical quoted-price EV before shadow promotion.
 2. V2b execution overlay starts on valid Phase 3 windows:

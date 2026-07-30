@@ -6,7 +6,7 @@ Current workstream: V2a outcome pricing
 
 V2b dependency: validated Phase 3 tape windows and replay features
 
-Last updated: 2026-07-22
+Last updated: 2026-07-30
 
 ## Feature Goal
 
@@ -431,7 +431,7 @@ Exit: the same source row always maps to the same signal/decision ID and version
 
 ### Slice 1: V2a Dataset Materializer
 
-Status: repository implementation complete on 2026-07-22; a nonempty artifact smoke against the current remote research database remains operator evidence.
+Status: repository implementation complete on 2026-07-22; nonempty current-remote-database smoke completed on 2026-07-30.
 
 - Build calibration-fit and frozen-policy evaluation datasets.
 - Enforce timestamp availability and training cutoffs.
@@ -442,7 +442,7 @@ Exit: leak tests pass and sampled rows can be reconstructed to raw snapshots, ma
 
 ### Slice 2: Walk-Forward Calibration Baselines
 
-Status: next implementation slice.
+Status: repository implementation and current-remote-database smoke complete on 2026-07-30.
 
 - Implement raw-model, market, pooled calibration, and market-aware regularized baselines.
 - Generate expanding-window out-of-fold predictions.
@@ -450,6 +450,31 @@ Status: next implementation slice.
 - Produce probability-quality and reliability comparisons.
 
 Exit: every evaluation prediction is demonstrably trained only on earlier dates.
+
+The implementation emits raw-model, market, pooled-Platt, and regularized
+market-aware probabilities for every frozen evaluation row. Each fitted
+baseline is frozen separately for each evaluation date, records an exclusive
+training cutoff and stable calibrator hash, uses market-date cluster weights,
+and expands only with resolved prior evaluation dates. Missing market
+references and statistically insufficient folds fall back explicitly rather
+than borrowing future data.
+
+The first read-only real-data smoke covered July 16-29:
+
+- HRRR-rich tuned dynamic: 967 initial fit rows, 41 evaluation rows over 12
+  effective market dates, and 24 fitted fold artifacts.
+- HRRR-v2 dynamic: 1,055 initial fit rows, 57 evaluation rows over 14 effective
+  market dates, and 28 fitted fold artifacts.
+- No fitted fold required a sparse-data fallback, and all 98 evaluation
+  predictions carried a training cutoff equal to their evaluation date.
+- Calibration materially reduced the raw models' overconfidence, but it did
+  not beat the decision-time market baseline. Market versus market-aware
+  Brier/log loss was `0.255/0.703` versus `0.288/0.873` for HRRR-rich and
+  `0.260/0.708` versus `0.288/0.834` for HRRR-v2.
+
+This closes the Slice 2 implementation/leakage exit only. The small,
+weather-outcome-labeled evaluation does not select a production calibrator,
+authorize a quote, or satisfy the later positive-EV gate.
 
 ### Slice 3: Conservative Fair And V2a Price
 
@@ -501,7 +526,7 @@ Exit: the exact tactic and tested size meet the Phase 4 promotion standard or ar
 
 - [x] Frozen signal versions and activation timestamps exist.
 - [x] Fit and evaluation datasets are distinct and reconstructable.
-- [ ] Every out-of-fold prediction uses only earlier resolved dates.
+- [x] Every out-of-fold prediction uses only earlier resolved dates.
 - [x] Repeated snapshots do not inflate effective sample size.
 - [x] Market references are causal, typed, and stale-aware.
 - [ ] Raw, market, calibrated, and conservative probability metrics are reported.
@@ -557,6 +582,7 @@ Required integration tests:
 
 ## Decision Log
 
+- 2026-07-30: Completed V2a Slice 2 repository implementation and current-remote-database smoke. Added deterministic expanding-date pooled-Platt and market-aware regularized calibrators, raw/market baselines, stable per-fold hashes and exclusive cutoffs, explicit sparse/missing-market fallbacks, cluster-weighted Brier/log-loss/calibration/reliability reporting, artifact I/O, and future-label mutation tests. The 98 frozen July 16-29 evaluation rows confirmed raw-model overconfidence but showed the market baseline outperforming both fitted calibrators, so no calibrator or quote was promoted and Slice 3 remains gated by conservative out-of-fold economics.
 - 2026-07-22: Completed the repository implementation for V2a Slices 0 and 1. Froze separate late HRRR-rich tuned-dynamic and HRRR-v2 dynamic `BUY_NO` signal specs with activation/version hashes, exact policy scope, and explicit V1 rollback. Added leak-safe fit/evaluation artifacts with a default fit cutoff strictly before evaluation, causal timestamp checks, typed stale-aware market references, hierarchical market-date/station-date weights, deterministic decision/row hashes, source reconstruction IDs, and explicit non-venue-aligned IEM label diagnostics. Synthetic tests pass and the local legacy DB schema is compatible; a nonempty smoke on the current remote research DB remains before closing real-data evidence.
 - 2026-07-17: Approved a future full-market-lifecycle extension one frozen horizon at a time. Kept the initial late pilot unchanged as the immediate critical path and required separate forecast, calibration, inventory, quote-update/cancel, exit, and tape evidence for every earlier horizon.
 - 2026-07-16: Approved a two-part Price Sheet V2 plan. V2a outcome pricing is the immediate critical path while Phase 3 tape collection runs; V2b execution overlay begins on valid tape windows and remains conservative/interpretable until Phase 4 actual-order evidence exists.

@@ -7,6 +7,11 @@ from weather_trader.pricing.contracts import (
     SignalSpec,
     V2BExecutionOverlay,
 )
+from weather_trader.pricing.calibration import (
+    WalkForwardCalibrationArtifact,
+    WalkForwardCalibrationConfig,
+    walk_forward_calibration,
+)
 
 __all__ = [
     "PILOT_SIGNAL_SPECS",
@@ -14,4 +19,7 @@ __all__ = [
     "PriceSheetV2A",
     "SignalSpec",
     "V2BExecutionOverlay",
+    "WalkForwardCalibrationArtifact",
+    "WalkForwardCalibrationConfig",
+    "walk_forward_calibration",
 ]

@@ -12,6 +12,7 @@ from weather_trader.execution.contracts import MarketFamily, StrategyBucket, Tra
 
 PRICE_SHEET_V2_CONTRACT_VERSION = "price_sheet_v2_contract_v1"
 V2A_DATASET_VERSION = "price_sheet_v2a_dataset_v1"
+V2A_CALIBRATION_VERSION = "price_sheet_v2a_calibration_v1"
 V1_ROLLBACK_VERSION = "phase1_price_maker_v1"
 
 HRRR_RICH_DYNAMIC_TUNED_MODEL = "dynamic_bucket_tuned_hrrr_rich_pm_active_us12_obs_2022_2025"
