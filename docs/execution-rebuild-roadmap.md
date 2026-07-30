@@ -12,6 +12,9 @@ Establish whether an exact weather signal can be traded through an exact executi
 market listing + causal forecast state
 -> calibrated quoteable fair
 -> causal market state
+-> policy-neutral constrained discovery
+-> immutable strategy manifest
+-> untouched forward tape
 -> quote/taker decision
 -> fill or miss
 -> markout
@@ -23,6 +26,8 @@ market listing + causal forecast state
 
 The Phase 3 market-tape recorder has retained policy-independent data since July 23 and the repository includes a frozen-portfolio batch taker holdout. The first long probe exceeded 12 recorded hours but failed acceptance and exposed concrete discovery, reconnect, lag, supervision, subscription-seeding, health, and validation-scoping defects. Those defects are now repaired. A clean short live probe subscribed to 1,364 current/future tokens, brought every token through a full-book `VALID` transition, recorded 40,249 events with zero reconstruction errors or reconnects, and passed strict health. This is still not a Slice 2 or Slice 6 pass: one fresh scoped first-listing-through-close run, one real persisted quote/tape reconstruction, passive fill bounds, markouts, and venue settlement remain open. Price Sheet V2a Slices 0-3 are implemented and have nonempty current-database evidence. Slice 3 keeps calibrator selection unfrozen, computes reserves only from prior out-of-fold market dates, and leaves both pilots research-only until a baseline and untouched forward window are declared.
 
+Phase 3D policy-neutral strategy discovery is now an explicit gate between the joined measurement substrate and forward shadow/funded validation. It will search a predeclared grammar of simple strategies across broad causal snapshot/tape/settlement rows, penalize complexity and correlated variants, freeze at most one primary winner before activation, and evaluate it only on untouched later tape. The current named V2a pilots remain vertical controls and receive no presumption that one must become the deployed strategy.
+
 A full-market-lifecycle forecast/data program is approved as a parallel research build. It extends collection to first listing and builds one continuously updating pricing and inventory engine with separately validated D-1, early-day, intraday, and late information states. It does not change the current critical path: the bounded late Price Sheet V2a pilot remains first, with earlier lifecycle regions progressively enabled after their forecast, tape, inventory, and execution gates pass. Funded trading remains paused.
 
 Canonical records:
@@ -30,6 +35,7 @@ Canonical records:
 - Current assessment: `docs/current-trading-system-audit.md`
 - Economic hypothesis: `docs/hypotheses/2026-07-16-shared-weather-market-tape.md`
 - Tape implementation/acceptance: `docs/implementation/phase-3-market-tape-replay.md`
+- Strategy discovery/freeze implementation: `docs/implementation/tape-strategy-discovery.md`
 - Active pricing implementation: `docs/implementation/price-sheet-v2.md`
 - Forecast-data implementation: `docs/implementation/forecast-edge-data-program.md`
 - Full-lifecycle implementation: `docs/implementation/full-market-lifecycle-trading.md`
@@ -45,8 +51,9 @@ Canonical records:
 | 1. Quoteable fair/price sheet | Convert model output into a conservative maximum price. | V2a Slices 0-3 repository complete; no calibrator selected and untouched forward gate open | Positive walk-forward quoted-price EV without extreme uncalibrated fairs. |
 | 2. Shadow quote construction | Generate auditable quote intents and cancellation metadata. | Plumbing prototype complete | Deterministic intent construction tests pass. No profitability claim. |
 | 3. Shared market tape and replay | Collect pre-signal active-universe market events and replay quote tactics causally. | Slices 1-4 implemented; recorder repairs pass a 1,364-token short probe; fresh Slice 2 lifecycle, Slice 4 real join, and passive/markout Slices 5-6 remain open | Tape validity, deterministic book replay, conservative fill bounds, and forward shadow reporting pass. |
+| 3D. Policy-neutral strategy discovery and freeze | Discover simple strategies from broad causal snapshot + tape + settlement rows without preselecting the winner. | Approved; broad joined materializer, discovery engine, and immutable winner manifest not yet implemented | Predeclared walk-forward search selects at most one simple winner, freezes it before activation, and produces an untouched future-tape verdict. |
 | F. Full-lifecycle forecast/data foundation | Observe weather and market state from first listing and price horizon-specific distributions. | Approved parallel research build; no production consumer | Venue-aligned truth, causal D-1 sources, first-listing tape, horizon calibration, and inventory-aware replay pass. |
-| 4. Funded validation | Validate replay fidelity and useful-size fill-conditioned PnL with controlled real orders. | Blocked on validated V2a + V2b configuration | Plumbing canary passes, then `$50` and `$100` size-specific evidence passes. |
+| 4. Funded validation | Validate replay fidelity and useful-size fill-conditioned PnL with controlled real orders. | Blocked on a passing immutable Phase 3D manifest with validated V2a + V2b pricing/execution | Plumbing canary passes, then `$50` and `$100` size-specific evidence passes. |
 | 5. Learned quote policy and sizing | Select quote/skip/size from calibrated signal and microstructure state. | Future | Sufficient clean Phase 3/4 data and stable out-of-sample improvement. |
 
 ## Price Sheet V2 Workstreams
@@ -59,12 +66,51 @@ Canonical records:
    - freeze one calibrator and untouched forward start before inspecting that window;
    - require positive out-of-fold theoretical quoted-price EV before shadow promotion.
 2. V2b execution overlay starts on valid Phase 3 windows:
-   - materialize decision-time book, queue, flow, latency, and coverage features;
+   - materialize decision-time book, queue, flow, latency, and coverage features for both the broad policy-neutral discovery view and frozen V2 views;
    - reduce V2a price/size or skip based on toxicity and capacity;
    - compare frozen passive and stable-taker arms;
    - require positive base-case fill-conditioned EV before requesting Phase 4.
 
 The detailed contracts, module boundaries, slices, tests, and acceptance gates are in `docs/implementation/price-sheet-v2.md`.
+
+## Policy-Neutral Strategy Discovery And Freeze
+
+Strategy selection is downstream of measurement. Do not hard-code a named MVP,
+model family, side, station exception, or clock variant as the final strategy
+before the broad causal substrate is available.
+
+```text
+market tape + causal forecast/model snapshots + venue settlement
+-> constrained date-ordered discovery
+-> complexity penalty and correlated-family collapse
+-> at most one simple primary winner
+-> immutable manifest and activation boundary
+-> untouched future tape
+-> controlled real-order request
+```
+
+The Phase 3D implementation must:
+
+1. Build a reproducible broad discovery view over all eligible causal
+   snapshot/token decisions, not only selected V2a pilots.
+2. Predeclare source cutoffs, search grammar, complexity budget, folds,
+   effective-sample requirements, costs, fill scenario, size, caps, stability
+   tests, and winner-selection rule before ranking.
+3. Fit calibration and thresholds only on dates before each walk-forward fold,
+   with primary uncertainty clustered by market date.
+4. Collapse nearby delay, window, price-cap, scope, and model variants into
+   correlated families rather than counting them as independent confirmation.
+5. Prefer the simplest stable family to the highest in-sample return and select
+   at most one primary winner initially.
+6. Freeze the exact signal, pricing, execution, size, risk, source, code, and
+   activation manifest before any holdout decision is inspected.
+7. Evaluate only post-activation tape with venue settlement, fail-closed
+   coverage, fill-conditioned markouts, and current portfolio caps.
+8. Send only an exact passing manifest to Phase 4; a failed holdout creates no
+   permission to add a retrospective rescue filter.
+
+The detailed contract is
+`docs/implementation/tape-strategy-discovery.md`.
 
 ## Full-Market-Lifecycle Expansion
 
@@ -101,8 +147,10 @@ The complete implementation contract is `docs/implementation/full-market-lifecyc
 4. Deterministic book reconstruction with checkpoints, reconnect/resync behavior, and invalid gap intervals.
 5. Causal joins from observation/decision availability to token tape.
 6. Correct trade-direction, queue, cancellation, book-touch, markout, and settlement labels.
-7. Frozen forward quote-policy evaluation, including passive and stable-taker controls.
-8. Private order/user-channel capture for later real-canary ground truth.
+7. Policy-neutral broad discovery materialization across eligible causal snapshots.
+8. Constrained walk-forward strategy discovery and immutable winner freezing.
+9. Frozen forward quote-policy evaluation, including passive and stable-taker controls.
+10. Private order/user-channel capture for later real-canary ground truth.
 
 The detailed schema, module boundaries, sprint slices, and acceptance tests are in `docs/implementation/phase-3-market-tape-replay.md`.
 
@@ -117,6 +165,9 @@ The detailed schema, module boundaries, sprint slices, and acceptance tests are 
 - Executed flow uses authoritative trade events; placements and cancellations are not counted as trades.
 - Every quote outcome states whether coverage was valid from before placement through termination.
 - Conservative, base, and optimistic labels are clearly separated.
+- Broad discovery inputs are independent of current policy and V2 pilot selection.
+- Discovery cutoffs, grammar, folds, metrics, costs, and complexity rules are immutable before ranking.
+- A strategy manifest and activation time are frozen before its forward rows exist.
 - Forward reports use immutable hypothesis versions and activation timestamps.
 
 ## Phase 4 Validation Ladder
@@ -134,7 +185,8 @@ Normal sizing does not follow from an arbitrary count of fills. Counts are smoke
 - Extend policy-independent market and forecast collection to first listing/day-before conditions.
 - Build D-1 opening and forecast-revision distributions without changing the frozen late control.
 - Measure actual lifecycle volume, spread/depth, price response, fill bounds, and exit capacity by horizon.
-- Freeze the late HRRR-rich tuned dynamic and HRRR-v2 dynamic signal definitions for forward shadow evaluation.
+- Keep the late HRRR-rich tuned dynamic and HRRR-v2 dynamic definitions as V2 vertical controls; do not presume either is the Phase 3D winner.
+- Build the policy-neutral discovery substrate and constrained search/freeze path before requesting Phase 4.
 - Keep the two-of-four late agreement rule exploratory until its exact definition and activation time are recorded.
 - Keep Price Sheet V2a research-only until one calibrator and untouched forward window are frozen and pass the Slice 3 gate.
 - Do not add funded strategies or expand normal risk caps.
