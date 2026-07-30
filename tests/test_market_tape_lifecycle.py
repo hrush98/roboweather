@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from weather_trader.execution.contracts import MarketFamily, MarketSnapshot
@@ -44,6 +44,150 @@ def test_lifecycle_report_rejects_fallback_listing_short_probe_and_gap(tmp_path:
     evidence = report.markets[0]
     assert "listing_timestamp_not_authoritative" in evidence.failures
     assert "token_coverage_not_continuous_to_end" in evidence.failures
+    catalog.close()
+
+
+def test_lifecycle_report_validation_start_excludes_historical_error_session(
+    tmp_path: Path,
+) -> None:
+    catalog = _complete_catalog(tmp_path)
+    old_session = CollectorSession(
+        session_id="historical-error",
+        started_at_utc="2026-07-01T00:00:00+00:00",
+        started_monotonic_ns=1,
+        collector_version="test",
+        hostname="host",
+    )
+    catalog.start_session(old_session)
+    catalog.finish_session(
+        old_session.session_id,
+        finished_at_utc="2026-07-01T01:00:00+00:00",
+        reason="error",
+    )
+
+    unscoped = evaluate_tape_lifecycle(catalog)
+    scoped = evaluate_tape_lifecycle(
+        catalog,
+        validation_start_at=datetime(2026, 7, 16, tzinfo=timezone.utc),
+    )
+
+    assert "collector_sessions_finished_with_error" in unscoped.failures
+    assert scoped.passed is True
+    assert scoped.selected_session_ids == ("session-1",)
+    assert scoped.validation_start_at_utc == "2026-07-16T00:00:00+00:00"
+    catalog.close()
+
+
+def test_lifecycle_report_session_selector_keeps_selected_error_fail_closed(
+    tmp_path: Path,
+) -> None:
+    catalog = _complete_catalog(tmp_path)
+    catalog.connection.execute(
+        """
+        update tape_collector_sessions
+        set finished_at_utc = ?, finish_reason = ?
+        where session_id = ?
+        """,
+        ("2026-07-17T12:01:00+00:00", "error", "session-1"),
+    )
+    catalog.connection.commit()
+
+    report = evaluate_tape_lifecycle(
+        catalog,
+        validation_session_ids=("session-1",),
+    )
+
+    assert report.passed is False
+    assert report.selected_session_ids == ("session-1",)
+    assert "collector_sessions_finished_with_error" in report.failures
+    catalog.close()
+
+
+def test_lifecycle_report_validation_end_excludes_later_session_metrics_and_errors(
+    tmp_path: Path,
+) -> None:
+    catalog = _complete_catalog(tmp_path)
+    catalog.connection.execute(
+        """
+        insert into tape_reconstruction_errors (
+            session_id, token_id, event_id, receipt_sequence,
+            captured_at_utc, reason
+        ) values (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "session-1",
+            "yes-token",
+            "late-event",
+            1,
+            "2026-07-18T00:00:00+00:00",
+            "late failure",
+        ),
+    )
+    catalog.connection.execute(
+        """
+        insert into tape_collector_metrics (
+            session_id, captured_at_utc, messages, events, queue_depth,
+            queue_capacity, queue_high_water, rss_bytes, raw_disk_bytes,
+            receipt_lag_ms, reconnect_attempt, raw_json
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "session-1",
+            "2026-07-18T00:00:00+00:00",
+            2000,
+            4000,
+            0,
+            10_000,
+            10_000,
+            2 * 1024**3,
+            2 * 1024**3,
+            20_000.0,
+            1,
+            "{}",
+        ),
+    )
+    catalog.connection.commit()
+
+    report = evaluate_tape_lifecycle(
+        catalog,
+        validation_end_at=datetime(2026, 7, 17, 13, tzinfo=timezone.utc),
+    )
+
+    assert report.passed is True
+    assert report.events == 2000
+    assert report.queue_high_water == 500
+    assert report.reconstruction_errors == 0
+    catalog.close()
+
+
+def test_lifecycle_report_rejects_invalid_validation_window(tmp_path: Path) -> None:
+    catalog = _complete_catalog(tmp_path)
+
+    try:
+        evaluate_tape_lifecycle(
+            catalog,
+            validation_start_at=datetime(2026, 7, 17, tzinfo=timezone.utc),
+            validation_end_at=datetime(2026, 7, 16, tzinfo=timezone.utc),
+        )
+    except ValueError as error:
+        assert str(error) == "validation_end_at must be after validation_start_at"
+    else:
+        raise AssertionError("expected invalid validation window to fail")
+    catalog.close()
+
+
+def test_lifecycle_report_rejects_unknown_selected_session(tmp_path: Path) -> None:
+    catalog = _complete_catalog(tmp_path)
+
+    try:
+        evaluate_tape_lifecycle(
+            catalog,
+            validation_session_ids=("mistyped-session",),
+        )
+    except ValueError as error:
+        assert str(error) == "validation_session_ids not found: mistyped-session"
+    else:
+        raise AssertionError("expected unknown validation session to fail")
     catalog.close()
 
 

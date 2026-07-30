@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
+from datetime import datetime
 import json
 from pathlib import Path
 import sys
@@ -15,9 +16,32 @@ from weather_trader.tape.catalog import TapeCatalog
 from weather_trader.tape.lifecycle import evaluate_tape_lifecycle
 
 
+def _timestamp(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise argparse.ArgumentTypeError("timestamp must include a UTC offset")
+    return parsed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--catalog", type=Path, required=True)
+    parser.add_argument(
+        "--validation-start",
+        type=_timestamp,
+        help="Include sessions started at or after this timestamp (inclusive).",
+    )
+    parser.add_argument(
+        "--validation-end",
+        type=_timestamp,
+        help="Include sessions started before this timestamp and ignore later evidence.",
+    )
+    parser.add_argument(
+        "--session-id",
+        action="append",
+        default=None,
+        help="Evaluate only this exact collector session; repeat to select a restarted run.",
+    )
     parser.add_argument("--min-recorded-hours", type=float, default=12.0)
     parser.add_argument("--max-discovery-lag-seconds", type=float, default=300.0)
     parser.add_argument("--max-coverage-gap-seconds", type=float, default=5.0)
@@ -35,6 +59,9 @@ def main() -> None:
     with TapeCatalog(args.catalog.expanduser()) as catalog:
         report = evaluate_tape_lifecycle(
             catalog,
+            validation_start_at=args.validation_start,
+            validation_end_at=args.validation_end,
+            validation_session_ids=tuple(args.session_id) if args.session_id else None,
             min_recorded_hours=args.min_recorded_hours,
             max_discovery_lag_seconds=args.max_discovery_lag_seconds,
             max_coverage_gap_seconds=args.max_coverage_gap_seconds,

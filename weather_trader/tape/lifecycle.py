@@ -29,6 +29,9 @@ class MarketLifecycleEvidence:
 @dataclass(frozen=True)
 class TapeLifecycleReport:
     passed: bool
+    validation_start_at_utc: str | None
+    validation_end_at_utc: str | None
+    selected_session_ids: tuple[str, ...]
     sessions: int
     successful_sessions: int
     observed_start_at_utc: str | None
@@ -60,6 +63,9 @@ class TapeLifecycleReport:
 def evaluate_tape_lifecycle(
     catalog: TapeCatalog,
     *,
+    validation_start_at: datetime | None = None,
+    validation_end_at: datetime | None = None,
+    validation_session_ids: tuple[str, ...] | None = None,
     min_recorded_hours: float = 12.0,
     max_discovery_lag_seconds: float = 300.0,
     max_coverage_gap_seconds: float = 5.0,
@@ -73,12 +79,48 @@ def evaluate_tape_lifecycle(
         raise ValueError("min_recorded_hours must be positive")
     if min(max_discovery_lag_seconds, max_coverage_gap_seconds, max_daily_raw_bytes, retention_days) < 0:
         raise ValueError("lifecycle budgets must be non-negative")
+    validation_start = _as_utc(validation_start_at, name="validation_start_at")
+    validation_end = _as_utc(validation_end_at, name="validation_end_at")
+    if validation_start is not None and validation_end is not None and validation_end <= validation_start:
+        raise ValueError("validation_end_at must be after validation_start_at")
+    requested_session_ids = (
+        tuple(sorted({str(item) for item in validation_session_ids if str(item)}))
+        if validation_session_ids is not None
+        else None
+    )
+    if validation_session_ids is not None and not requested_session_ids:
+        raise ValueError("validation_session_ids must contain at least one non-empty id")
     connection = catalog.connection
-    sessions = connection.execute(
+    all_sessions = connection.execute(
         "select * from tape_collector_sessions order by started_at_utc"
     ).fetchall()
+    if requested_session_ids is not None:
+        known_session_ids = {str(row["session_id"]) for row in all_sessions}
+        unknown_session_ids = sorted(set(requested_session_ids) - known_session_ids)
+        if unknown_session_ids:
+            raise ValueError(
+                "validation_session_ids not found: " + ", ".join(unknown_session_ids)
+            )
+    sessions = [
+        row
+        for row in all_sessions
+        if (
+            requested_session_ids is None
+            or str(row["session_id"]) in requested_session_ids
+        )
+        and (
+            validation_start is None
+            or _parse_utc(str(row["started_at_utc"])) >= validation_start
+        )
+        and (
+            validation_end is None
+            or _parse_utc(str(row["started_at_utc"])) < validation_end
+        )
+    ]
     if not sessions:
         return _empty_report(
+            validation_start=validation_start,
+            validation_end=validation_end,
             max_daily_raw_bytes=max_daily_raw_bytes,
             retention_days=retention_days,
             max_receipt_lag_ms=max_receipt_lag_ms,
@@ -86,13 +128,28 @@ def evaluate_tape_lifecycle(
         )
 
     current_time = now or datetime.now(timezone.utc)
-    metric_rows = connection.execute(
+    if current_time.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    current_time = current_time.astimezone(timezone.utc)
+    selected_session_ids = tuple(str(row["session_id"]) for row in sessions)
+    selected_session_id_set = set(selected_session_ids)
+    metric_rows = [
+        row
+        for row in connection.execute(
         "select * from tape_collector_metrics order by captured_at_utc, id"
-    ).fetchall()
+        ).fetchall()
+        if str(row["session_id"]) in selected_session_id_set
+        and (
+            validation_end is None
+            or _parse_utc(str(row["captured_at_utc"])) <= validation_end
+        )
+    ]
     latest_metric_by_session: dict[str, Any] = {}
     for row in metric_rows:
         latest_metric_by_session[str(row["session_id"])] = row
     observed_start = min(_parse_utc(str(row["started_at_utc"])) for row in sessions)
+    if validation_start is not None:
+        observed_start = max(observed_start, validation_start)
     session_ends: dict[str, datetime] = {}
     recorded_seconds = 0.0
     successful_sessions = 0
@@ -100,22 +157,41 @@ def evaluate_tape_lifecycle(
     for session in sessions:
         session_id = str(session["session_id"])
         started = _parse_utc(str(session["started_at_utc"]))
-        if session["finished_at_utc"]:
-            ended = _parse_utc(str(session["finished_at_utc"]))
+        finished = (
+            _parse_utc(str(session["finished_at_utc"]))
+            if session["finished_at_utc"]
+            else None
+        )
+        if finished is not None:
+            ended = finished
         elif session_id in latest_metric_by_session:
             ended = _parse_utc(str(latest_metric_by_session[session_id]["captured_at_utc"]))
         else:
             ended = current_time
+        if validation_end is not None:
+            ended = min(ended, validation_end)
         session_ends[session_id] = ended
         recorded_seconds += max(0.0, (ended - started).total_seconds())
-        if str(session["finish_reason"] or "") == "error":
+        if (
+            str(session["finish_reason"] or "") == "error"
+            and finished is not None
+            and (validation_end is None or finished <= validation_end)
+        ):
             session_errors += 1
         elif ended > started:
             successful_sessions += 1
     observed_end = max(session_ends.values())
 
     events = sum(int(row["events"]) for row in latest_metric_by_session.values())
-    partitions_rows = connection.execute("select * from tape_raw_partitions").fetchall()
+    partitions_rows = [
+        row
+        for row in connection.execute("select * from tape_raw_partitions").fetchall()
+        if str(row["session_id"]) in selected_session_id_set
+        and (
+            validation_end is None
+            or _parse_utc(str(row["closed_at_utc"])) <= validation_end
+        )
+    ]
     raw_disk_bytes = sum(int(row["bytes_written"]) for row in partitions_rows)
     recorded_hours = recorded_seconds / 3600.0
     projected_daily = round(raw_disk_bytes * 24.0 / recorded_hours) if recorded_hours > 0 else None
@@ -125,11 +201,26 @@ def evaluate_tape_lifecycle(
     rss_observed = max((int(row["rss_bytes"]) for row in metric_rows), default=0)
     lag_values = [float(row["receipt_lag_ms"]) for row in metric_rows if row["receipt_lag_ms"] is not None]
     receipt_lag_observed = max(lag_values) if lag_values else None
-    reconstruction_errors = int(
-        connection.execute("select count(*) from tape_reconstruction_errors").fetchone()[0]
+    reconstruction_errors = sum(
+        1
+        for row in connection.execute(
+            "select session_id,captured_at_utc from tape_reconstruction_errors"
+        ).fetchall()
+        if str(row["session_id"]) in selected_session_id_set
+        and (
+            validation_end is None
+            or _parse_utc(str(row["captured_at_utc"])) <= validation_end
+        )
     )
 
-    token_rows = connection.execute("select * from tape_tokens order by market_id, token_id").fetchall()
+    token_rows = [
+        row
+        for row in connection.execute(
+            "select * from tape_tokens order by market_id, token_id"
+        ).fetchall()
+        if _parse_utc(str(row["discovered_at_utc"])) >= observed_start
+        and _parse_utc(str(row["discovered_at_utc"])) <= observed_end
+    ]
     listing_source_counts: dict[str, int] = defaultdict(int)
     by_market: dict[str, list[Any]] = defaultdict(list)
     for row in token_rows:
@@ -140,11 +231,14 @@ def evaluate_tape_lifecycle(
     for row in connection.execute(
         "select token_id,started_at_utc,ended_at_utc,session_id from tape_coverage_intervals where state = 'VALID' order by token_id,started_at_utc"
     ).fetchall():
-        start = _parse_utc(str(row["started_at_utc"]))
+        session_id = str(row["session_id"])
+        if session_id not in selected_session_id_set:
+            continue
+        start = max(_parse_utc(str(row["started_at_utc"])), observed_start)
         if row["ended_at_utc"]:
-            end = _parse_utc(str(row["ended_at_utc"]))
+            end = min(_parse_utc(str(row["ended_at_utc"])), observed_end)
         else:
-            end = session_ends.get(str(row["session_id"]), observed_end)
+            end = min(session_ends.get(session_id, observed_end), observed_end)
         if end >= start:
             coverage_by_token[str(row["token_id"])].append((start, end))
 
@@ -202,6 +296,9 @@ def evaluate_tape_lifecycle(
 
     return TapeLifecycleReport(
         passed=not failures,
+        validation_start_at_utc=_iso_utc(validation_start) if validation_start else None,
+        validation_end_at_utc=_iso_utc(validation_end) if validation_end else None,
+        selected_session_ids=selected_session_ids,
         sessions=len(sessions),
         successful_sessions=successful_sessions,
         observed_start_at_utc=_iso_utc(observed_start),
@@ -324,6 +421,8 @@ def _coverage_reaches_end(
 
 def _empty_report(
     *,
+    validation_start: datetime | None,
+    validation_end: datetime | None,
     max_daily_raw_bytes: int,
     retention_days: int,
     max_receipt_lag_ms: float,
@@ -331,6 +430,9 @@ def _empty_report(
 ) -> TapeLifecycleReport:
     return TapeLifecycleReport(
         passed=False,
+        validation_start_at_utc=_iso_utc(validation_start) if validation_start else None,
+        validation_end_at_utc=_iso_utc(validation_end) if validation_end else None,
+        selected_session_ids=(),
         sessions=0,
         successful_sessions=0,
         observed_start_at_utc=None,
@@ -365,6 +467,14 @@ def _parse_utc(value: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError(f"timestamp must be timezone-aware: {value}")
     return parsed.astimezone(timezone.utc)
+
+
+def _as_utc(value: datetime | None, *, name: str) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        raise ValueError(f"{name} must be timezone-aware")
+    return value.astimezone(timezone.utc)
 
 
 def _iso_utc(value: datetime) -> str:
