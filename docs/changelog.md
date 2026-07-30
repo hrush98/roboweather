@@ -4,6 +4,7 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-07-30
 
+- Clarified the Price Sheet V2 and full-market-lifecycle architecture: the destination is one continuously operating, event-driven pricing and inventory engine from market listing through settlement. Named horizons remain progressively validated calibration, uncertainty, reporting, risk, activation, and rollback states rather than permanent isolated time-of-day strategies.
 - Completed Price Sheet V2a Slice 2. Added deterministic expanding-window pooled-Platt and regularized market-aware calibration, raw/market baselines, stable per-fold hashes and exclusive training cutoffs, explicit sparse and missing-market fallbacks, cluster-weighted probability/reliability diagnostics, generated artifact I/O, and leakage-focused tests.
 - Ran the read-only current-research-database smoke for both frozen pilot signals. It produced 98 July 16-29 predictions with no fitted-fold fallback; calibration improved materially over raw model fairs but did not beat the causal market baseline, so no calibrator, quote, or funded behavior was promoted.
 

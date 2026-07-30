@@ -2,11 +2,11 @@
 
 Status: Approved for research implementation; not approved for production pricing or funded trading
 
-Last updated: 2026-07-17
+Last updated: 2026-07-30
 
 ## Feature Goal
 
-Build a causal research and execution framework that observes each supported weather market from first listing through settlement, produces horizon-specific station-high distributions as information changes, and evaluates complete quote and inventory lifecycles at useful size.
+Build one causal, continuously operating research and execution framework that observes each supported weather market from first listing through settlement, updates station-high distributions as information changes, and evaluates complete quote and inventory lifecycles at useful size.
 
 This plan coordinates four existing programs:
 
@@ -49,6 +49,31 @@ D-1 opening prior ---> D-1 source revision ---> D0 overnight convergence
 
 At every arrow, the system must distinguish an unfilled quote that can be canceled from filled inventory that needs a new hold, reduce, exit, or independently qualified add decision.
 
+## Continuous Operating Architecture
+
+The target runtime is one event-driven lifecycle loop, not a collection of
+unrelated clock-window strategies:
+
+```text
+market / forecast / observation / book / inventory event
+-> rebuild the causal weather distribution
+-> apply lead- and information-state calibration and uncertainty
+-> construct the conservative price sheet
+-> quote, cancel, replace, resize, hold, exit, or skip
+-> persist the decision and continue until settlement
+```
+
+The engine may pool statistical strength across the lifecycle using continuous
+features and hierarchical calibration. At minimum, decision state includes
+forecast lead, time to settlement, source vintage, time since the latest
+forecast or observation, observation freshness, market state, and inventory.
+
+Named horizons remain mandatory as stable reporting and risk boundaries. They
+allow leakage-safe evaluation, horizon-appropriate uncertainty, progressive
+activation, and rapid rollback when one region fails. They do not imply
+separate production processes, a forced pause between horizons, or a
+requirement to ignore opportunities between named forecast releases.
+
 ## Horizon Contract
 
 The initial fixed research labels are:
@@ -63,7 +88,7 @@ The initial fixed research labels are:
 | `d0_late` | Peak nearly known and remaining heating is bounded | Existing high-confidence control |
 | `settlement` | Market close through final resolution | Exit/hold reconciliation |
 
-Every signal, price sheet, quote, position decision, and evaluation row must carry `lifecycle_horizon`. Boundaries must be station-local, immutable within a hypothesis version, and reported in UTC as well.
+Every signal, price sheet, quote, position decision, and evaluation row must carry `lifecycle_horizon`. Boundaries must be station-local, immutable within a hypothesis version, and reported in UTC as well. The label identifies the decision's validated information state; it is not by itself a runtime trading schedule.
 
 ## Shared Immutable Records
 
@@ -154,6 +179,7 @@ Required fields include:
 - Localize ensemble members to the station and learn resolution-source mapping.
 - Emit coherent distributions for every eligible horizon and retain revision lineage.
 - Calibrate separately by horizon where sample size supports it, with pooled shrinkage otherwise.
+- Preserve continuous forecast-lead and information-freshness features so pooled models can learn across horizon boundaries without treating all lifecycle states as interchangeable.
 - Benchmark climatology, deterministic conversion, individual sources, and combined models.
 
 ### Exit Gate
@@ -169,6 +195,7 @@ Required fields include:
 
 - Add lifecycle horizon and forecast-revision lineage to the immutable signal contract.
 - Fit separate or hierarchically pooled calibration and uncertainty reserves by horizon.
+- Feed validated horizons into one continuous event-driven price-sheet consumer rather than cloning independent runtime strategies.
 - Add an inventory-risk reserve to the economic maximum quote.
 - Keep the initial late Price Sheet V2a pilot unchanged as the control.
 - Add earlier horizons one at a time after their forecast gate passes.
@@ -365,6 +392,7 @@ Research defaults should express the following principles:
 
 ## Decision Log
 
+- 2026-07-30: Clarified that the steady-state system is one continuously operating event-driven lifecycle engine. Named horizons are leakage-safe calibration, reporting, risk, activation, and rollback boundaries inside that engine rather than permanent standalone clock-window strategies.
 - 2026-07-17: Approved full-market-lifecycle collection and research.
 - 2026-07-17: Defined D-1 as a separate passive, uncertainty-aware sleeve rather than an earlier invocation of the late strategy.
 - 2026-07-17: Required first-listing tape, forecast-revision lineage, inventory/exit replay, and horizon-specific promotion.

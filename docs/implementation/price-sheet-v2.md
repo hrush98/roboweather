@@ -25,6 +25,25 @@ signal policy
 -> final quote/taker cap, size, TTL, and cancel rules
 ```
 
+The bounded pilot produces one decision at a time, but the destination is one
+continuously operating lifecycle pricing engine. From market listing through
+settlement, each causally available forecast, observation, market, quote, and
+inventory event may trigger a new versioned decision:
+
+```text
+market listed
+-> update the weather distribution as information arrives
+-> calibrate for forecast lead and current information state
+-> compare conservative fair with the live book
+-> quote, cancel, replace, resize, hold, exit, or skip
+-> repeat through settlement
+```
+
+Lifecycle horizons are validation, calibration, uncertainty, and progressive
+activation boundaries within that engine. They are not intended to become
+permanent isolated clock-window strategies or periods when the engine stops
+looking for opportunities.
+
 ## Relationship To The Roadmap
 
 - V2a is the reopened Phase 1 pricing gate and is the current implementation priority.
@@ -83,6 +102,13 @@ An earlier horizon is not enabled by widening the pilot's clock window. Before i
 - a separate shadow activation and promotion decision.
 
 Potential horizons are `d1_open`, `d1_update`, `d0_predawn`, `d0_morning`, `d0_midday`, and `d0_late`. They must be added and evaluated one at a time. Passing one does not authorize the others.
+
+Adding a horizon means authorizing another validated region of the continuous
+lifecycle state space. The steady-state consumer should share one event-driven
+decision loop and use continuous context such as forecast lead, time to
+settlement, source vintage, time since update, observation freshness, and
+inventory state. Horizon labels remain mandatory for auditability and
+fail-closed validation; they do not require separate runtime engines.
 
 ## System Schematic
 
@@ -582,6 +608,7 @@ Required integration tests:
 
 ## Decision Log
 
+- 2026-07-30: Clarified the full-lifecycle destination: one continuously operating, event-driven pricing and inventory engine from listing through settlement. Lifecycle horizons remain separately validated and progressively activated calibration/uncertainty states, not permanent isolated time-of-day strategies.
 - 2026-07-30: Completed V2a Slice 2 repository implementation and current-remote-database smoke. Added deterministic expanding-date pooled-Platt and market-aware regularized calibrators, raw/market baselines, stable per-fold hashes and exclusive cutoffs, explicit sparse/missing-market fallbacks, cluster-weighted Brier/log-loss/calibration/reliability reporting, artifact I/O, and future-label mutation tests. The 98 frozen July 16-29 evaluation rows confirmed raw-model overconfidence but showed the market baseline outperforming both fitted calibrators, so no calibrator or quote was promoted and Slice 3 remains gated by conservative out-of-fold economics.
 - 2026-07-22: Completed the repository implementation for V2a Slices 0 and 1. Froze separate late HRRR-rich tuned-dynamic and HRRR-v2 dynamic `BUY_NO` signal specs with activation/version hashes, exact policy scope, and explicit V1 rollback. Added leak-safe fit/evaluation artifacts with a default fit cutoff strictly before evaluation, causal timestamp checks, typed stale-aware market references, hierarchical market-date/station-date weights, deterministic decision/row hashes, source reconstruction IDs, and explicit non-venue-aligned IEM label diagnostics. Synthetic tests pass and the local legacy DB schema is compatible; a nonempty smoke on the current remote research DB remains before closing real-data evidence.
 - 2026-07-17: Approved a future full-market-lifecycle extension one frozen horizon at a time. Kept the initial late pilot unchanged as the immediate critical path and required separate forecast, calibration, inventory, quote-update/cancel, exit, and tape evidence for every earlier horizon.

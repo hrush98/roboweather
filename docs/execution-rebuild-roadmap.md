@@ -23,7 +23,7 @@ market listing + causal forecast state
 
 The Phase 3 market-tape recorder has retained policy-independent data since July 23 and the repository now includes a frozen-portfolio batch taker holdout. The first pre-cutoff discovery/post-cutoff replay reconstructed 12 executable positions across six resolved dates and was positive, establishing that later strategy extraction from the shared snapshot/tape data is technically viable. This is not a Slice 2 or Slice 6 pass: the July 29 lifecycle report failed on collector-session errors, receipt lag above 10 seconds, and no eligible complete listing-to-close market, while the batch replay does not model passive fills, markouts, or venue settlement. One real persisted quote/tape reconstruction also remains open. Price Sheet V2a Slices 0-2 are implemented and have nonempty current-database evidence. The first 98-row walk-forward calibration read found that fitted calibrators improved materially over raw model fairs but did not beat the decision-time market baseline, so Slice 3 conservative pricing must remain fail-closed and may reject both pilot signals. V2b will consume only valid Phase 3 tape windows.
 
-A full-market-lifecycle forecast/data program is approved as a parallel research build. It extends collection to first listing and builds distinct D-1, early-day, intraday, and late distributions and tactics. It does not change the current critical path: the bounded late Price Sheet V2a pilot remains first, with earlier horizons added one at a time after their forecast, tape, inventory, and execution gates pass. Funded trading remains paused.
+A full-market-lifecycle forecast/data program is approved as a parallel research build. It extends collection to first listing and builds one continuously updating pricing and inventory engine with separately validated D-1, early-day, intraday, and late information states. It does not change the current critical path: the bounded late Price Sheet V2a pilot remains first, with earlier lifecycle regions progressively enabled after their forecast, tape, inventory, and execution gates pass. Funded trading remains paused.
 
 Canonical records:
 
@@ -67,18 +67,25 @@ The detailed contracts, module boundaries, slices, tests, and acceptance gates a
 
 ## Full-Market-Lifecycle Expansion
 
-The intended steady state is a sequence of separately versioned horizons:
+The intended steady state is one continuous event-driven engine traversing separately versioned and validated lifecycle states:
 
 ```text
-D-1 open -> D-1 forecast revision -> D0 pre-dawn/morning
--> D0 midday observations -> D0 late remaining heating -> settlement
+market listed
+-> D-1 open -> D-1 forecast revision -> D0 pre-dawn/morning
+-> D0 midday observations -> D0 late remaining heating
+-> settlement
 ```
+
+The engine continues evaluating between named transitions whenever causal
+forecast, observation, book, or inventory state changes. Horizon labels provide
+calibration, uncertainty, reporting, risk, activation, and rollback boundaries;
+they are not intended to create unrelated permanent clock-window strategies.
 
 The expansion follows these gates:
 
 1. Observe current and future-dated weather markets from first listing and measure actual lifecycle liquidity and price discovery.
 2. Build causally timestamped, station-specific D-1 distributions from WeatherNext/NBM and eligible short-range sources.
-3. Extend Price Sheet V2 one horizon at a time with separate calibration and uncertainty/inventory reserves.
+3. Extend the continuous Price Sheet V2 consumer one validated lifecycle region at a time, using horizon-sensitive or explicitly pooled calibration and uncertainty/inventory reserves.
 4. Replay quote activation, scheduled-release cancellation/repricing, filled inventory, exit, and hold-to-settlement behavior.
 5. Freeze one exact early-horizon shadow arm and compare it with the late control under shared portfolio caps.
 6. Request controlled funded validation only for the exact horizon, tactic, inventory cap, exit rule, and size that pass.
