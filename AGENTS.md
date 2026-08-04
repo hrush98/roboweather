@@ -15,6 +15,13 @@
   - Local example: `/home/hmrush/Desktop/personal/roboweather/.conda/roboweather/bin/python -m pytest tests/test_live_execution.py`
 - Paths under `/home/maxrush/...` are valid on the remote host where the operator may run Codex, collectors, live/research databases, and production-style commands. A missing `/home/maxrush` path on the local host means use the local equivalent; it is not a repository or runtime failure.
 
+## Continuous research-loop operation
+
+- Use `deploy/systemd/roboweather-research.service` for continuous prediction-snapshot and outcome collection. Install it under `~/.config/systemd/user/`, run `systemctl --user daemon-reload`, then enable/start it with `systemctl --user enable --now roboweather-research.service`.
+- Inspect it with `systemctl --user status roboweather-research.service --no-pager` and `journalctl --user -u roboweather-research.service`. The TUI controls and observes this durable service but does not own its lifetime; closing the TUI must not stop research collection.
+- The research runner takes a nonblocking writer lock at `<DB>.research-loop.lock`. Do not bypass the lock or run a second manual/TUI-owned research loop against the same database. Stop the durable service before deliberately running a one-off loop against its DB.
+- The service has a 4 GiB memory ceiling and restart-on-failure. Treat a memory-limit restart or repeated restart loop as an operational incident; inspect the journal and recent `engine_state.raw_json.runtime_metrics` before restarting manually.
+
 ## Documentation architecture
 
 - Prefer a small set of living canonical documents over new one-off narrative reports:

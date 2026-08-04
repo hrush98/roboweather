@@ -26,7 +26,7 @@ Current confidence by layer:
 
 | Layer | Assessment | Decision |
 | --- | --- | --- |
-| Research collection | Broad snapshot collection is useful and operational. The previous memory-growth blocker is resolved. | Continue collection. |
+| Research collection | Broad snapshot collection is useful and operational. The previous memory-growth blocker is resolved, and collection now runs under a restartable 4 GiB-bounded user service rather than TUI child ownership. | Continue collection and investigate any service restart or memory-limit event. |
 | Forecast and settlement truth | Existing METAR/HRRR point features are rich, but the IEM maximum used for research truth has not been reconciled to Weather Underground/venue settlement, and no new ensemble/spatial source has passed incremental-skill gates. | Audit target fidelity first; then test WeatherNext/NBM, spatial residuals, and observed radiation on identical causal rows. |
 | Full-market-lifecycle edge | Morning snapshots show more displayed depth than late afternoon, but current data do not establish D-1 traded volume, passive fills, round-trip capacity, or an early calibrated forecast. | Collect from first listing and test separate D-1/early arms against the frozen late control. |
 | Current configured portfolio | Failed the fresh July 9-14 cap-aware replay. | Do not restart it. |
@@ -159,6 +159,7 @@ Update the body of this document when the current assessment changes. Append one
 
 ## Audit Log
 
+- 2026-08-04: Migrated the active prediction-snapshot loop from its July 16 TUI-owned process group to enabled user service `roboweather-research.service`. The controlled handoff left the TUI running, installed restart-on-failure and a 4 GiB memory ceiling, added journal/file logs plus a DB-scoped writer lock, and made TUI exit independent of research collection. Funded status did not change.
 - 2026-08-04: Enabled continuous user service `roboweather-market-tape.service` and resumed collection after the August 2 bounded-run stop. Session `tape-20260804T152718Z-b341a291` reached 1,474/1,474 valid tokens, completed discovery, and strictly verified its first partition with queue high-water 1/10,000, about 142 MiB RSS, and zero reconstruction errors. The intervening outage remains an explicit invalid gap; funded status did not change.
 - 2026-08-03: Evaluated completed 72-hour tape run `tape-validation-20260730T183750Z-69556cbf` and separated operational availability from execution validity. Adopted a 30-second lifecycle recovery budget, individual late/fallback market exclusion, and receipt-lag warnings while preserving uninterrupted 60-second pre-signal-through-execution coverage for every replay. The run still failed: only 4/33 eligible markets were complete and the remaining maximum recovery gaps were 36.34-41.32 seconds. Slice 2 remains open.
 - 2026-07-30: Corrected lifecycle right-censoring and narrowed recorder

@@ -222,6 +222,16 @@ if [[ "${mode}" == live-* ]] && syncthing_root="$(find_syncthing_root "${live_db
   fi
 fi
 
+if [[ "${mode}" == "loop" ]]; then
+  RESEARCH_LOCK_PATH="${RESEARCH_LOCK_PATH:-${DB}.research-loop.lock}"
+  exec 9>"${RESEARCH_LOCK_PATH}"
+  if ! flock -n 9; then
+    echo "Research loop already owns database lock: ${RESEARCH_LOCK_PATH}" >&2
+    exit 73
+  fi
+  printf 'pid=%s started_at=%s db=%s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${DB}" >&9
+fi
+
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 log_path="data/logs/research_${mode}_${timestamp}.log"
 live_log_path="data/logs/live_${mode}_${timestamp}.log"

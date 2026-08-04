@@ -129,6 +129,21 @@ Run the headless research collector:
 ./scripts/run_research.sh
 ```
 
+For continuous collection, install the durable user service and use the TUI or
+`systemctl` to control it:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/systemd/roboweather-research.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now roboweather-research.service
+systemctl --user status roboweather-research.service --no-pager
+```
+
+The service survives TUI exit, restarts after failures, enforces a 4 GiB memory
+ceiling, and rejects a second research writer for the same SQLite database.
+Use `journalctl --user -u roboweather-research.service` for its logs.
+
 This records prediction snapshots for fresh observation-delay buckets during
 the 10:00-15:00 local window, auto-resolves prior station/dates after the next
 local morning, and scores snapshots against IEM ASOS final highs. It does not

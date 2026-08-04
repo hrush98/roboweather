@@ -530,10 +530,21 @@ def _default_process_supervisor() -> ProcessSupervisor:
     runner = REPO_ROOT / "scripts" / "run_research.sh"
     return ProcessSupervisor(
         [
-            ProcessSpec("research", "Research Loop", (str(runner), "loop")),
             ProcessSpec("live", "Live Loop", (str(runner), "live-loop")),
         ],
         cwd=REPO_ROOT,
+    )
+
+
+def _default_research_service_controller() -> SystemdUserServiceController:
+    return SystemdUserServiceController(
+        [
+            UserServiceSpec(
+                "research",
+                "Research Loop",
+                "roboweather-research.service",
+            )
+        ]
     )
 
 
@@ -873,6 +884,7 @@ class RoboWeatherTUI(App):
         db_path: Path,
         process_supervisor: ProcessSupervisor | None = None,
         *,
+        research_service_controller: SystemdUserServiceController | None = None,
         tape_service_controller: SystemdUserServiceController | None = None,
         tape_catalog_path: Path | None = None,
     ) -> None:
@@ -887,6 +899,9 @@ class RoboWeatherTUI(App):
         self._last_live_resolution_poll_at: datetime | None = None
         self._last_live_resolution_summary: dict[str, Any] | None = None
         self.process_supervisor = process_supervisor or _default_process_supervisor()
+        self.research_service_controller = (
+            research_service_controller or _default_research_service_controller()
+        )
         self.tape_service_controller = tape_service_controller or _default_tape_service_controller()
         self.tape_catalog_path = tape_catalog_path or Path(
             os.environ.get("ROBOWEATHER_TAPE_CATALOG", str(DEFAULT_TAPE_CATALOG))
@@ -933,10 +948,12 @@ class RoboWeatherTUI(App):
                     yield Static("Effective Live Config", classes="section-title")
                     yield DataTable(id="live-config")
                 with TabPane("Processes", id="processes-tab"):
-                    yield Static("Process Supervisor", classes="section-title")
+                    yield Static("Collectors and Live Process", classes="section-title")
                     with Horizontal(classes="process-controls"):
                         yield Button("Start Research", id="start-research", variant="success")
+                        yield Button("Restart Research", id="restart-research", variant="warning")
                         yield Button("Stop Research", id="stop-research", variant="warning")
+                    with Horizontal(classes="process-controls"):
                         yield Button(_live_start_label(self.process_supervisor.env), id="start-live", variant="success")
                         yield Button("Stop Live", id="stop-live", variant="warning")
                     with Horizontal(classes="process-controls"):
@@ -1154,9 +1171,11 @@ class RoboWeatherTUI(App):
         if event.button.id == "kill-button":
             self.action_activate_kill_switch()
         elif event.button.id == "start-research":
-            self._run_process_action("start-research", lambda: self._start_process("research"))
+            self._run_process_action("start-research", self._start_research)
+        elif event.button.id == "restart-research":
+            self._run_process_action("restart-research", self._restart_research)
         elif event.button.id == "stop-research":
-            self._run_process_action("stop-research", lambda: self._stop_process("research"))
+            self._run_process_action("stop-research", self._stop_research)
         elif event.button.id == "start-live":
             self._run_process_action("start-live", lambda: self._start_process("live"))
         elif event.button.id == "stop-live":
@@ -1191,7 +1210,7 @@ class RoboWeatherTUI(App):
         )
 
     async def on_unmount(self) -> None:
-        await self.process_supervisor.stop_all()
+        await self.process_supervisor.stop("live")
 
     def on_data_table_header_selected(self, event: DataTable.HeaderSelected) -> None:
         table = event.data_table
@@ -1294,6 +1313,39 @@ class RoboWeatherTUI(App):
         self.notify(f"{snapshot.label} {snapshot.status.lower()}.")
         self.refresh_processes()
 
+    async def _start_research(self) -> None:
+        snapshot = await self.research_service_controller.start("research")
+        self.notify(f"{snapshot.label} {snapshot.status.lower()}.")
+        await self._refresh_tape_observability(force_health=True)
+
+    async def _restart_research(self) -> None:
+        confirmed = await self.push_screen_wait(
+            ConfirmationScreen(
+                "Restarting research creates a prediction-snapshot gap.",
+                confirm_label="Restart Research",
+            )
+        )
+        if not confirmed:
+            self.notify("Research restart canceled.")
+            return
+        snapshot = await self.research_service_controller.restart("research")
+        self.notify(f"{snapshot.label} {snapshot.status.lower()}.")
+        await self._refresh_tape_observability(force_health=True)
+
+    async def _stop_research(self) -> None:
+        confirmed = await self.push_screen_wait(
+            ConfirmationScreen(
+                "Stopping research creates an evidence gap until collection resumes.",
+                confirm_label="Stop Research",
+            )
+        )
+        if not confirmed:
+            self.notify("Research stop canceled.")
+            return
+        snapshot = await self.research_service_controller.stop("research")
+        self.notify(f"{snapshot.label} {snapshot.status.lower()}.")
+        await self._refresh_tape_observability(force_health=True)
+
     async def _start_tape(self) -> None:
         snapshot = await self.tape_service_controller.start("tape")
         self.notify(f"{snapshot.label} {snapshot.status.lower()}.")
@@ -1348,6 +1400,7 @@ class RoboWeatherTUI(App):
         )
 
     async def _refresh_tape_observability(self, *, force_health: bool = False) -> None:
+        await self.research_service_controller.refresh("research")
         await self.tape_service_controller.refresh("tape")
         now = datetime.now(timezone.utc)
         health_due = (
@@ -1366,6 +1419,7 @@ class RoboWeatherTUI(App):
             except Exception as exc:
                 self._tape_health = None
                 self._tape_health_error = str(exc)
+            await self.research_service_controller.refresh_logs("research")
             await self.tape_service_controller.refresh_logs("tape")
         self.refresh_processes()
         self._refresh_tape_health_table()
@@ -1410,10 +1464,17 @@ class RoboWeatherTUI(App):
             return
         process_table.clear()
         snapshots = {snapshot.name: snapshot for snapshot in self.process_supervisor.snapshots()}
-        service_snapshots = {
+        research_service_snapshots = {
+            snapshot.name: snapshot for snapshot in self.research_service_controller.snapshots()
+        }
+        tape_service_snapshots = {
             snapshot.name: snapshot for snapshot in self.tape_service_controller.snapshots()
         }
-        for snapshot in (*snapshots.values(), *service_snapshots.values()):
+        for snapshot in (
+            *research_service_snapshots.values(),
+            *snapshots.values(),
+            *tape_service_snapshots.values(),
+        ):
             process_table.add_row(
                 snapshot.label,
                 _status_text(snapshot.status),
@@ -1424,11 +1485,23 @@ class RoboWeatherTUI(App):
                 snapshot.latest_log[:100],
             )
 
+        research_status = research_service_snapshots["research"].status
+        research_running = research_status == "RUNNING"
+        research_actionable = research_status not in {
+            "UNKNOWN", "UNAVAILABLE", "NOT_INSTALLED"
+        }
+        research_busy = bool(
+            {"start-research", "restart-research", "stop-research"}
+            & self._process_actions_in_progress
+        )
         self.query_one("#start-research", Button).disabled = (
-            snapshots["research"].status == "RUNNING" or "start-research" in self._process_actions_in_progress
+            research_running or not research_actionable or research_busy
+        )
+        self.query_one("#restart-research", Button).disabled = (
+            not research_running or research_busy
         )
         self.query_one("#stop-research", Button).disabled = (
-            snapshots["research"].status != "RUNNING" or "stop-research" in self._process_actions_in_progress
+            not research_running or research_busy
         )
         self.query_one("#start-live", Button).disabled = (
             snapshots["live"].status == "RUNNING" or "start-live" in self._process_actions_in_progress
@@ -1436,7 +1509,7 @@ class RoboWeatherTUI(App):
         self.query_one("#stop-live", Button).disabled = (
             snapshots["live"].status != "RUNNING" or "stop-live" in self._process_actions_in_progress
         )
-        tape_status = service_snapshots["tape"].status
+        tape_status = tape_service_snapshots["tape"].status
         tape_running = tape_status == "RUNNING"
         tape_actionable = tape_status not in {"UNKNOWN", "UNAVAILABLE", "NOT_INSTALLED"}
         tape_busy = bool(
@@ -1454,9 +1527,20 @@ class RoboWeatherTUI(App):
         self.query_one("#stop-tape", Button).disabled = (
             not tape_running or tape_busy
         )
-        self._refresh_process_log("research", "#research-log")
+        self._refresh_research_log()
         self._refresh_process_log("live", "#live-log")
         self._refresh_tape_log()
+
+    def _refresh_research_log(self) -> None:
+        table = self.query_one("#research-log", DataTable)
+        rows = tuple(self.research_service_controller.logs("research")[-200:])
+        if self._process_log_rows.get("research") == rows:
+            return
+        self._process_log_rows["research"] = rows
+        table.clear()
+        for line in rows:
+            table.add_row(line[:240])
+        table.scroll_end(animate=False, immediate=True)
 
     def _refresh_process_log(self, name: str, table_id: str) -> None:
         table = self.query_one(table_id, DataTable)

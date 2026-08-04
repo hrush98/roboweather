@@ -155,7 +155,7 @@ The 360-second TTL is a deliberate compromise: weather does not normally reprice
 
 ### 2026-06-30
 
-- Incident follow-up from the June 27 live/research stop: the process should not be operated as an unsupervised tmux-only service. Add a durable supervisor for live and research loops with restart-on-failure, memory limits, and explicit log paths.
+- Incident follow-up from the June 27 live/research stop: research supervision was completed on 2026-08-04 with a restartable, 4 GiB-bounded user service and explicit journal/file logs. The funded live loop remains paused and TUI-owned; it still requires a separately designed durable/private-key-aware supervisor before any unattended live operation.
 - Add per-cycle process RSS/memory telemetry and alert/restart before memory reaches host-risk levels. The June 27 host logs showed an OOM kill in the tmux-launched scope, with multiple Python processes consuming tens of GB of resident memory.
 - Add a cash/allowance-aware execution throttle. Repeated `insufficient_balance` exchange rejects should stop or downsize further submissions and raise an operator alert instead of continuing to submit eligible candidates.
 - Persist the full live candidate universe, or a dedicated live candidate snapshot table, before live policy filtering. The current live DB is adequate for selected positions and order attempts, but not for a complete selected-versus-unselected candidate audit.
