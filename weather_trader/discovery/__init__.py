@@ -6,10 +6,12 @@ from weather_trader.discovery.contracts import (
     DiscoveryRunSpec,
     StrategyManifest,
 )
+from weather_trader.discovery.registry import DiscoveryRegistry
 
 __all__ = [
     "BroadDiscoveryRow",
     "CandidateRule",
+    "DiscoveryRegistry",
     "DiscoveryRunSpec",
     "StrategyManifest",
 ]
