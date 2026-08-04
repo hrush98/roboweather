@@ -24,7 +24,7 @@ def main() -> None:
     parser.add_argument("--no-verify-segments", action="store_true")
     parser.add_argument("--no-fail", action="store_true")
     args = parser.parse_args()
-    with TapeCatalog(args.catalog.expanduser()) as catalog:
+    with TapeCatalog(args.catalog.expanduser(), read_only=True) as catalog:
         report = evaluate_tape_health(
             catalog,
             stale_after_seconds=args.stale_after_seconds,

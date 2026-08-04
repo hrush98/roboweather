@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import fcntl
 import hashlib
 from importlib.metadata import PackageNotFoundError, version
 import json
+import os
 from pathlib import Path
 import sys
 import uuid
@@ -35,8 +38,31 @@ RECORDER_BUILD_PATHS = (
     "weather_trader/stations/metadata.py",
     "weather_trader/stations/station_map.csv",
     "deploy/systemd/roboweather-market-tape-lifecycle.service",
+    "deploy/systemd/roboweather-market-tape.service",
 )
 RECORDER_DEPENDENCIES = ("pandas", "requests", "websockets")
+
+
+@contextmanager
+def _exclusive_catalog_writer_lock(catalog_path: Path):
+    """Prevent multiple recorder writers from sharing one tape catalog."""
+    lock_path = catalog_path.with_name(f"{catalog_path.name}.writer.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError(
+                f"market tape collector already owns catalog lock: {lock_path}"
+            ) from exc
+        handle.seek(0)
+        handle.truncate()
+        handle.write(f"pid={os.getpid()}\n")
+        handle.flush()
+        try:
+            yield lock_path
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _remaining_overall_seconds(
@@ -196,27 +222,34 @@ def main() -> None:
             return
         max_seconds = remaining if max_seconds is None else min(max_seconds, remaining)
     repository_root = Path(__file__).resolve().parents[1]
-    with TapeCatalog(args.catalog.expanduser()) as catalog:
-        stats = asyncio.run(
-            collect_market_tape(
-                catalog,
-                raw_directory=args.raw_dir.expanduser(),
-                refresh_seconds=args.refresh_seconds,
-                queue_size=args.queue_size,
-                market_limit=args.market_limit,
-                max_messages=args.max_messages,
-                max_seconds=max_seconds,
-                rotation_seconds=args.rotation_seconds,
-                telemetry_seconds=args.telemetry_seconds,
-                max_reconnect_attempts=args.max_reconnect_attempts,
-                reconnect_initial_seconds=args.reconnect_initial_seconds,
-                reconnect_max_seconds=args.reconnect_max_seconds,
-                max_receipt_lag_seconds=args.max_receipt_lag_seconds,
-                checkpoint_every=args.checkpoint_every,
-                validation_run_id=validation_run_id,
-                build_fingerprint=_build_fingerprint(repository_root),
-            )
-        )
+    catalog_path = args.catalog.expanduser()
+    try:
+        with _exclusive_catalog_writer_lock(catalog_path):
+            with TapeCatalog(catalog_path) as catalog:
+                stats = asyncio.run(
+                    collect_market_tape(
+                        catalog,
+                        raw_directory=args.raw_dir.expanduser(),
+                        refresh_seconds=args.refresh_seconds,
+                        queue_size=args.queue_size,
+                        market_limit=args.market_limit,
+                        max_messages=args.max_messages,
+                        max_seconds=max_seconds,
+                        rotation_seconds=args.rotation_seconds,
+                        telemetry_seconds=args.telemetry_seconds,
+                        max_reconnect_attempts=args.max_reconnect_attempts,
+                        reconnect_initial_seconds=args.reconnect_initial_seconds,
+                        reconnect_max_seconds=args.reconnect_max_seconds,
+                        max_receipt_lag_seconds=args.max_receipt_lag_seconds,
+                        checkpoint_every=args.checkpoint_every,
+                        validation_run_id=validation_run_id,
+                        build_fingerprint=_build_fingerprint(repository_root),
+                    )
+                )
+    except RuntimeError as exc:
+        if "already owns catalog lock" not in str(exc):
+            raise
+        raise SystemExit(str(exc)) from exc
     payload = {
         **stats.__dict__,
         "segment_path": str(stats.segment_path) if stats.segment_path else None,

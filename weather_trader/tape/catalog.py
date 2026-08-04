@@ -21,15 +21,23 @@ from weather_trader.tape.storage import SegmentStats
 class TapeCatalog:
     """Compact metadata catalog kept separate from raw market-tape segments."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, read_only: bool = False) -> None:
         self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(path, timeout=30.0)
+        self.read_only = read_only
+        if read_only:
+            uri = self.path.resolve().as_uri() + "?mode=ro"
+            self.connection = sqlite3.connect(uri, uri=True, timeout=30.0)
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.connection = sqlite3.connect(path, timeout=30.0)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("pragma foreign_keys = ON")
-        self.connection.execute("pragma journal_mode = WAL")
         self.connection.execute("pragma busy_timeout = 30000")
-        self._initialize()
+        if read_only:
+            self.connection.execute("pragma query_only = ON")
+        else:
+            self.connection.execute("pragma journal_mode = WAL")
+            self._initialize()
 
     def close(self) -> None:
         self.connection.close()

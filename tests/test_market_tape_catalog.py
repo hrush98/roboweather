@@ -55,6 +55,18 @@ def session() -> CollectorSession:
     )
 
 
+def test_catalog_read_only_mode_observes_data_and_rejects_writes(tmp_path: Path) -> None:
+    path = tmp_path / "catalog.sqlite"
+    with TapeCatalog(path) as writable:
+        writable.start_session(session())
+
+    with TapeCatalog(path, read_only=True) as reader:
+        count = reader.connection.execute("select count(*) from tape_collector_sessions").fetchone()[0]
+        assert count == 1
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            reader.connection.execute("delete from tape_collector_sessions")
+
+
 def test_market_conversion_builds_yes_no_siblings_and_excludes_inactive() -> None:
     tokens = _tokens_from_markets([market(), market(market_id="inactive", active=False)])
 

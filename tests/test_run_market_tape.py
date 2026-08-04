@@ -6,9 +6,25 @@ from pathlib import Path
 
 from scripts.run_market_tape import (
     _build_fingerprint,
+    _exclusive_catalog_writer_lock,
     _remaining_overall_seconds,
     _validation_run_id_from_state,
 )
+
+
+def test_catalog_writer_lock_rejects_duplicate_and_releases(tmp_path: Path) -> None:
+    catalog = tmp_path / "catalog.sqlite"
+
+    with _exclusive_catalog_writer_lock(catalog) as lock_path:
+        assert lock_path.read_text().startswith("pid=")
+        try:
+            with _exclusive_catalog_writer_lock(catalog):
+                raise AssertionError("duplicate lock unexpectedly succeeded")
+        except RuntimeError as exc:
+            assert "already owns catalog lock" in str(exc)
+
+    with _exclusive_catalog_writer_lock(catalog):
+        pass
 
 
 def test_overall_deadline_is_preserved_across_process_restarts(tmp_path: Path) -> None:
