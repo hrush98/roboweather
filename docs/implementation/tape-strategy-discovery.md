@@ -1,8 +1,8 @@
 # Tape-Backed Strategy Discovery And Freeze
 
-Status: Approved for implementation; blocked on sufficient clean joined tape history
+Status: D0-D3 repository path implemented; D4 stable-taker path implemented but operational acceptance blocked on a prospective manifest, venue settlement, and markouts
 
-Last updated: 2026-07-30
+Last updated: 2026-08-04
 
 ## Feature Goal
 
@@ -272,21 +272,52 @@ without retrospective retuning.
 
 Exit: the exact strategy/tactic/size passes Phase 4 or is rejected.
 
+## Repository Implementation
+
+The initial deterministic Phase 3D path is implemented in
+`weather_trader/discovery/` and two read-only CLIs:
+
+- `scripts/phase3d_strategy_discovery.py` freezes the complete run contract
+  before ranking, materializes every selected snapshot/token decision in the
+  declared source window, reconstructs its exact quote-ready book from valid
+  tape, searches the fixed simple-rule grammar, collapses correlated variants,
+  and writes either one immutable winner manifest or an immutable no-winner
+  result.
+- `scripts/phase3d_forward_report.py` verifies the manifest hash, rejects
+  pre-activation rows, rematerializes only later source dates with the same
+  causal book semantics, applies the exact frozen rule, and produces a
+  `PASS_TO_PHASE4_REQUEST`, `CONTINUE_COLLECTING`, or `REJECT` disposition.
+- The broad view retains tape failures and settlement disagreement as explicit
+  ineligibility reasons. Discovery may use research weather truth when venue
+  truth is absent, but forward evaluation counts only venue-authoritative
+  labels toward a pass.
+- The initial grammar has no fitted thresholds. Its fixed model, side, delay,
+  local-window, and entry-band variants are frozen in the run spec; three or
+  more contiguous date folds measure stability without training on a future
+  date.
+
+No production discovery run or prospective manifest has been frozen yet.
+Current `resolutions` tables contain no venue rows, and the shared-tape stack
+does not yet provide fill-conditioned markouts. Those are operational D4 exit
+gates, not reasons to substitute IEM weather outcomes or optimistic fills.
+
 ## Acceptance Checklist
 
-- [ ] Broad discovery rows are independent of current policy and V2 pilot
+- [x] Broad discovery rows are independent of current policy and V2 pilot
       selection.
-- [ ] Every discovery feature is causally available by quote readiness.
-- [ ] Invalid or incomplete coverage fails closed.
-- [ ] Venue settlement and research-truth disagreement are explicit.
-- [ ] Discovery cutoff, source watermarks, grammar, folds, metrics, costs, and
+- [x] Every implemented discovery feature is causally available by quote readiness.
+- [x] Invalid or incomplete coverage fails closed.
+- [x] Venue settlement and research-truth disagreement are explicit.
+- [x] Discovery cutoff, source watermarks, grammar, folds, metrics, costs, and
       complexity rules are frozen before ranking.
-- [ ] Walk-forward folds train only on earlier dates.
-- [ ] Effective sample and uncertainty are market-date clustered.
-- [ ] Correlated variants are collapsed before winner selection.
-- [ ] The initial winner respects the simplicity budget.
+- [x] Initial fixed-rule folds fit no thresholds on evaluation dates; future
+      fitted grammar must train only on earlier dates.
+- [x] Effective sample and stability are market-date clustered.
+- [x] Correlated variants are collapsed before winner selection.
+- [x] The initial winner respects the simplicity budget.
 - [ ] One immutable manifest is persisted before holdout activation.
-- [ ] Holdout rows are strictly post-activation and cannot retune the manifest.
+- [x] The forward evaluator accepts only strictly post-activation rows and
+      cannot retune the manifest.
 - [ ] Conservative/base/optimistic/actual fills remain separate.
 - [ ] Positive optimistic-only evidence cannot pass.
 - [ ] Phase 4 receives only the exact passing manifest, tactic, and size.
@@ -308,6 +339,11 @@ Exit: the exact strategy/tactic/size passes Phase 4 or is rejected.
   complexity.
 
 ## Decision Log
+
+- 2026-08-04: Implemented the deterministic D0-D3 repository path plus a
+  fail-closed stable-taker D4 evaluator. Kept the operational manifest,
+  venue-settlement, fill-scenario, and markout gates open; no strategy was
+  selected or promoted by the build.
 
 - 2026-07-30: Made policy-neutral constrained strategy discovery a first-class
   Phase 3D gate. Required a broad joined substrate, predeclared simple-rule

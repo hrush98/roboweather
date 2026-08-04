@@ -2,7 +2,7 @@
 
 ## Status
 
-Operational collection hypothesis. Retained collection has run from July 23 onward and the tape now supports exact quote-ready batch taker replay for strategies extracted later from broad snapshots. The strict lifecycle gate still fails on session errors, receipt lag, and absent eligible complete markets. Funded trading remains paused.
+Operational collection hypothesis. Retained collection has run from July 23 onward and the tape now supports exact quote-ready batch taker replay plus a policy-neutral Phase 3D discovery/freeze implementation. No prospective strategy manifest, venue-settlement cohort, or markout-complete forward result exists. Funded trading remains paused.
 
 Implementation details and sprint acceptance belong in `docs/implementation/phase-3-market-tape-replay.md`. Current sequencing and promotion gates belong in `docs/execution-rebuild-roadmap.md`.
 
@@ -112,6 +112,12 @@ The implementation contract is
 Review at each Phase 3 implementation exit gate and again before any private user-channel or funded canary work begins.
 
 ## Decision Log
+
+- 2026-08-04: Implemented the policy-neutral materializer, fixed simple-rule
+  discovery, correlated-family collapse, immutable winner/no-winner artifact,
+  and activation-gated forward evaluator. This changed implementation status,
+  not the economic verdict: no strategy was selected and venue settlement plus
+  markouts remain required.
 
 - 2026-07-30: Made constrained policy-neutral discovery and immutable winner freezing a first-class Phase 3D requirement. The tape and broad causal snapshots now feed one predeclared walk-forward search, while only a post-freeze untouched period can provide forward confirmation.
 - 2026-07-29: Confirmed the shared-tape premise with a pre-cutoff discovery/post-cutoff execution holdout: 12 exact capped taker sweeps reconstructed from later valid tape produced preliminary positive weather-outcome PnL. Kept lifecycle, passive-fill, markout, settlement, and funding gates open.

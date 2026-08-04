@@ -4,7 +4,7 @@ This is the living financial and systems audit for RoboWeather. Update this docu
 
 Generated or ad hoc analysis may live under `reports/`, but durable conclusions, open risks, and decisions belong here. The current implementation sequence belongs in `docs/execution-rebuild-roadmap.md`; funded operating state belongs in `docs/live-trading-journal.md`.
 
-Last reviewed: 2026-08-03
+Last reviewed: 2026-08-04
 
 ## Current Verdict
 
@@ -22,6 +22,15 @@ be frozen before ranking or forward evaluation. Named V2a pilots remain
 vertical controls; at most one simple primary winner advances to untouched
 future tape.
 
+The Phase 3D repository path now enforces that contract: it freezes source
+watermarks and the complete simple-rule grammar before ranking, reconstructs
+quote-ready books only through continuous valid tape, clusters evidence by
+market date, collapses correlated variants, and writes at most one hashed
+manifest. The forward evaluator is activation-gated and venue-settlement
+fail-closed. This is implementation evidence, not a strategy result: no
+production discovery run or manifest has been frozen, both current
+`resolutions` tables are empty, and fill-conditioned markouts remain absent.
+
 Current confidence by layer:
 
 | Layer | Assessment | Decision |
@@ -33,7 +42,7 @@ Current confidence by layer:
 | New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
 | Fair-value/price sheet | V2a Slices 0-3 now produce leak-safe calibration, causal uncertainty reserves, conservative fairs, maximum quotes, and economic gates. The first 98-row Slice 3 read leaves both pilots research-only because no calibrator or untouched forward window was frozen. | Freeze a baseline and forward start before new outcomes; do not promote from the July 16-29 comparison. |
 | Phase 3 shared tape | Slices 1-4 are implemented. Continuous collection resumed August 4 after the accepted 72-hour evidence; its first new session reached 1,474/1,474 valid tokens and strictly verified its first partition. Periodic reconnect gaps and late initial discovery remain known limitations; Slice 4 still lacks one real persisted-quote join. | Continue collection, monitor health/storage through the TUI, use retained tape for strategy work, and reject every affected decision window. |
-| Phase 3D strategy discovery | The architecture now requires broad policy-neutral joined rows, constrained walk-forward search, complexity control, one immutable winner, and untouched forward tape. The materializer and discovery engine are not yet implemented. | Build the broad view and discovery/freeze path; do not presume a named pilot is the winner. |
+| Phase 3D strategy discovery | D0-D3 repository mechanics and a fail-closed stable-taker D4 evaluator are implemented. No production run or prospective manifest exists; venue settlement and markouts are still unavailable. | Run a predeclared discovery only when a future activation boundary is available; do not pass Phase 4 without venue-aligned forward evidence and markouts. |
 | Existing candidate-token shadow collector | Useful plumbing prototype, but candidate-scoped and not a continuous causal market tape. | Do not use its fill labels as promotion evidence. |
 | Fillability and adverse selection | Still unresolved. Public L2 data can provide bounds, not exact hypothetical queue position. | Validate shared-tape replay, then run controlled real-order canaries. |
 | Funded readiness | No exact signal + quote policy + size has passed current fill-conditioned gates. | Keep funded trading paused. |
@@ -159,6 +168,10 @@ Update the body of this document when the current assessment changes. Append one
 
 ## Audit Log
 
+- 2026-08-04: Implemented the Phase 3D D0-D3 repository path and the
+  activation-gated stable-taker D4 evaluator. No production discovery run or
+  manifest was frozen; venue settlement and markouts remain open, so funded
+  status did not change.
 - 2026-08-04: Migrated the active prediction-snapshot loop from its July 16 TUI-owned process group to enabled user service `roboweather-research.service`. The controlled handoff left the TUI running, installed restart-on-failure and a 4 GiB memory ceiling, added journal/file logs plus a DB-scoped writer lock, and made TUI exit independent of research collection. Funded status did not change.
 - 2026-08-04: Enabled continuous user service `roboweather-market-tape.service` and resumed collection after the August 2 bounded-run stop. Session `tape-20260804T152718Z-b341a291` reached 1,474/1,474 valid tokens, completed discovery, and strictly verified its first partition with queue high-water 1/10,000, about 142 MiB RSS, and zero reconstruction errors. The intervening outage remains an explicit invalid gap; funded status did not change.
 - 2026-08-03: Evaluated completed 72-hour tape run `tape-validation-20260730T183750Z-69556cbf` and separated operational availability from execution validity. Adopted a 30-second lifecycle recovery budget, individual late/fallback market exclusion, and receipt-lag warnings while preserving uninterrupted 60-second pre-signal-through-execution coverage for every replay. The run still failed: only 4/33 eligible markets were complete and the remaining maximum recovery gaps were 36.34-41.32 seconds. Slice 2 remains open.

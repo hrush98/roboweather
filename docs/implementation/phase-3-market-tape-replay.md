@@ -395,6 +395,18 @@ Implementation status, 2026-07-29:
 - The first frozen-family replay used a July 22 discovery cutoff and July 23 holdout start. Across six resolved July 23-28 market dates it deduplicated 19 signals, executed 12, rejected three for invalid continuous coverage and four for absent asks under the cap, and produced `+$93.22` weather-outcome PnL on `$205.51` cost.
 - This is a batch taker-holdout milestone, not Slice 6 completion. It permits partial fills, has no passive queue/fill labels or markouts, is not venue-settlement aligned, and was activated retrospectively at the cutoff rather than prospectively registered before collection.
 
+Implementation update, 2026-08-04:
+
+- Phase 3D now provides the actual manifest consumer path in
+  `scripts/phase3d_forward_report.py`. It verifies the immutable manifest hash,
+  rejects pre-activation snapshots, reconstructs exact quote-ready stable-taker
+  books through continuous `VALID` coverage, and counts only venue-authoritative
+  labels toward a Phase 4 disposition.
+- The consumer remains operationally incomplete for Slice 6 because no
+  prospective manifest is registered, `resolutions` has no venue rows, and
+  reproducible markouts plus conservative/base/optimistic/actual fill
+  separation are not yet supplied by Slice 5.
+
 ## Acceptance Checklist
 
 - [ ] Policy-independent token discovery covers current and future-dated supported weather markets.
@@ -411,11 +423,15 @@ Implementation status, 2026-07-29:
       pilot selection.
 - [ ] Fill scenarios, cancellations, and markouts are reproducible.
 - [ ] A Phase 3D manifest is frozen before its forward activation boundary.
-- [ ] Forward reports use frozen hypothesis versions and activation timestamps.
+- [x] Forward-report code verifies frozen manifest hashes and activation timestamps.
 - [ ] Private user-channel design is ready before any funded canary.
 - [ ] Existing shadow labels are not used as promotion evidence.
 
 ## Decision Log
+
+- 2026-08-04: Added the Phase 3D manifest consumer and kept Slice 6 open on
+  prospective activation, venue settlement, markouts, and separated fill
+  scenarios.
 
 - 2026-08-03: Accepted the completed 72-hour tape as good-enough strategy-research infrastructure at approximately 96.7% valid eligible-token coverage. Removed reconnect hardening and another lifecycle run from the critical path while retaining fail-closed rejection of every decision window that crosses missing coverage. Recorded the likely missing application heartbeat, reconnect-path rediscovery delay, and late Gamma visibility as deferred technical debt.
 - 2026-08-04: Added a separate continuous research-collection service after the accepted bounded run. The continuous service has no lifecycle deadline or validation-run identity; exact decision joins still reject all non-`VALID` coverage.

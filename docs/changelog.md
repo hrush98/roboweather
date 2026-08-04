@@ -4,6 +4,13 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-04
 
+- Implemented the Phase 3D D0-D3 repository path: immutable source/run
+  contracts, a policy-neutral snapshot/token/tape/settlement materializer,
+  fixed date-folded simple-rule discovery, complexity penalties,
+  correlated-family collapse, and an immutable one-winner/no-winner freeze.
+  Added an activation-gated frozen-view forward evaluator that requires venue
+  settlement for a Phase 4 pass. No production manifest was frozen and funded
+  behavior is unchanged; markouts and separated fill scenarios remain open.
 - Migrated continuous prediction-snapshot research collection from a TUI-owned child process to a restartable user-systemd service with a 4 GiB memory ceiling, explicit journal/file logs, and a database-scoped writer lock. The TUI now observes and controls the durable research service, confirmation-protects research stop/restart, and leaves both research and tape running when it exits; the funded live loop remains TUI-owned and paused by default.
 - Added a dedicated continuous Phase 3 research market-tape service after accepting the bounded lifecycle evidence. It reuses the established queue, rotation, telemetry, reconnect, lag, checkpoint, memory, and filesystem boundaries without a validation deadline. The TUI now controls and observes that durable user service without owning its lifetime, displays lightweight read-only tape health and journal output, and confirmation-protects stop/restart actions. A catalog advisory lock rejects duplicate recorder writers. The bounded lifecycle unit remains disabled and available only for reproducible validation cohorts; causal replay still rejects every decision window crossing non-`VALID` coverage.
 - Enabled the continuous service and resumed tape collection in session `tape-20260804T152718Z-b341a291`. All 1,474 subscribed tokens reached `VALID`; discovery completed; the first rotated partition passed strict verification with queue high-water 1/10,000, about 142 MiB RSS, and zero reconstruction errors. The August 2-to-August 4 interruption remains an explicit invalid gap.

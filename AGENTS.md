@@ -99,6 +99,26 @@
 - The report is read-only and fail-closed. It requires continuous `VALID` pre-signal coverage, reconstructs the exact token book after configured latency, and simulates only an immediate capped ask sweep. Missing coverage and unavailable capped asks are rejections, not snapshot-price fills.
 - Interpret the existing output as post-cutoff taker-execution hypothesis evidence. It does not infer passive fills, uses weather outcomes rather than venue settlement, and cannot by itself authorize funding. Phase 3D forward confirmation additionally requires an immutable strategy manifest created before activation, venue-authoritative settlement, fill/markout evidence, and untouched later tape.
 
+## Phase 3D constrained discovery workflow
+
+- Create a generated artifact directory under `reports/` and declare a future
+  activation timestamp before running discovery. The CLI freezes source
+  watermarks, tape sessions/partitions, model universe, grammar, folds, costs,
+  caps, and winner rule in `discovery_run.json` before ranking:
+  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_strategy_discovery.py --research-db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --tape-catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite --source-start-date YYYY-MM-DD --discovery-cutoff-exclusive YYYY-MM-DD --activation-timestamp ISO_UTC --out reports/phase3d/RUN_NAME`
+- A run writes exactly one immutable `strategy_manifest.json` or
+  `no_winner.json`. Do not edit or overwrite either result. A changed source,
+  grammar, threshold, cost, cap, or activation requires a new output directory
+  and future activation.
+- After activation, evaluate the exact manifest only through an exclusive end
+  date:
+  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_forward_report.py --manifest reports/phase3d/RUN_NAME/strategy_manifest.json --research-db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --tape-catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite --end-date-exclusive YYYY-MM-DD --out reports/phase3d-forward/RUN_NAME`
+- The forward report counts only venue-authoritative `resolutions` toward a
+  pass. Empty venue truth, settlement disagreement, insufficient independent
+  dates, nonpositive base economics, missing markouts, or invalid tape cannot
+  be replaced with snapshot prices or IEM-only promotion claims. Leave all
+  generated Phase 3D artifacts uncommitted.
+
 ## Price Sheet V2a dataset workflow
 
 - Build generated V2a fit/evaluation artifacts read-only from the current remote research database. The default frozen evaluation starts on the pilot activation date and the fit corpus ends strictly before it:
