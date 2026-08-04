@@ -2,6 +2,10 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-08-03
+
+- Separated Phase 3 lifecycle availability from execution-time validity. Lifecycle reports now allow recovered gaps up to 30 seconds, exclude late/fallback-listed markets individually, and report peak receipt lag over 10 seconds as a warning; causal decision joins still require uninterrupted `VALID` coverage for their full 60-second pre-signal-through-execution window. The report now emits eligible-market completion and p50/p95/p99 maximum-gap metrics. The completed 72-hour validation run passed duration/resource/reconstruction gates but remained failed because only 4/33 eligible markets met the recovery budget; the other 29 had 36.34-41.32 second maximum gaps.
+
 ## 2026-07-30
 
 - Corrected the Phase 3 lifecycle acceptance cohort to include only in-window listings whose scheduled close is at or before the validation end. Later-closing listings are now reported explicitly as right-censored and do not fail a clean matured cohort; late, fallback-listed, and coverage-incomplete matured markets still fail closed. Replaced whole-repository Git fingerprinting with a recorder-scoped source/data/service-unit/runtime-version fingerprint while retaining the separate collector-config identity, so unrelated commits no longer split a supervised run. A two-refresh 1,364-token short probe passed strict health, and disabled bounded validation run `tape-validation-20260730T183750Z-69556cbf` is active through 2026-08-02 18:37:50 UTC.

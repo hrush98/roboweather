@@ -54,6 +54,7 @@ class TapeLifecycleReport:
     max_rss_bytes_budget: int
     max_receipt_lag_ms_observed: float | None
     max_receipt_lag_ms_budget: float
+    max_coverage_gap_seconds_budget: float
     reconstruction_errors: int
     discovery_refreshes: int
     complete_discovery_refreshes: int
@@ -66,9 +67,14 @@ class TapeLifecycleReport:
     incomplete_cohort_markets: int
     eligible_closed_markets: int
     complete_markets: int
+    eligible_market_completion_rate: float | None
+    eligible_max_coverage_gap_seconds_p50: float | None
+    eligible_max_coverage_gap_seconds_p95: float | None
+    eligible_max_coverage_gap_seconds_p99: float | None
     required_station_families: tuple[str, ...]
     complete_station_families: tuple[str, ...]
     markets: tuple[MarketLifecycleEvidence, ...]
+    warnings: tuple[str, ...]
     failures: tuple[str, ...]
 
 
@@ -81,7 +87,7 @@ def evaluate_tape_lifecycle(
     validation_run_id: str | None = None,
     min_recorded_hours: float = 12.0,
     max_discovery_lag_seconds: float = 300.0,
-    max_coverage_gap_seconds: float = 5.0,
+    max_coverage_gap_seconds: float = 30.0,
     max_daily_raw_bytes: int = 25 * 1024**3,
     retention_days: int = 14,
     max_receipt_lag_ms: float = 10_000.0,
@@ -151,6 +157,7 @@ def evaluate_tape_lifecycle(
         return _empty_report(
             validation_start=validation_start,
             validation_end=validation_end,
+            max_coverage_gap_seconds=max_coverage_gap_seconds,
             max_daily_raw_bytes=max_daily_raw_bytes,
             retention_days=retention_days,
             max_receipt_lag_ms=max_receipt_lag_ms,
@@ -338,18 +345,19 @@ def evaluate_tape_lifecycle(
         and "market_not_closed_in_observation_window" not in item.failures
     )
     required_families = tuple(
-        sorted({f"{item.station}:{item.market_family}" for item in cohort_evidence})
+        sorted({f"{item.station}:{item.market_family}" for item in eligible})
     )
     complete_families = tuple(
         sorted(
             {
                 f"{item.station}:{item.market_family}"
-                for item in cohort_evidence
+                for item in eligible
                 if item.complete
             }
         )
     )
 
+    warnings: list[str] = []
     failures: list[str] = []
     if len(validation_run_ids) != 1 or "unspecified" in validation_run_ids:
         failures.append("validation_run_identity_missing_or_mixed")
@@ -369,8 +377,10 @@ def evaluate_tape_lifecycle(
         failures.append("queue_capacity_reached")
     if rss_observed > max_rss_bytes:
         failures.append("rss_over_budget")
-    if receipt_lag_observed is None or receipt_lag_observed > max_receipt_lag_ms:
-        failures.append("receipt_lag_over_budget")
+    if receipt_lag_observed is None:
+        failures.append("receipt_lag_missing")
+    elif receipt_lag_observed > max_receipt_lag_ms:
+        warnings.append("receipt_lag_over_budget")
     if reconstruction_errors:
         failures.append("reconstruction_errors")
     complete_refreshes = sum(
@@ -394,10 +404,17 @@ def evaluate_tape_lifecycle(
         failures.append("no_authoritative_listing_timestamps")
     if not cohort_evidence:
         failures.append("no_validation_cohort_markets")
-    if any(not item.complete for item in cohort_evidence):
-        failures.append("incomplete_validation_cohort_markets")
     if not eligible:
         failures.append("no_eligible_closed_markets")
+    elif any(not item.complete for item in eligible):
+        failures.append("incomplete_eligible_markets")
+    if len(eligible) < len(cohort_evidence):
+        warnings.append("ineligible_cohort_markets_excluded")
+    eligible_gaps = sorted(
+        item.maximum_coverage_gap_seconds
+        for item in eligible
+        if item.maximum_coverage_gap_seconds is not None
+    )
     missing_families = sorted(set(required_families) - set(complete_families))
     if missing_families:
         failures.append("incomplete_station_family_lifecycles")
@@ -430,6 +447,7 @@ def evaluate_tape_lifecycle(
         max_rss_bytes_budget=max_rss_bytes,
         max_receipt_lag_ms_observed=receipt_lag_observed,
         max_receipt_lag_ms_budget=max_receipt_lag_ms,
+        max_coverage_gap_seconds_budget=max_coverage_gap_seconds,
         reconstruction_errors=reconstruction_errors,
         discovery_refreshes=len(discovery_refresh_rows),
         complete_discovery_refreshes=complete_refreshes,
@@ -444,9 +462,18 @@ def evaluate_tape_lifecycle(
         ),
         eligible_closed_markets=len(eligible),
         complete_markets=sum(item.complete for item in eligible),
+        eligible_market_completion_rate=(
+            round(sum(item.complete for item in eligible) / len(eligible), 6)
+            if eligible
+            else None
+        ),
+        eligible_max_coverage_gap_seconds_p50=_percentile(eligible_gaps, 0.50),
+        eligible_max_coverage_gap_seconds_p95=_percentile(eligible_gaps, 0.95),
+        eligible_max_coverage_gap_seconds_p99=_percentile(eligible_gaps, 0.99),
         required_station_families=required_families,
         complete_station_families=complete_families,
         markets=market_evidence,
+        warnings=tuple(warnings),
         failures=tuple(failures),
     )
 
@@ -534,28 +561,45 @@ def _coverage_reaches_end(
     required_end: datetime,
     max_gap_seconds: float,
 ) -> tuple[bool, float | None]:
+    """Measure operational recovery without making gaps replay-valid.
+
+    Decision joins separately require one uninterrupted VALID interval for the
+    entire pre-signal-through-execution window and never use this tolerance.
+    """
     if not intervals or required_end <= required_start:
         return False, None
     ordered = sorted(intervals)
     cursor = required_start
     maximum_gap = 0.0
+    within_budget = True
     for start, end in ordered:
         if end < cursor:
             continue
         gap = max(0.0, (start - cursor).total_seconds())
         maximum_gap = max(maximum_gap, gap)
         if gap > max_gap_seconds:
-            return False, maximum_gap
+            within_budget = False
         cursor = max(cursor, end)
         if cursor >= required_end:
-            return True, maximum_gap
+            return within_budget, maximum_gap
     return False, max(maximum_gap, max(0.0, (required_end - cursor).total_seconds()))
+
+
+def _percentile(values: list[float], fraction: float) -> float | None:
+    if not values:
+        return None
+    position = (len(values) - 1) * fraction
+    lower = int(position)
+    upper = min(lower + 1, len(values) - 1)
+    weight = position - lower
+    return round(values[lower] * (1.0 - weight) + values[upper] * weight, 6)
 
 
 def _empty_report(
     *,
     validation_start: datetime | None,
     validation_end: datetime | None,
+    max_coverage_gap_seconds: float,
     max_daily_raw_bytes: int,
     retention_days: int,
     max_receipt_lag_ms: float,
@@ -587,6 +631,7 @@ def _empty_report(
         max_rss_bytes_budget=max_rss_bytes,
         max_receipt_lag_ms_observed=None,
         max_receipt_lag_ms_budget=max_receipt_lag_ms,
+        max_coverage_gap_seconds_budget=max_coverage_gap_seconds,
         reconstruction_errors=0,
         discovery_refreshes=0,
         complete_discovery_refreshes=0,
@@ -599,9 +644,14 @@ def _empty_report(
         incomplete_cohort_markets=0,
         eligible_closed_markets=0,
         complete_markets=0,
+        eligible_market_completion_rate=None,
+        eligible_max_coverage_gap_seconds_p50=None,
+        eligible_max_coverage_gap_seconds_p95=None,
+        eligible_max_coverage_gap_seconds_p99=None,
         required_station_families=(),
         complete_station_families=(),
         markets=(),
+        warnings=(),
         failures=("no_sessions",),
     )
 

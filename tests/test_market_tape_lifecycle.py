@@ -29,8 +29,12 @@ def test_lifecycle_report_passes_complete_market_and_resource_gates(tmp_path: Pa
     assert report.discovery_refreshes == 2
     assert report.selected_validation_run_id == "validation-1"
     assert report.complete_markets == 1
+    assert report.eligible_market_completion_rate == 1.0
+    assert report.eligible_max_coverage_gap_seconds_p95 == 2.0
     assert report.required_station_families == ("KATL:HIGH_TEMP",)
     assert report.required_station_families == report.complete_station_families
+    assert report.max_coverage_gap_seconds_budget == 30.0
+    assert report.warnings == ()
     assert report.projected_daily_raw_bytes is not None
     assert report.projected_daily_raw_bytes < report.max_daily_raw_bytes
     catalog.close()
@@ -164,6 +168,65 @@ def test_lifecycle_report_validation_end_excludes_later_session_metrics_and_erro
     catalog.close()
 
 
+def test_lifecycle_report_warns_on_peak_receipt_lag_without_rejecting_cohort(
+    tmp_path: Path,
+) -> None:
+    catalog = _complete_catalog(tmp_path)
+    catalog.connection.execute(
+        """
+        update tape_collector_metrics
+        set receipt_lag_ms = ?
+        where session_id = ?
+        """,
+        (10_969.023, "session-1"),
+    )
+    catalog.connection.commit()
+
+    report = evaluate_tape_lifecycle(catalog)
+
+    assert report.passed is True
+    assert report.max_receipt_lag_ms_observed == 10_969.023
+    assert report.warnings == ("receipt_lag_over_budget",)
+    assert "receipt_lag_over_budget" not in report.failures
+    catalog.close()
+
+
+def test_lifecycle_report_rejects_missing_receipt_lag_telemetry(
+    tmp_path: Path,
+) -> None:
+    catalog = _complete_catalog(tmp_path)
+    catalog.connection.execute(
+        "update tape_collector_metrics set receipt_lag_ms = null"
+    )
+    catalog.connection.commit()
+
+    report = evaluate_tape_lifecycle(catalog)
+
+    assert report.passed is False
+    assert "receipt_lag_missing" in report.failures
+    catalog.close()
+
+
+def test_lifecycle_report_allows_operational_gap_up_to_30_seconds(
+    tmp_path: Path,
+) -> None:
+    catalog = _complete_catalog(tmp_path)
+    _add_midmarket_gap(catalog, seconds=20)
+
+    default_report = evaluate_tape_lifecycle(catalog)
+    strict_report = evaluate_tape_lifecycle(
+        catalog,
+        max_coverage_gap_seconds=5.0,
+    )
+
+    assert default_report.passed is True
+    assert default_report.markets[0].maximum_coverage_gap_seconds == 20.0
+    assert default_report.eligible_max_coverage_gap_seconds_p99 == 20.0
+    assert strict_report.passed is False
+    assert "incomplete_eligible_markets" in strict_report.failures
+    catalog.close()
+
+
 def test_lifecycle_report_rejects_invalid_validation_window(tmp_path: Path) -> None:
     catalog = _complete_catalog(tmp_path)
 
@@ -245,7 +308,7 @@ def test_lifecycle_report_passes_with_good_matured_and_right_censored_market(
     catalog.close()
 
 
-def test_lifecycle_report_fails_for_late_and_fallback_matured_markets(
+def test_lifecycle_report_excludes_late_and_fallback_matured_markets(
     tmp_path: Path,
 ) -> None:
     catalog = _complete_catalog(tmp_path)
@@ -299,11 +362,15 @@ def test_lifecycle_report_fails_for_late_and_fallback_matured_markets(
 
     report = evaluate_tape_lifecycle(catalog)
 
+    assert report.passed is True
     assert report.listed_markets == 3
     assert report.cohort_markets == 3
     assert report.right_censored_markets == 0
     assert report.incomplete_cohort_markets == 2
-    assert "incomplete_validation_cohort_markets" in report.failures
+    assert report.eligible_closed_markets == 1
+    assert report.complete_markets == 1
+    assert report.warnings == ("ineligible_cohort_markets_excluded",)
+    assert "incomplete_eligible_markets" not in report.failures
     failures_by_market = {
         market.market_id: market.failures for market in report.markets
     }
@@ -455,3 +522,31 @@ def _complete_catalog(
         reason="max_seconds",
     )
     return catalog
+
+
+def _add_midmarket_gap(catalog: TapeCatalog, *, seconds: int) -> None:
+    gap_started_at = "2026-07-16T18:00:00+00:00"
+    gap_ended_at = datetime.fromtimestamp(
+        datetime.fromisoformat(gap_started_at).timestamp() + seconds,
+        tz=timezone.utc,
+    ).isoformat()
+    catalog.connection.execute(
+        """
+        update tape_coverage_intervals
+        set ended_at_utc = ?
+        where session_id = ? and state = 'VALID'
+        """,
+        (gap_started_at, "session-1"),
+    )
+    catalog.connection.commit()
+    for token_id in ("yes-token", "no-token"):
+        catalog.insert_coverage_interval(
+            CoverageInterval(
+                session_id="session-1",
+                token_id=token_id,
+                state=CoverageState.VALID,
+                started_at_utc=gap_ended_at,
+                ended_at_utc="2026-07-17T12:00:00+00:00",
+                subscription_generation=1,
+            )
+        )

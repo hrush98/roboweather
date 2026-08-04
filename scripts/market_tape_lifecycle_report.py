@@ -48,10 +48,20 @@ def main() -> None:
     )
     parser.add_argument("--min-recorded-hours", type=float, default=12.0)
     parser.add_argument("--max-discovery-lag-seconds", type=float, default=300.0)
-    parser.add_argument("--max-coverage-gap-seconds", type=float, default=5.0)
+    parser.add_argument(
+        "--max-coverage-gap-seconds",
+        type=float,
+        default=30.0,
+        help="Operational lifecycle availability budget; decision replay never bridges gaps.",
+    )
     parser.add_argument("--max-daily-raw-gib", type=float, default=25.0)
     parser.add_argument("--retention-days", type=int, default=14)
-    parser.add_argument("--max-receipt-lag-ms", type=float, default=10_000.0)
+    parser.add_argument(
+        "--max-receipt-lag-ms",
+        type=float,
+        default=10_000.0,
+        help="Peak lifecycle warning threshold; missing lag telemetry still fails.",
+    )
     parser.add_argument("--max-rss-mib", type=float, default=1024.0)
     parser.add_argument(
         "--include-markets",

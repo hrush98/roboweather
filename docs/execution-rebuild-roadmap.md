@@ -50,7 +50,7 @@ Canonical records:
 | 0. Whole-chain instrumentation | Link candidates, decisions, orders, fills, and settlement. | Prototype complete | Exact live candidate-to-settlement reconstruction exists. |
 | 1. Quoteable fair/price sheet | Convert model output into a conservative maximum price. | V2a Slices 0-3 repository complete; no calibrator selected and untouched forward gate open | Positive walk-forward quoted-price EV without extreme uncalibrated fairs. |
 | 2. Shadow quote construction | Generate auditable quote intents and cancellation metadata. | Plumbing prototype complete | Deterministic intent construction tests pass. No profitability claim. |
-| 3. Shared market tape and replay | Collect pre-signal active-universe market events and replay quote tactics causally. | Slices 1-4 implemented; recorder repairs pass a 1,364-token short probe; fresh Slice 2 lifecycle, Slice 4 real join, and passive/markout Slices 5-6 remain open | Tape validity, deterministic book replay, conservative fill bounds, and forward shadow reporting pass. |
+| 3. Shared market tape and replay | Collect pre-signal active-universe market events and replay quote tactics causally. | Slices 1-4 implemented; 72-hour Slice 2 run passed resource/reconstruction gates but only 4/33 eligible markets met the 30-second recovery budget; Slice 4 real join and passive/markout Slices 5-6 remain open | Tape validity, deterministic book replay, conservative fill bounds, and forward shadow reporting pass. |
 | 3D. Policy-neutral strategy discovery and freeze | Discover simple strategies from broad causal snapshot + tape + settlement rows without preselecting the winner. | Approved; broad joined materializer, discovery engine, and immutable winner manifest not yet implemented | Predeclared walk-forward search selects at most one simple winner, freezes it before activation, and produces an untouched future-tape verdict. |
 | F. Full-lifecycle forecast/data foundation | Observe weather and market state from first listing and price horizon-specific distributions. | Approved parallel research build; no production consumer | Venue-aligned truth, causal D-1 sources, first-listing tape, horizon calibration, and inventory-aware replay pass. |
 | 4. Funded validation | Validate replay fidelity and useful-size fill-conditioned PnL with controlled real orders. | Blocked on a passing immutable Phase 3D manifest with validated V2a + V2b pricing/execution | Plumbing canary passes, then `$50` and `$100` size-specific evidence passes. |
@@ -163,7 +163,7 @@ The detailed schema, module boundaries, sprint slices, and acceptance tests are 
 - A bounded queue and storage process stay within declared memory, disk, and receipt-lag budgets.
 - Each event has a stable session, token, feed timestamp when available, local receipt timestamp, and monotonic receipt ordering.
 - A book can be reconstructed deterministically from a checkpoint and ordered deltas.
-- Reconnects, drops, stale feeds, and invalid intervals are detected and reported.
+- Reconnects, drops, stale feeds, and invalid intervals are detected and reported; lifecycle availability allows at most 30 seconds to recover, while decision replay rejects any gap in its pre-signal-through-termination window.
 - A fixed signal timestamp and quote specification produce the same replay result on repeated runs.
 - Executed flow uses authoritative trade events; placements and cancellations are not counted as trades.
 - Every quote outcome states whether coverage was valid from before placement through termination.
