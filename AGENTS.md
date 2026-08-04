@@ -101,9 +101,9 @@
 
 ## Phase 3D batch compatibility workflow
 
-- The current Phase 3D CLIs are a committed read-only batch vertical slice,
+- The discovery and forward-report Phase 3D CLIs are a committed read-only batch vertical slice,
   not the intended continuous scheduler/registry. Use them only for development
-  fixtures while Slices C2-C5 in `docs/implementation/tape-strategy-discovery.md`
+  fixtures while Slices C3-C5 in `docs/implementation/tape-strategy-discovery.md`
   remain open. Do not treat their one-winner output as the steady-state design.
 - Create a generated artifact directory under `reports/` and declare a future
   activation timestamp before running a compatibility discovery. The CLI seals source
@@ -123,10 +123,14 @@
   dates, nonpositive base economics, missing markouts, or invalid tape cannot
   be replaced with snapshot prices or IEM-only promotion claims. Leave all
   generated Phase 3D artifacts uncommitted.
-- The future registry lives outside the repository (default
-  `~/.local/state/roboweather/discovery/catalog.sqlite`), accepts recurring
-  discovery runs, keeps a bounded challenger set, updates post-activation
-  scorecards, and records champion/challenger/retirement events. No registry
+- The C2 registry lives outside the repository (default
+  `~/.local/state/roboweather/discovery/catalog.sqlite`). Initialize it with
+  `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_registry.py init`
+  and inspect it query-only with the `status` subcommand. Use
+  `import-batch-v1 ARTIFACT_DIR` only to preserve a compatibility run and
+  candidate identity; it intentionally imports no cohort or scorecard evidence.
+  One writer holds `<REGISTRY>.writer.lock`; do not bypass it. C3-C5 will add
+  recurring nominations, scorecard updates, and role transitions. No registry
   transition may authorize funded trading.
 
 ## Price Sheet V2a dataset workflow

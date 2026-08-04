@@ -4,6 +4,12 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-04
 
+- Completed Phase 3D Slice C2. Added the external SQLite candidate registry
+  with schema migration, database-enforced append-only run/family/version/
+  cohort/scorecard/lifecycle records, content-addressed idempotent candidate
+  reuse, one-writer locking, query-only observation, and identity-only
+  `batch_v1` import. Added a registry init/status/import CLI and focused
+  integrity tests. C3-C5 and every funded promotion gate remain open.
 - Respecified Phase 3D as a continuous versioned strategy-discovery system.
   Recurring immutable run records may nominate a bounded challenger set;
   content-addressed candidate versions accumulate append-only post-activation

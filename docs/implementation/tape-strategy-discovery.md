@@ -1,6 +1,6 @@
 # Continuous Versioned Strategy Discovery
 
-Status: Architecture respecified; causal materializer and batch discovery primitives implemented, continuous registry/orchestration not yet implemented
+Status: C0-C2 implemented; recurring orchestration, continuous evaluation, and role transitions remain open
 
 Last updated: 2026-08-04
 
@@ -394,6 +394,13 @@ and invalid intervals fail closed.
 Exit: repeated registration is idempotent; changed rules create new versions;
 historical evidence cannot be overwritten.
 
+Implementation: complete. `weather_trader/discovery/registry.py` owns schema
+version 1, database-level append-only guards, content-addressed family and
+candidate registration, activation-bounded cohorts, watermark-addressed
+scorecards, lifecycle events, a nonblocking one-writer lock, and query-only
+observers. `scripts/phase3d_registry.py` initializes/inspects the external
+catalog and can import `batch_v1` identity without importing forward evidence.
+
 ### Slice C3: Recurring Discovery Orchestrator
 
 - Generalize the implemented grammar/scoring into a run that nominates a
@@ -461,6 +468,10 @@ Reusable now:
   correlated-family collapse in `weather_trader/discovery/engine.py`;
 - fail-closed activation and venue-settlement checks;
 - deterministic unit fixtures in `tests/test_phase3d_discovery.py`.
+- `weather_trader/discovery/registry.py`: durable append-only runs, families,
+  versions, cohorts, scorecards, lifecycle history, and writer ownership;
+- `scripts/phase3d_registry.py`: registry initialization, read-only status, and
+  identity-only `batch_v1` import.
 
 Transitional and to be refactored:
 
@@ -470,7 +481,7 @@ Transitional and to be refactored:
 - tests and docs that treat one global winner as the Phase 3D exit;
 - repository status claims that D0-D3 complete the intended operating system.
 
-Until C2-C5 are implemented, the existing CLIs are read-only batch research
+Until C3-C5 are implemented, the existing discovery/forward CLIs are read-only batch research
 tools. Do not run them as the production discovery scheduler, create a funded
 strategy from their output, or treat their single manifest as the intended
 steady-state architecture.
@@ -480,11 +491,12 @@ steady-state architecture.
 - [x] Broad rows are independent of current policies and named V2 pilots.
 - [x] Implemented tape joins are causal and fail closed on invalid coverage.
 - [x] Existing row/run identities are deterministic for fixed inputs.
-- [ ] Registry schema and append-only lifecycle events are implemented.
+- [x] Registry schema and append-only lifecycle events are implemented.
 - [ ] Discovery runs recur idempotently from resolved-data watermarks.
 - [ ] Runs may nominate zero or a bounded number of challengers.
-- [ ] Unchanged candidate definitions reuse their existing version identity.
-- [ ] Changed definitions start a new post-activation cohort.
+- [x] Unchanged candidate definitions reuse their existing version identity.
+- [x] Changed definitions create a new version identity and require a new
+  post-activation cohort.
 - [ ] Active candidates receive continuous scorecard updates.
 - [ ] Common-date champion/challenger comparisons are deterministic.
 - [ ] Family-level evidence survives version replacement and retirement.
@@ -522,6 +534,11 @@ steady-state architecture.
   versions remain immutable for attribution, but the strategy program never
   freezes. Preserved the committed batch implementation as reusable vertical
   infrastructure and marked its one-winner orchestration transitional.
+- 2026-08-04: Completed C2 with a durable external registry, schema migration,
+  append-only database guards, single-writer locking, read-only observation,
+  idempotent content-addressed versions/cohorts/scorecards/events, and an
+  identity-only `batch_v1` importer. C3-C5 remain open and no funded state
+  changed.
 - 2026-08-04: Implemented the deterministic batch materializer, fixed grammar,
   one-winner selection, and fail-closed stable-taker evaluator. No production
   discovery run or candidate was activated.

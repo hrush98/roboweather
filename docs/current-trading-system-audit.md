@@ -22,11 +22,14 @@ candidate version receives a post-activation cohort. The overall strategy
 program remains adaptive, while version boundaries prevent later rule changes
 from rewriting earlier evidence.
 
-The committed Phase 3D batch path supplies reusable materialization, exact-book
-replay, deterministic hashes, fixed-rule scoring, family collapse, and an
-activation-gated venue-settlement-fail-closed evaluator. Its one-winner manifest
-orchestration is transitional. The intended registry, recurring orchestrator,
-candidate scorecards, and champion/challenger transitions are not implemented.
+The committed Phase 3D path supplies reusable materialization, exact-book
+replay, deterministic hashes, fixed-rule scoring, family collapse, an
+activation-gated venue-settlement-fail-closed evaluator, and the durable C2
+registry. The registry enforces append-only definitions/evidence/events,
+content-addressed candidate versions, activation-bounded cohorts, one-writer
+ownership, and read-only observation. Its one-winner manifest orchestration is
+transitional. The recurring orchestrator, continuous cohort evaluator, and
+champion/challenger transitions are not implemented.
 Both current `resolutions` tables are empty and fill-conditioned markouts remain
 absent, so no candidate can pass to Phase 4.
 
@@ -41,7 +44,7 @@ Current confidence by layer:
 | New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
 | Fair-value/price sheet | V2a Slices 0-3 now produce leak-safe calibration, causal uncertainty reserves, conservative fairs, maximum quotes, and economic gates. The first 98-row Slice 3 read leaves both pilots research-only because no calibrator or untouched forward window was frozen. | Freeze a baseline and forward start before new outcomes; do not promote from the July 16-29 comparison. |
 | Phase 3 shared tape | Slices 1-4 are implemented. Continuous collection resumed August 4 after the accepted 72-hour evidence; its first new session reached 1,474/1,474 valid tokens and strictly verified its first partition. Periodic reconnect gaps and late initial discovery remain known limitations; Slice 4 still lacks one real persisted-quote join. | Continue collection, monitor health/storage through the TUI, use retained tape for strategy work, and reject every affected decision window. |
-| Phase 3D strategy discovery | Batch materializer/search/evaluator primitives are implemented, but the continuous registry, recurring orchestrator, cohort scorecards, and champion/challenger transitions are open. Venue settlement and markouts are unavailable. | Implement the continuous versioned architecture; keep batch CLIs research-only and do not pass Phase 4 without venue-aligned forward evidence and markouts. |
+| Phase 3D strategy discovery | C0-C2 are implemented: batch materializer/search/evaluator primitives plus the durable append-only candidate registry. Recurring orchestration, continuous cohort evaluation, and champion/challenger transitions are open. Venue settlement and markouts are unavailable. | Implement C3-C5; keep batch CLIs research-only and do not pass Phase 4 without venue-aligned forward evidence and markouts. |
 | Existing candidate-token shadow collector | Useful plumbing prototype, but candidate-scoped and not a continuous causal market tape. | Do not use its fill labels as promotion evidence. |
 | Fillability and adverse selection | Still unresolved. Public L2 data can provide bounds, not exact hypothetical queue position. | Validate shared-tape replay, then run controlled real-order canaries. |
 | Funded readiness | No exact signal + quote policy + size has passed current fill-conditioned gates. | Keep funded trading paused. |
@@ -168,6 +171,11 @@ Update the body of this document when the current assessment changes. Append one
 
 ## Audit Log
 
+- 2026-08-04: Completed Phase 3D C2 with a durable append-only external
+  registry, content-addressed version reuse, activation-bounded cohort and
+  watermark scorecard records, lifecycle history, single-writer locking,
+  query-only observers, and identity-only batch compatibility import. C3-C5
+  and all forward evidence gates remain open; funded status did not change.
 - 2026-08-04: Respecified Phase 3D from one-shot winner freezing to a continuous
   versioned discovery system. Kept the committed materializer, replay, grammar,
   scoring, and hash primitives; marked the one-winner orchestration transitional
