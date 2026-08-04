@@ -12,8 +12,8 @@ This document is the implementation contract. The economic rationale and falsifi
 
 The current pricing consumer is specified in `docs/implementation/price-sheet-v2.md`. V2a can proceed independently; V2b must use only tape windows that pass this document's validity contracts.
 
-Policy-neutral candidate discovery, complexity control, immutable winner
-selection, and untouched holdout activation are specified in
+Policy-neutral recurring discovery, complexity control, versioned candidate
+registration, and post-activation cohort evaluation are specified in
 `docs/implementation/tape-strategy-discovery.md`. This tape must support that
 broad discovery substrate without requiring a strategy to exist during
 collection.
@@ -60,7 +60,7 @@ venue settlement --------------------+               |
                          constrained strategy search  |
                                       |               |
                                       v               |
-                         immutable strategy manifest  |
+                         versioned candidate registry |
                                       |               |
                                       +-------> deterministic replay
                                                     |
@@ -70,7 +70,7 @@ frozen quote specifications ------------------------+
                                 fill bounds + cancellation + markouts
                                                     |
                                                     v
-                              untouched forward evidence/audit report
+                         continuous candidate cohort scorecards
 
 private user/order channel -> real canary lifecycle -> replay validation truth
 ```
@@ -146,9 +146,9 @@ settlement provenance. Invalid rows remain visible with explicit reasons and
 receive no executable label.
 
 The view is derived from existing immutable sources and must not duplicate raw
-tape. It must expose both broad discovery rows and an identically defined
-frozen-manifest evaluation view. Detailed search, complexity, selection, and
-manifest contracts live in
+tape. It must expose broad discovery rows plus identically defined candidate-
+cohort evaluation rows. Detailed recurring search, complexity, registry, and
+candidate-version contracts live in
 `docs/implementation/tape-strategy-discovery.md`.
 
 ## Storage Design
@@ -380,14 +380,17 @@ Implementation status, 2026-07-17:
 
 Exit: repeated replay is deterministic and known false-fill cases remain unfilled.
 
-### Slice 6: Forward Shadow From Frozen Discovery Manifest
+### Slice 6: Continuous Forward Shadow By Candidate Version
 
-- Consume an immutable Phase 3D strategy manifest frozen before activation.
-- Materialize only its replay outcomes.
-- Report selected, valid, postable, filled/missed, markout, settlement, capacity, and effective market-date sample.
-- Reject pre-activation rows and prohibit holdout-derived retuning.
+- Consume active immutable Phase 3D candidate versions from the registry.
+- Materialize each version's replay outcomes only after its activation.
+- Report selected, valid, postable, filled/missed, markout, settlement,
+  capacity, effective market-date sample, and common-date comparisons.
+- Reject pre-activation rows, prohibit cohort-derived edits, and retain earlier
+  failures when a new candidate version is registered.
 
-Exit: the report answers whether base-case fill-conditioned PnL is positive without using optimistic-only labels.
+Exit: scorecards update idempotently as outcomes resolve and answer whether
+base-case fill-conditioned PnL is positive without using optimistic-only labels.
 
 Implementation status, 2026-07-29:
 
@@ -406,6 +409,10 @@ Implementation update, 2026-08-04:
   prospective manifest is registered, `resolutions` has no venue rows, and
   reproducible markouts plus conservative/base/optimistic/actual fill
   separation are not yet supplied by Slice 5.
+- The one-manifest consumer is now classified as a batch compatibility slice,
+  not the steady-state Phase 3D control plane. Continuous Phase 3D will reuse
+  its causal replay but evaluate append-only candidate versions from a registry
+  and recurring discovery runs.
 
 ## Acceptance Checklist
 
@@ -422,13 +429,16 @@ Implementation update, 2026-08-04:
 - [ ] Broad joined discovery rows are independent of current policy and V2
       pilot selection.
 - [ ] Fill scenarios, cancellations, and markouts are reproducible.
-- [ ] A Phase 3D manifest is frozen before its forward activation boundary.
-- [x] Forward-report code verifies frozen manifest hashes and activation timestamps.
+- [ ] Phase 3D candidate versions are registered before their forward activation boundaries.
+- [x] Batch forward-report code verifies candidate/manifest hashes and activation timestamps.
 - [ ] Private user-channel design is ready before any funded canary.
 - [ ] Existing shadow labels are not used as promotion evidence.
 
 ## Decision Log
 
+- 2026-08-04: Respecified the Phase 3D consumer as a continuous versioned
+  registry. Retained exact causal replay and the batch manifest evaluator as
+  primitives while opening recurring-run and multi-candidate cohort work.
 - 2026-08-04: Added the Phase 3D manifest consumer and kept Slice 6 open on
   prospective activation, venue settlement, markouts, and separated fill
   scenarios.

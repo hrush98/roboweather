@@ -4,6 +4,13 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-04
 
+- Respecified Phase 3D as a continuous versioned strategy-discovery system.
+  Recurring immutable run records may nominate a bounded challenger set;
+  content-addressed candidate versions accumulate append-only post-activation
+  cohorts and common-date champion/challenger scorecards. Preserved the
+  committed causal materializer, exact replay, grammar, scoring, complexity,
+  family-collapse, and hashing work, while marking its one-winner manifest
+  orchestration as a transitional batch path. No funded behavior changed.
 - Implemented the Phase 3D D0-D3 repository path: immutable source/run
   contracts, a policy-neutral snapshot/token/tape/settlement materializer,
   fixed date-folded simple-rule discovery, complexity penalties,

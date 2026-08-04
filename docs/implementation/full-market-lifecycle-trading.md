@@ -368,11 +368,12 @@ Research defaults should express the following principles:
 - Feed valid causal rows into the Phase 3D broad discovery view without
   privileging the current late control or a named early arm.
 
-### Slice 5: Forward Shadow From Discovery Manifest
+### Slice 5: Continuous Forward Shadow From Candidate Registry
 
-- Consume at most one exact Phase 3D winner frozen before activation.
-- Collect through the frozen evaluation window.
-- Hold all rules fixed and publish pass/fail evidence.
+- Consume bounded active Phase 3D candidate versions registered before activation.
+- Update each candidate's post-activation lifecycle cohort as outcomes resolve.
+- Hold each version's rules fixed, compare aligned champion/challenger dates,
+  and publish pass/continue/retire evidence.
 
 ### Slice 6: Controlled Funded Validation
 
@@ -393,13 +394,17 @@ Research defaults should express the following principles:
 - [ ] Actual volume and fill opportunity replace snapshot inference.
 - [ ] `$50` and `$100` capacity results are separated.
 - [ ] Portfolio replay preserves later-horizon capacity.
-- [ ] Policy-neutral constrained discovery selects and freezes at most one
-      simple lifecycle winner before activation.
-- [ ] One immutable post-activation forward shadow arm completes.
+- [ ] Policy-neutral recurring discovery registers bounded simple lifecycle
+      candidate versions before their activation boundaries.
+- [ ] Candidate cohorts update continuously and champion/challenger comparisons
+      retain family-level failures.
 - [ ] No funded behavior changes without Phase 4 authorization.
 
 ## Decision Log
 
+- 2026-08-04: Replaced the one-winner lifecycle handoff with the continuous
+  Phase 3D candidate registry. Lifecycle rows now feed recurring discovery and
+  candidate-specific cohorts without freezing the strategy program.
 - 2026-07-30: Routed full-lifecycle candidate selection through the Phase 3D
   policy-neutral discovery/freeze gate. Lifecycle replay now feeds the broad
   substrate, while Slice 5 consumes only an immutable pre-activation winner.

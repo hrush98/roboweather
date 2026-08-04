@@ -49,11 +49,13 @@ looking for opportunities.
 - V2a is the reopened Phase 1 pricing gate and is the current implementation priority.
 - Phase 3 market-tape collection continues while V2a is built.
 - V2b consumes valid Phase 3 book/tape windows and can begin incrementally as those features are available.
-- Phase 3D policy-neutral discovery consumes the broad V2b feature view and
-  freezes at most one primary winner before untouched forward replay. Its
-  contract is `docs/implementation/tape-strategy-discovery.md`.
-- Phase 4 funded validation remains blocked until one immutable Phase 3D
-  manifest with exact V2a + V2b pricing/execution passes forward shadow replay.
+- Phase 3D continuous discovery consumes the broad V2b feature view, registers
+  exact candidate versions, and updates post-activation champion/challenger
+  scorecards as outcomes resolve. Its contract is
+  `docs/implementation/tape-strategy-discovery.md`.
+- Phase 4 funded validation remains blocked until an explicitly approved exact
+  Phase 3D candidate version with V2a + V2b pricing/execution passes forward
+  shadow replay.
 - Phase 5 learned quote policy remains out of scope; V2b starts as a conservative, interpretable overlay.
 - The approved full-market-lifecycle program will extend this contract one horizon at a time after the initial late pilot; it is specified in `docs/implementation/full-market-lifecycle-trading.md`.
 
@@ -158,8 +160,8 @@ two scopes:
 1. A broad policy-neutral discovery view over every eligible
    `prediction_snapshots` token decision, independent of current policies and
    V2 pilots.
-2. A frozen evaluation view containing only decisions selected by an immutable
-   V2 signal or Phase 3D strategy manifest.
+2. A versioned evaluation view containing only decisions selected by an
+   immutable V2 signal or registered Phase 3D candidate version.
 
 Both views must use identical quote-ready cutoffs, tape reconstruction,
 coverage, execution-label, markout, capacity, and settlement semantics. The
@@ -433,7 +435,7 @@ Minimum-risk canaries validate replay fidelity only. `$50` and `$100` execution/
 
 ### V2b Report
 
-For each frozen signal or Phase 3D manifest + V2a version + execution arm:
+For each frozen V2 signal or Phase 3D candidate version + V2a version + execution arm:
 
 - selected and tape-valid opportunities;
 - postable/reachable rate;
@@ -557,7 +559,7 @@ does not select a strategy or constrain the later discovery universe.
   markout, and settlement-provenance fields over all eligible causal
   snapshot/token decisions.
 - Enforce quote-ready cutoffs.
-- Emit a broad policy-neutral discovery view and a frozen V2/manifest
+- Emit a broad policy-neutral discovery view and a versioned V2/candidate
   evaluation view with identical semantics.
 - Create passive and stable-taker replay inputs under the same economic price
   ceiling without persisting an exhaustive quote grid.

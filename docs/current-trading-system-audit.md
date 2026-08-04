@@ -14,22 +14,21 @@ The shared weather market tape contains retained data from July 23 onward and su
 
 Continuous research collection resumed on August 4 under enabled user service `roboweather-market-tape.service`. Fresh session `tape-20260804T152718Z-b341a291` reached `VALID` for all 1,474 subscribed tokens, completed discovery, rotated and strictly verified its first five-minute partition, kept queue high-water at 1/10,000 and RSS near 142 MiB, and recorded zero reconstruction errors. The August 2-to-August 4 outage remains an explicit unusable gap. The TUI now observes and controls the systemd-owned service without stopping it on TUI exit.
 
-Policy-neutral constrained strategy discovery is now a required Phase 3D gate.
-The strategy should emerge from broad causal snapshot + tape + settlement rows,
-not be selected before measurement. The search grammar, cutoff, folds, costs,
-complexity penalty, family collapse, winner rule, and activation boundary must
-be frozen before ranking or forward evaluation. Named V2a pilots remain
-vertical controls; at most one simple primary winner advances to untouched
-future tape.
+Policy-neutral continuous strategy discovery is now a required Phase 3D gate.
+Strategies should emerge repeatedly from broad causal snapshot + tape +
+settlement rows as new dates resolve. Each discovery run seals its source
+watermarks, grammar, folds, costs, complexity, and nomination rules; each exact
+candidate version receives a post-activation cohort. The overall strategy
+program remains adaptive, while version boundaries prevent later rule changes
+from rewriting earlier evidence.
 
-The Phase 3D repository path now enforces that contract: it freezes source
-watermarks and the complete simple-rule grammar before ranking, reconstructs
-quote-ready books only through continuous valid tape, clusters evidence by
-market date, collapses correlated variants, and writes at most one hashed
-manifest. The forward evaluator is activation-gated and venue-settlement
-fail-closed. This is implementation evidence, not a strategy result: no
-production discovery run or manifest has been frozen, both current
-`resolutions` tables are empty, and fill-conditioned markouts remain absent.
+The committed Phase 3D batch path supplies reusable materialization, exact-book
+replay, deterministic hashes, fixed-rule scoring, family collapse, and an
+activation-gated venue-settlement-fail-closed evaluator. Its one-winner manifest
+orchestration is transitional. The intended registry, recurring orchestrator,
+candidate scorecards, and champion/challenger transitions are not implemented.
+Both current `resolutions` tables are empty and fill-conditioned markouts remain
+absent, so no candidate can pass to Phase 4.
 
 Current confidence by layer:
 
@@ -42,7 +41,7 @@ Current confidence by layer:
 | New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
 | Fair-value/price sheet | V2a Slices 0-3 now produce leak-safe calibration, causal uncertainty reserves, conservative fairs, maximum quotes, and economic gates. The first 98-row Slice 3 read leaves both pilots research-only because no calibrator or untouched forward window was frozen. | Freeze a baseline and forward start before new outcomes; do not promote from the July 16-29 comparison. |
 | Phase 3 shared tape | Slices 1-4 are implemented. Continuous collection resumed August 4 after the accepted 72-hour evidence; its first new session reached 1,474/1,474 valid tokens and strictly verified its first partition. Periodic reconnect gaps and late initial discovery remain known limitations; Slice 4 still lacks one real persisted-quote join. | Continue collection, monitor health/storage through the TUI, use retained tape for strategy work, and reject every affected decision window. |
-| Phase 3D strategy discovery | D0-D3 repository mechanics and a fail-closed stable-taker D4 evaluator are implemented. No production run or prospective manifest exists; venue settlement and markouts are still unavailable. | Run a predeclared discovery only when a future activation boundary is available; do not pass Phase 4 without venue-aligned forward evidence and markouts. |
+| Phase 3D strategy discovery | Batch materializer/search/evaluator primitives are implemented, but the continuous registry, recurring orchestrator, cohort scorecards, and champion/challenger transitions are open. Venue settlement and markouts are unavailable. | Implement the continuous versioned architecture; keep batch CLIs research-only and do not pass Phase 4 without venue-aligned forward evidence and markouts. |
 | Existing candidate-token shadow collector | Useful plumbing prototype, but candidate-scoped and not a continuous causal market tape. | Do not use its fill labels as promotion evidence. |
 | Fillability and adverse selection | Still unresolved. Public L2 data can provide bounds, not exact hypothetical queue position. | Validate shared-tape replay, then run controlled real-order canaries. |
 | Funded readiness | No exact signal + quote policy + size has passed current fill-conditioned gates. | Keep funded trading paused. |
@@ -86,9 +85,9 @@ The July 30-August 2 extension materially weakened that initial result. The froz
 - Funded trading is paused rather than allowing positive historical replay to override negative current or fill-conditioned evidence.
 - The documentation already distinguishes selected replay, filled replay, actual PnL, and venue settlement.
 - The new market-tape hypothesis correctly moves collection from model/policy-specific rows to a reusable token-level event stream.
-- The Phase 3D contract now keeps strategy selection downstream of measurement:
-  rich offline discovery may search broadly, while the selected runtime
-  strategy must be simple, immutable, and tested on untouched later tape.
+- The Phase 3D contract now keeps strategy generation downstream of measurement:
+  recurring discovery may search broadly, while every exact candidate version
+  remains simple, attributable, and tested only on its later cohort.
 - The current weather feature stack is a credible point-observation/HRRR baseline, which makes controlled source ablation possible; the next forecast gains should come from target fidelity, probabilistic ensembles, spatial residuals, and observed heating surprise rather than more model variants over the same inputs.
 - The approved lifecycle design connects forecast revisions, first-listing tape, conservative price sheets, quote cancellation/repricing, and inventory/exit replay without pretending that the current late model can simply run a day earlier.
 
@@ -100,7 +99,7 @@ The July 30-August 2 extension materially weakened that initial result. The froz
 | 2 | Signal miscalibration | A fillable negative-EV quote still loses money. | Positive recent walk-forward quoted-price EV using calibrated or shrunk fairs. |
 | 3 | Adverse fill selection | Filled rows have historically underperformed missed rows. | Positive filled-subset EV and non-toxic markouts for the exact quote rule. |
 | 4 | Small correlated samples | Stations, models, and sleeves often express the same weather-date risk. | Evaluate effective sample by market date/regime and use uncertainty bounds, not raw snapshot counts. |
-| 5 | Discovery overfit and hidden policy selection | A rich tape can generate many correlated winners, especially when the feature materializer is limited to already favored pilots. | Policy-neutral broad rows, predeclared grammar/folds/complexity, correlated-family collapse, one immutable winner, and untouched post-activation tape. |
+| 5 | Discovery overfit and hidden policy selection | A rich tape can generate many correlated winners, especially when the feature materializer is limited to already favored pilots or version churn resets failures. | Policy-neutral broad rows, sealed run contracts, correlated-family collapse, bounded challengers, append-only candidate cohorts, aligned-date comparisons, and retained family-level failure history. |
 | 6 | Settlement and sensor mismatch | Research truth currently uses the maximum IEM report, while active US markets reference Weather Underground and official ASOS maxima follow rolling-average/reporting rules. A one-degree mismatch can change the winning bucket. | Station/date comparison of venue, Weather Underground, CLI, routine METAR, and high-frequency ASOS outcomes; then venue-authoritative linkage or a versioned settlement mapping. |
 | 7 | Capacity | Positive tiny fills do not prove `$50-$100` tradability. | Direct fill/miss evidence at the intended size. |
 | 8 | Portfolio concentration | Regional or model-common errors can hit several positions together. | Market-date/regime stress limits and incremental portfolio replay. |
@@ -116,14 +115,14 @@ The July 30-August 2 extension materially weakened that initial result. The froz
 5. Treat the current candidate-token collector and shadow labeler as a prototype only.
 6. Keep the late HRRR-rich tuned dynamic and HRRR-v2 dynamic policies as V2 vertical controls and forward signal hypotheses. Add the frozen three-family late taker portfolio as separate preliminary evidence; do not presume any is the Phase 3D winner, fund it, or retune it on the July 23-28 holdout.
 7. Implement `docs/implementation/price-sheet-v2.md`: V2a walk-forward outcome pricing now, then V2b execution reductions/skips on valid tape windows.
-8. Implement `docs/implementation/tape-strategy-discovery.md`: build broad policy-neutral joined rows, run predeclared constrained discovery, freeze at most one simple winner, and use only untouched post-activation tape for confirmation.
+8. Implement `docs/implementation/tape-strategy-discovery.md`: preserve the broad causal materializer, add an append-only candidate registry, run recurring constrained discovery from resolved-data watermarks, and continuously compare post-activation champion/challenger cohorts.
 9. Evaluate passive price-making and a separately tagged stable-taker control from the same tape and economic price ceiling.
 10. Run the approved research-only forecast-edge program in parallel without changing the execution critical path: target/sensor truth audit first, then identical-coverage WeatherNext/NBM benchmarks, high-frequency spatial residuals, and GOES radiation/cloud surprise.
 11. Keep weather-only probability, settlement mapping, market-aware calibration, and execution adjustment separately versioned. No new forecast source enters funded pricing until it demonstrates causal incremental skill.
 12. Extend research and collection to the full market lifecycle. Treat D-1 open, D-1 revision, D0 early, intraday, and late as separate horizons; add them one at a time behind forecast, tape, quote, inventory, exit, and portfolio gates.
 13. For V2a, freeze one calibrator and untouched forward start before additional outcomes are inspected. Do not use the July 16-29 candidate comparison as its own promotion window.
 14. Prioritize finding and forward-validating profitable strategy families over further recorder robustness work. Revisit recorder hardening only when observed gaps materially reduce a candidate's evaluable sample or before production operation requires higher availability.
-15. Retire the frozen three-sleeve portfolio as a presumptive winner. Carry `pm_mvp_late` forward only as a newly selected research candidate, frozen after the August 2 outcome boundary; require later untouched tape before promotion.
+15. Retire the frozen three-sleeve portfolio as a presumptive winner. Keep it and `pm_mvp_late` only as historical fixtures/candidate evidence; do not manually install either as the Phase 3D champion.
 
 ## Promotion Standard
 
@@ -136,9 +135,10 @@ lifecycle horizon + signal/forecast version + fair-value version
 
 Normal funded sizing requires all of the following:
 
-- the strategy came from a versioned policy-neutral discovery run with frozen
-  sources, cutoff, grammar, folds, costs, complexity, and winner rule;
-- its immutable manifest and activation timestamp predate every forward row;
+- the candidate came from a versioned policy-neutral discovery run whose
+  sources, cutoff, grammar, folds, costs, complexity, and nomination rules were
+  sealed before ranking;
+- its immutable candidate definition and activation timestamp predate every forward row;
 - current-window and all-loaded selected replay are positive;
 - quoted-price replay is positive after calibration, costs, and haircuts;
 - continuous valid tape coverage exists from before decision through quote termination;
@@ -168,6 +168,11 @@ Update the body of this document when the current assessment changes. Append one
 
 ## Audit Log
 
+- 2026-08-04: Respecified Phase 3D from one-shot winner freezing to a continuous
+  versioned discovery system. Kept the committed materializer, replay, grammar,
+  scoring, and hash primitives; marked the one-winner orchestration transitional
+  and opened registry, recurring-run, cohort-scorecard, and champion/challenger
+  slices. Funded status did not change.
 - 2026-08-04: Implemented the Phase 3D D0-D3 repository path and the
   activation-gated stable-taker D4 evaluator. No production discovery run or
   manifest was frozen; venue settlement and markouts remain open, so funded

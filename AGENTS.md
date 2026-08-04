@@ -88,28 +88,33 @@
 
 ## Tape-backed rolling portfolio discovery workflow
 
-- Strategies do not need to be defined before snapshot or shared-tape collection. The canonical Phase 3D contract is `docs/implementation/tape-strategy-discovery.md`: build a policy-neutral causal snapshot + tape + settlement view, run a predeclared constrained search before an immutable cutoff, freeze at most one simple primary winner, and evaluate only later post-activation decisions.
+- Strategies do not need to be defined before snapshot or shared-tape collection. The canonical Phase 3D contract is `docs/implementation/tape-strategy-discovery.md`: build a policy-neutral causal snapshot + tape + settlement view, run recurring constrained searches from resolved-data watermarks, register a bounded set of versioned challengers, and continuously evaluate each candidate only on decisions after its own activation.
 - The broad discovery materializer must cover every eligible causal snapshot/token decision, not only current policies or frozen V2a pilots. It is a derived view over existing snapshots and tape, not another raw recorder.
 - Keep discovery and execution holdout separate. Run the rolling snapshot sweep through the day before tape activation:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/snapshot_opportunity_sweep.py --db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --end-date YYYY-MM-DD --market-family HIGH_TEMP --us-high-temp-only --rolling-summary --min-policy-n 20 --top-n 8`
-- Before ranking, freeze the discovery run's sources/watermarks, grammar, folds, costs, fill scenario, size, caps, effective-sample rules, complexity penalty, correlated-family collapse, winner rule, and earliest activation. Prefer stable first-eligible families across date-ordered folds, collapse nearby delay/scope/entry variants, and prefer the simplest stable family to the highest exploratory return.
+- Before ranking, seal that discovery run's sources/watermarks, grammar, folds, costs, fill scenario, size, caps, effective-sample rules, complexity penalty, correlated-family collapse, nomination rule, and earliest activation. This makes the run reproducible without freezing the discovery program. Later resolved data create another append-only run. Prefer stable first-eligible families across date-ordered folds, collapse nearby delay/scope/entry variants, and prefer the simplest stable family to the highest exploratory return.
 - Replay the frozen portfolio against quote-ready books with:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/tape_strategy_holdout_report.py --research-db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --tape-catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite --discovery-cutoff YYYY-MM-DD --holdout-start YYYY-MM-DD --end-date YYYY-MM-DD`
-- The initial built-in `pm_high_regression_10m_late`, `pm_mvp_late`, then `pm_dynamic_tuned_10m_late` family is a reproducible historical bridge/fixture, not the required Phase 3D winner or a template that constrains broad discovery.
+- The initial built-in `pm_high_regression_10m_late`, `pm_mvp_late`, then `pm_dynamic_tuned_10m_late` family is a reproducible historical bridge/fixture, not the required Phase 3D champion or a template that constrains broad discovery.
 - The report is read-only and fail-closed. It requires continuous `VALID` pre-signal coverage, reconstructs the exact token book after configured latency, and simulates only an immediate capped ask sweep. Missing coverage and unavailable capped asks are rejections, not snapshot-price fills.
-- Interpret the existing output as post-cutoff taker-execution hypothesis evidence. It does not infer passive fills, uses weather outcomes rather than venue settlement, and cannot by itself authorize funding. Phase 3D forward confirmation additionally requires an immutable strategy manifest created before activation, venue-authoritative settlement, fill/markout evidence, and untouched later tape.
+- Interpret the existing output as post-cutoff taker-execution hypothesis evidence. It does not infer passive fills, uses weather outcomes rather than venue settlement, and cannot by itself authorize funding. Phase 3D forward confirmation additionally requires an immutable candidate version created before its evaluation cohort, venue-authoritative settlement, fill/markout evidence, and later tape.
 
-## Phase 3D constrained discovery workflow
+## Phase 3D batch compatibility workflow
 
+- The current Phase 3D CLIs are a committed read-only batch vertical slice,
+  not the intended continuous scheduler/registry. Use them only for development
+  fixtures while Slices C2-C5 in `docs/implementation/tape-strategy-discovery.md`
+  remain open. Do not treat their one-winner output as the steady-state design.
 - Create a generated artifact directory under `reports/` and declare a future
-  activation timestamp before running discovery. The CLI freezes source
+  activation timestamp before running a compatibility discovery. The CLI seals source
   watermarks, tape sessions/partitions, model universe, grammar, folds, costs,
   caps, and winner rule in `discovery_run.json` before ranking:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_strategy_discovery.py --research-db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --tape-catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite --source-start-date YYYY-MM-DD --discovery-cutoff-exclusive YYYY-MM-DD --activation-timestamp ISO_UTC --out reports/phase3d/RUN_NAME`
-- A run writes exactly one immutable `strategy_manifest.json` or
-  `no_winner.json`. Do not edit or overwrite either result. A changed source,
-  grammar, threshold, cost, cap, or activation requires a new output directory
-  and future activation.
+- A compatibility run writes exactly one immutable `strategy_manifest.json` or
+  `no_winner.json`. Do not edit or overwrite either result. In the continuous
+  architecture, this becomes zero or more content-addressed candidate versions
+  in an append-only registry; a changed rule starts a new version/cohort rather
+  than modifying earlier evidence.
 - After activation, evaluate the exact manifest only through an exclusive end
   date:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_forward_report.py --manifest reports/phase3d/RUN_NAME/strategy_manifest.json --research-db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --tape-catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite --end-date-exclusive YYYY-MM-DD --out reports/phase3d-forward/RUN_NAME`
@@ -118,6 +123,11 @@
   dates, nonpositive base economics, missing markouts, or invalid tape cannot
   be replaced with snapshot prices or IEM-only promotion claims. Leave all
   generated Phase 3D artifacts uncommitted.
+- The future registry lives outside the repository (default
+  `~/.local/state/roboweather/discovery/catalog.sqlite`), accepts recurring
+  discovery runs, keeps a bounded challenger set, updates post-activation
+  scorecards, and records champion/challenger/retirement events. No registry
+  transition may authorize funded trading.
 
 ## Price Sheet V2a dataset workflow
 

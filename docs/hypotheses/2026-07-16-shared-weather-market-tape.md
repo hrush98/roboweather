@@ -2,13 +2,13 @@
 
 ## Status
 
-Operational collection hypothesis. Retained collection has run from July 23 onward and the tape now supports exact quote-ready batch taker replay plus a policy-neutral Phase 3D discovery/freeze implementation. No prospective strategy manifest, venue-settlement cohort, or markout-complete forward result exists. Funded trading remains paused.
+Operational collection hypothesis. Retained collection has run from July 23 onward and the tape now supports exact quote-ready batch taker replay plus reusable Phase 3D materialization/search primitives. The continuous candidate registry, recurring discovery orchestrator, venue-settlement cohorts, and markout-complete forward results do not yet exist. Funded trading remains paused.
 
 Implementation details and sprint acceptance belong in `docs/implementation/phase-3-market-tape-replay.md`. Current sequencing and promotion gates belong in `docs/execution-rebuild-roadmap.md`.
 
 ## Hypothesis
 
-RoboWeather can avoid policy-specific data dead ends by collecting one causal market-event tape per active weather token and joining every model snapshot to that shared tape by token and timestamp. New simple strategies can then be discovered from the policy-neutral joined substrate without having had to materialize every model, quote price, size, and TTL combination in real time. The strategy is frozen only after constrained pre-cutoff discovery and must then pass untouched later tape.
+RoboWeather can avoid policy-specific data dead ends by collecting one causal market-event tape per active weather token and joining every model snapshot to that shared tape by token and timestamp. New simple strategies can then emerge repeatedly from the policy-neutral joined substrate without having had to materialize every model, quote price, size, and TTL combination in real time. Each exact candidate version is sealed before its forward cohort, while the discovery system continues generating and evaluating later versions.
 
 ## Expected Mechanism
 
@@ -22,12 +22,12 @@ The collection layers should remain separate:
 4. Link all eligible causal model decisions to the tape by token and realistic quote-availability time, not only decisions already selected by a policy.
 5. Add valid execution/markout labels and venue-authoritative settlement without copying the raw tape.
 6. Search a predeclared grammar of simple strategies with date-ordered folds, market-date clustering, complexity penalties, and correlated-family collapse.
-7. Select at most one primary winner initially and freeze its exact signal, price, execution, size, caps, source cutoffs, hashes, and activation time.
-8. Replay only post-activation opportunities as forward confirmation; pre-freeze tape remains discovery evidence.
+7. Register zero or more bounded challenger versions with exact signal, price, execution, size, caps, source cutoffs, hashes, and activation times.
+8. Continuously replay only post-activation opportunities for each version, compare candidates on aligned dates, and preserve earlier family failures when new versions emerge.
 
 Do not emit and persist every quote grid for every model snapshot. Store the reusable event tape once and materialize quote outcomes only for analysis candidates or frozen forward hypotheses.
 
-## Discovery And Freeze Requirement
+## Continuous Discovery And Versioning Requirement
 
 The tape is a measurement substrate, not a predefined strategy. Strategy
 discovery must remain policy-neutral until selection:
@@ -38,11 +38,13 @@ discovery must remain policy-neutral until selection:
 - count independent market dates as the primary sample and collapse nearby
   variants into correlated families;
 - prefer the simplest stable family to the highest exploratory return;
-- freeze one immutable strategy manifest before the forward activation
+- register every immutable candidate definition before its forward activation
   boundary;
-- score the manifest only on untouched later tape for confirmation;
-- reject a failed manifest rather than adding a filter learned from its
-  holdout.
+- score every version only on its later cohort and compare champion/challenger
+  evidence on aligned eligible dates;
+- run discovery again as new outcomes resolve without rewriting earlier runs;
+- reject or retire a failed version rather than adding a filter learned from
+  its cohort, and retain family-level failures across later versions.
 
 The implementation contract is
 `docs/implementation/tape-strategy-discovery.md`.
@@ -101,8 +103,10 @@ The implementation contract is
 - Correct and test shadow trade-direction, queue, cancellation, and book-touch labeling.
 - Add collector health checks for subscription coverage, feed gaps, local receipt lag, and storage growth.
 - Materialize a policy-neutral causal snapshot/tape/settlement discovery view in addition to frozen V2 views.
-- Freeze discovery inputs, grammar, folds, complexity, winner selection, and activation before inspecting forward tape.
-- Require an immutable hypothesis version and activation timestamp for forward-confirmation reports.
+- Seal each discovery run's inputs, grammar, folds, complexity, nomination
+  rules, and activation policy before ranking.
+- Require immutable candidate versions and activation timestamps for forward
+  scorecards while allowing later discovery runs to continue.
 - Keep funded trading paused until shadow evidence and controlled real canaries pass fill-conditioned gates.
 - Permit minimum-risk funded orders only for replay/plumbing validation after shadow reconstruction passes; they provide no capacity or promotion evidence.
 - Require direct `$50` and `$100` validation for claims at those sizes.
@@ -113,6 +117,10 @@ Review at each Phase 3 implementation exit gate and again before any private use
 
 ## Decision Log
 
+- 2026-08-04: Replaced the one-shot winner model with recurring discovery runs,
+  a bounded versioned challenger registry, append-only candidate cohorts, and
+  champion/challenger comparisons. Candidate immutability remains an evidence-
+  attribution rule; it no longer implies freezing the strategy program.
 - 2026-08-04: Implemented the policy-neutral materializer, fixed simple-rule
   discovery, correlated-family collapse, immutable winner/no-winner artifact,
   and activation-gated forward evaluator. This changed implementation status,
