@@ -2,6 +2,10 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-08-04
+
+- Added a dedicated continuous Phase 3 research market-tape service after accepting the bounded lifecycle evidence. It reuses the established queue, rotation, telemetry, reconnect, lag, checkpoint, memory, and filesystem boundaries without a validation deadline. The TUI now controls and observes that durable user service without owning its lifetime, displays lightweight read-only tape health and journal output, and confirmation-protects stop/restart actions. A catalog advisory lock rejects duplicate recorder writers. The bounded lifecycle unit remains disabled and available only for reproducible validation cohorts; causal replay still rejects every decision window crossing non-`VALID` coverage.
+
 ## 2026-08-03
 
 - Extended the frozen July 23 tape portfolio through August 2. The original three-sleeve priority portfolio was approximately flat on the four new dates (`+$5.91` on `$297.43`, `+0.020 R/R`). High regression and dynamic tuned were negative alone; MVP late was the only positive sleeve (`+$27.76` on `$267.73`, `+0.104 R/R`, 12 executions). The portfolio assessment is now mixed, and MVP late is a newly selected forward candidate rather than promotion evidence.

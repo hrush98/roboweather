@@ -10,6 +10,8 @@ import pytest
 from textual.widgets import Button, DataTable, Input, Static, TabPane
 
 from weather_trader.ui.process_supervisor import ProcessSnapshot, ProcessSpec, ProcessSupervisor
+from weather_trader.ui.systemd_service import UserServiceSnapshot
+from weather_trader.tape.health import TapeHealthReport
 from weather_trader.ui.textual_app import (
     RoboWeatherTUI,
     _dict_or_empty,
@@ -43,6 +45,91 @@ async def _wait_for_ui(predicate, *, timeout: float = 2.0) -> None:
             return
         await asyncio.sleep(0.02)
     raise AssertionError("timed out waiting for UI condition")
+
+
+class _FakeTapeController:
+    def __init__(self, status: str = "STOPPED") -> None:
+        self.calls: list[str] = []
+        self._logs = ["tape ready"]
+        self._snapshot = self._make_snapshot(status)
+
+    def _make_snapshot(self, status: str) -> UserServiceSnapshot:
+        return UserServiceSnapshot(
+            name="tape",
+            label="Market Tape",
+            unit="roboweather-market-tape.service",
+            status=status,
+            substate=status.lower(),
+            pid=123 if status == "RUNNING" else None,
+            uptime_seconds=60.0 if status == "RUNNING" else None,
+            exit_code=0,
+            restart_count=1,
+            latest_log=self._logs[-1],
+        )
+
+    def snapshots(self) -> list[UserServiceSnapshot]:
+        return [self._snapshot]
+
+    def snapshot(self, name: str) -> UserServiceSnapshot:
+        assert name == "tape"
+        return self._snapshot
+
+    def logs(self, name: str) -> list[str]:
+        assert name == "tape"
+        return list(self._logs)
+
+    async def refresh(self, name: str) -> UserServiceSnapshot:
+        assert name == "tape"
+        self.calls.append("refresh")
+        return self._snapshot
+
+    async def refresh_logs(self, name: str) -> list[str]:
+        assert name == "tape"
+        self.calls.append("refresh_logs")
+        return self.logs(name)
+
+    async def start(self, name: str) -> UserServiceSnapshot:
+        assert name == "tape"
+        self.calls.append("start")
+        self._snapshot = self._make_snapshot("RUNNING")
+        return self._snapshot
+
+    async def stop(self, name: str) -> UserServiceSnapshot:
+        assert name == "tape"
+        self.calls.append("stop")
+        self._snapshot = self._make_snapshot("STOPPED")
+        return self._snapshot
+
+    async def restart(self, name: str) -> UserServiceSnapshot:
+        assert name == "tape"
+        self.calls.append("restart")
+        self._snapshot = self._make_snapshot("RUNNING")
+        return self._snapshot
+
+
+def _healthy_tape_report() -> TapeHealthReport:
+    return TapeHealthReport(
+        healthy=True,
+        session_id="tape-session",
+        finish_reason=None,
+        messages=100,
+        events=200,
+        subscription_generation=1,
+        subscribed_tokens=10,
+        valid_subscribed_tokens=10,
+        partitions=1,
+        raw_disk_bytes=1024,
+        queue_high_water=1,
+        queue_capacity=10000,
+        rss_bytes=1024 * 1024,
+        receipt_lag_ms=25.0,
+        reconstruction_errors=0,
+        discovery_refreshes=2,
+        latest_discovery_status="COMPLETE",
+        unhealthy_discovery_refreshes=0,
+        coverage_counts={"VALID": 10},
+        failures=(),
+    )
 
 
 def test_position_view_rolls_up_unique_exposures_and_station_totals() -> None:
@@ -684,11 +771,13 @@ def test_tui_process_supervisor_tab_mounts(tmp_path) -> None:
         app = RoboWeatherTUI(tmp_path / "tui.sqlite", process_supervisor=supervisor)
         async with app.run_test(size=(140, 40)):
             process_table = app.query_one("#process-table", DataTable)
-            assert process_table.row_count == 2
+            assert process_table.row_count == 3
             assert app.query_one("#start-research", Button).disabled is False
             assert app.query_one("#stop-research", Button).disabled is True
             assert app.query_one("#start-live", Button).disabled is False
             assert app.query_one("#stop-live", Button).disabled is True
+            assert app.query_one("#start-tape", Button).disabled is True
+            assert app.query_one("#stop-tape", Button).disabled is True
 
     asyncio.run(scenario())
 
@@ -884,6 +973,75 @@ def test_tui_process_actions_start_and_stop_supervised_process(tmp_path) -> None
             assert supervisor.snapshot("research").status in {"EXITED", "FAILED"}
             assert app.query_one("#start-research", Button).disabled is False
             assert app.query_one("#stop-research", Button).disabled is True
+
+    asyncio.run(scenario())
+
+
+def test_tui_tape_service_health_and_controls(tmp_path) -> None:
+    async def scenario() -> None:
+        controller = _FakeTapeController("STOPPED")
+        app = RoboWeatherTUI(
+            tmp_path / "tui.sqlite",
+            process_supervisor=_test_supervisor(tmp_path),
+            tape_service_controller=controller,
+            tape_catalog_path=tmp_path / "missing.sqlite",
+        )
+        async with app.run_test(size=(140, 50)):
+            app._tape_health = _healthy_tape_report()
+            app.refresh_processes()
+            app._refresh_tape_health_table()
+
+            assert app.query_one("#process-table", DataTable).row_count == 3
+            assert app.query_one("#start-tape", Button).disabled is False
+            assert app.query_one("#restart-tape", Button).disabled is True
+            assert app.query_one("#tape-health", DataTable).row_count == 12
+
+            await app._start_tape()
+            assert "start" in controller.calls
+            assert app.query_one("#start-tape", Button).disabled is True
+            assert app.query_one("#stop-tape", Button).disabled is False
+
+    asyncio.run(scenario())
+
+
+def test_tui_tape_stop_confirmation_can_cancel(tmp_path) -> None:
+    async def scenario() -> None:
+        controller = _FakeTapeController("RUNNING")
+        app = RoboWeatherTUI(
+            tmp_path / "tui.sqlite",
+            process_supervisor=_test_supervisor(tmp_path),
+            tape_service_controller=controller,
+        )
+        async with app.run_test(size=(140, 50)) as pilot:
+            app.refresh_processes()
+            app.query_one("#stop-tape", Button).press()
+            await _wait_for_ui(lambda: type(app.screen).__name__ == "ConfirmationScreen")
+            await pilot.press("escape")
+            await _wait_for_ui(lambda: type(app.screen).__name__ != "ConfirmationScreen")
+            assert "stop" not in controller.calls
+
+        assert "stop" not in controller.calls
+
+    asyncio.run(scenario())
+
+
+def test_tui_tape_restart_confirmation_and_unmount_leave_service_running(tmp_path) -> None:
+    async def scenario() -> None:
+        controller = _FakeTapeController("RUNNING")
+        app = RoboWeatherTUI(
+            tmp_path / "tui.sqlite",
+            process_supervisor=_test_supervisor(tmp_path),
+            tape_service_controller=controller,
+        )
+        async with app.run_test(size=(140, 50)) as pilot:
+            app.refresh_processes()
+            app.query_one("#restart-tape", Button).press()
+            await _wait_for_ui(lambda: type(app.screen).__name__ == "ConfirmationScreen")
+            await pilot.press("enter")
+            await _wait_for_ui(lambda: "restart" in controller.calls)
+
+        assert "restart" in controller.calls
+        assert "stop" not in controller.calls
 
     asyncio.run(scenario())
 

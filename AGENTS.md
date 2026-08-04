@@ -121,8 +121,11 @@
 ## Phase 3 market-tape development workflow
 
 - The shared recorder is opt-in and separate from both research and live ledgers. Do not point it at either production SQLite database.
-- Slice 2 repository implementation is complete, but the acceptance gate requires elapsed host evidence. The retained July 16 probes are too short and must not be described as a complete lifecycle pass.
-- While lifecycle gates remain open, use a bounded temporary probe:
+- After accepting the bounded lifecycle evidence, use `deploy/systemd/roboweather-market-tape.service` for continuous policy-independent research collection. Install it under `~/.config/systemd/user/`, enable/start it with `systemctl --user enable --now roboweather-market-tape.service`, and keep the bounded `roboweather-market-tape-lifecycle.service` disabled; the latter exists only to reproduce a time-limited validation cohort.
+- Check the continuous collector with `systemctl --user status roboweather-market-tape.service --no-pager`, then run `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/market_tape_health.py --catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite`. Continuous collection does not relax replay validity: every decision window crossing a non-`VALID` interval remains rejected.
+- The TUI Processes tab controls the continuous tape unit through user systemd and shows lightweight catalog health plus journal output. Closing the TUI never stops the tape service. Stop and restart require confirmation because they create invalid coverage intervals. Override the displayed catalog for local/testing use with `ROBOWEATHER_TAPE_CATALOG=/path/to/catalog.sqlite`.
+- Slice 2 repository implementation and the bounded 72-hour host evidence are accepted as sufficient research infrastructure. Another lifecycle run is not required before Phase 3D; exact decision windows must still fail closed on gaps.
+- For recorder changes or bounded diagnostics, use a temporary probe:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/run_market_tape.py --catalog /tmp/roboweather_market_tape_catalog.sqlite --raw-dir /tmp/roboweather_market_tape_raw --max-messages 50 --max-seconds 60 --refresh-seconds 30`
 - Follow every probe with the strict catalog/segment check:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/market_tape_health.py --catalog /tmp/roboweather_market_tape_catalog.sqlite`
@@ -152,7 +155,7 @@
 - Join a persisted postable price-sheet quote directly from the read-only execution ledger through its observed cancel/GTD termination boundary using:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/join_market_tape_decision.py --catalog /path/to/tape_catalog.sqlite --execution-db /home/maxrush/.local/state/roboweather/live_trading.sqlite --quote-id QUOTE_ID --activation-timestamp ISO_UTC --latency-ms 0 --pre-signal-seconds 60 /path/to/segment-1.jsonl [/path/to/segment-2.jsonl ...]`
   - Omit `--activation-timestamp` only when the persisted price sheet already embeds the frozen signal activation. A successful join requires the supplied raw segments and one continuous `VALID` interval to reach the recorded cancel time or GTD expiry.
-- Queue, frame, partition, and retention values remain provisional until complete-lifecycle resource measurement passes. Do not run this recorder as an unattended production service yet.
+- Continuous unattended research collection is approved with the measured queue, memory, and approximately 12 GB/day raw-growth profile. Keep disk and strict health visible, retain the 1 GiB service memory cap, and do not treat the recorder as a production trading dependency; retention remains an explicit operator responsibility and no replay may bridge missing coverage.
 
 ## Continuous improvement workflow
 

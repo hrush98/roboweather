@@ -20,6 +20,8 @@ from weather_trader.execution.clob_executor import ClobExecutor
 from weather_trader.execution.store import ExecutionStore
 from weather_trader.live.resolution import LiveResolutionService
 from weather_trader.live.settings import decrypt_age_keyfile_with_passphrase, load_live_settings
+from weather_trader.tape.catalog import TapeCatalog
+from weather_trader.tape.health import TapeHealthReport, evaluate_tape_health
 from weather_trader.ui.dashboard_rollups import (
     _build_live_policy_view,
     _bucket_label,
@@ -30,6 +32,10 @@ from weather_trader.ui.dashboard_rollups import (
     _status_text,
 )
 from weather_trader.ui.process_supervisor import ProcessSpec, ProcessSupervisor
+from weather_trader.ui.systemd_service import (
+    SystemdUserServiceController,
+    UserServiceSpec,
+)
 
 
 LIVE_EXPOSURE_STATES = {"RESERVED", "SUBMITTED", "FILLED", "PARTIAL", "DELAYED", "UNKNOWN"}
@@ -52,6 +58,9 @@ OVERVIEW_TABLE_IDS = {
 }
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LIVE_RESOLUTION_POLL_INTERVAL_SECONDS = 6 * 60 * 60
+TAPE_SERVICE_POLL_INTERVAL_SECONDS = 2.0
+TAPE_HEALTH_POLL_INTERVAL_SECONDS = 10.0
+DEFAULT_TAPE_CATALOG = Path.home() / ".local/state/roboweather/market_tape/catalog.sqlite"
 
 DEFAULT_DESC_SORT_COLUMNS = {
     "attempts",
@@ -528,6 +537,32 @@ def _default_process_supervisor() -> ProcessSupervisor:
     )
 
 
+def _default_tape_service_controller() -> SystemdUserServiceController:
+    return SystemdUserServiceController(
+        [
+            UserServiceSpec(
+                "tape",
+                "Market Tape",
+                "roboweather-market-tape.service",
+            )
+        ]
+    )
+
+
+def _load_tape_health(catalog_path: Path) -> TapeHealthReport:
+    with TapeCatalog(catalog_path, read_only=True) as catalog:
+        return evaluate_tape_health(catalog, verify_segments=False)
+
+
+def _fmt_bytes(value: int) -> str:
+    amount = float(value)
+    for suffix in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if amount < 1024.0 or suffix == "TiB":
+            return f"{amount:.1f} {suffix}"
+        amount /= 1024.0
+    return f"{amount:.1f} TiB"
+
+
 def _fmt_uptime(seconds: float | None) -> str:
     if seconds is None:
         return ""
@@ -604,6 +639,38 @@ class PassphraseScreen(ModalScreen[str | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class ConfirmationScreen(ModalScreen[bool]):
+    BINDINGS = [
+        ("enter", "confirm", "Confirm"),
+        ("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, message: str, *, confirm_label: str) -> None:
+        super().__init__()
+        self.message = message
+        self.confirm_label = confirm_label
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirmation-dialog"):
+            yield Static(self.message, id="confirmation-title")
+            with Horizontal(id="confirmation-buttons"):
+                yield Button(self.confirm_label, id="confirmation-submit", variant="warning")
+                yield Button("Cancel", id="confirmation-cancel", variant="default")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        if event.button.id == "confirmation-submit":
+            self.action_confirm()
+        else:
+            self.action_cancel()
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
 
 
 class RoboWeatherTUI(App):
@@ -710,6 +777,14 @@ class RoboWeatherTUI(App):
         height: 1fr;
     }
 
+    #tape-health {
+        height: 12;
+    }
+
+    #tape-log {
+        height: 1fr;
+    }
+
     .process-controls {
         height: 3;
     }
@@ -731,6 +806,10 @@ class RoboWeatherTUI(App):
     }
 
     PassphraseScreen {
+        align: center middle;
+    }
+
+    ConfirmationScreen {
         align: center middle;
     }
 
@@ -759,6 +838,28 @@ class RoboWeatherTUI(App):
     #passphrase-buttons Button {
         margin-right: 1;
     }
+
+    #confirmation-dialog {
+        width: 72;
+        height: 9;
+        padding: 1 2;
+        background: #22272b;
+        border: tall #f8e6b0;
+    }
+
+    #confirmation-title {
+        height: 2;
+        color: #f8e6b0;
+    }
+
+    #confirmation-buttons {
+        height: 3;
+        margin-top: 1;
+    }
+
+    #confirmation-buttons Button {
+        margin-right: 1;
+    }
     """
     BINDINGS = [
         ("r", "refresh", "Refresh"),
@@ -767,7 +868,14 @@ class RoboWeatherTUI(App):
         ("q", "quit", "Quit"),
     ]
 
-    def __init__(self, db_path: Path, process_supervisor: ProcessSupervisor | None = None) -> None:
+    def __init__(
+        self,
+        db_path: Path,
+        process_supervisor: ProcessSupervisor | None = None,
+        *,
+        tape_service_controller: SystemdUserServiceController | None = None,
+        tape_catalog_path: Path | None = None,
+    ) -> None:
         super().__init__()
         self.db_path = db_path
         self.actionable_only = False
@@ -779,6 +887,14 @@ class RoboWeatherTUI(App):
         self._last_live_resolution_poll_at: datetime | None = None
         self._last_live_resolution_summary: dict[str, Any] | None = None
         self.process_supervisor = process_supervisor or _default_process_supervisor()
+        self.tape_service_controller = tape_service_controller or _default_tape_service_controller()
+        self.tape_catalog_path = tape_catalog_path or Path(
+            os.environ.get("ROBOWEATHER_TAPE_CATALOG", str(DEFAULT_TAPE_CATALOG))
+        ).expanduser()
+        self._tape_health: TapeHealthReport | None = None
+        self._tape_health_error: str | None = None
+        self._last_tape_health_poll_at: datetime | None = None
+        self._tape_poll_in_progress = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -823,7 +939,13 @@ class RoboWeatherTUI(App):
                         yield Button("Stop Research", id="stop-research", variant="warning")
                         yield Button(_live_start_label(self.process_supervisor.env), id="start-live", variant="success")
                         yield Button("Stop Live", id="stop-live", variant="warning")
+                    with Horizontal(classes="process-controls"):
+                        yield Button("Start Tape", id="start-tape", variant="success")
+                        yield Button("Restart Tape", id="restart-tape", variant="warning")
+                        yield Button("Stop Tape", id="stop-tape", variant="error")
                     yield DataTable(id="process-table")
+                    yield Static("Tape Health", classes="section-title")
+                    yield DataTable(id="tape-health")
                     with Horizontal(classes="split"):
                         with Vertical(classes="stack"):
                             yield Static("Research Log", classes="section-title")
@@ -831,6 +953,8 @@ class RoboWeatherTUI(App):
                         with Vertical(classes="stack"):
                             yield Static("Live Log", classes="section-title")
                             yield DataTable(id="live-log")
+                    yield Static("Tape Journal", classes="section-title")
+                    yield DataTable(id="tape-log")
                 with TabPane("Diagnostics", id="diagnostics-tab"):
                     yield Static("Engine Cycles", classes="section-title")
                     yield DataTable(id="engine")
@@ -990,6 +1114,10 @@ class RoboWeatherTUI(App):
         process_table.cursor_type = "row"
         process_table.add_columns("process", "status", "pid", "uptime", "exit", "restarts", "latest")
 
+        tape_health = self.query_one("#tape-health", DataTable)
+        tape_health.cursor_type = "row"
+        tape_health.add_columns("metric", "value")
+
         research_log = self.query_one("#research-log", DataTable)
         research_log.cursor_type = "row"
         research_log.add_columns("line")
@@ -997,6 +1125,10 @@ class RoboWeatherTUI(App):
         live_log = self.query_one("#live-log", DataTable)
         live_log.cursor_type = "row"
         live_log.add_columns("line")
+
+        tape_log = self.query_one("#tape-log", DataTable)
+        tape_log.cursor_type = "row"
+        tape_log.add_columns("line")
 
         engine = self.query_one("#engine", DataTable)
         engine.cursor_type = "row"
@@ -1012,8 +1144,10 @@ class RoboWeatherTUI(App):
 
         self.refresh_table()
         self.refresh_processes()
+        self._refresh_tape_health_table()
         self.set_interval(10.0, self.refresh_table)
         self.set_interval(1.0, self.refresh_processes)
+        self.set_interval(TAPE_SERVICE_POLL_INTERVAL_SECONDS, self._poll_tape_service)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
@@ -1027,6 +1161,12 @@ class RoboWeatherTUI(App):
             self._run_process_action("start-live", lambda: self._start_process("live"))
         elif event.button.id == "stop-live":
             self._run_process_action("stop-live", lambda: self._stop_process("live"))
+        elif event.button.id == "start-tape":
+            self._run_process_action("start-tape", self._start_tape)
+        elif event.button.id == "restart-tape":
+            self._run_process_action("restart-tape", self._restart_tape)
+        elif event.button.id == "stop-tape":
+            self._run_process_action("stop-tape", self._stop_tape)
 
     def _run_process_action(self, action_name: str, action_factory: Callable[[], Awaitable[None]]) -> None:
         if action_name in self._process_actions_in_progress:
@@ -1154,6 +1294,82 @@ class RoboWeatherTUI(App):
         self.notify(f"{snapshot.label} {snapshot.status.lower()}.")
         self.refresh_processes()
 
+    async def _start_tape(self) -> None:
+        snapshot = await self.tape_service_controller.start("tape")
+        self.notify(f"{snapshot.label} {snapshot.status.lower()}.")
+        self._last_tape_health_poll_at = None
+        await self._refresh_tape_observability(force_health=True)
+
+    async def _restart_tape(self) -> None:
+        confirmed = await self.push_screen_wait(
+            ConfirmationScreen(
+                "Restarting the tape creates a short invalid coverage interval.",
+                confirm_label="Restart Tape",
+            )
+        )
+        if not confirmed:
+            self.notify("Tape restart canceled.")
+            return
+        snapshot = await self.tape_service_controller.restart("tape")
+        self.notify(f"{snapshot.label} {snapshot.status.lower()}.")
+        self._last_tape_health_poll_at = None
+        await self._refresh_tape_observability(force_health=True)
+
+    async def _stop_tape(self) -> None:
+        confirmed = await self.push_screen_wait(
+            ConfirmationScreen(
+                "Stopping the tape creates an evidence gap until collection resumes.",
+                confirm_label="Stop Tape",
+            )
+        )
+        if not confirmed:
+            self.notify("Tape stop canceled.")
+            return
+        snapshot = await self.tape_service_controller.stop("tape")
+        self.notify(f"{snapshot.label} {snapshot.status.lower()}.")
+        await self._refresh_tape_observability(force_health=True)
+
+    def _poll_tape_service(self) -> None:
+        if self._tape_poll_in_progress:
+            return
+        self._tape_poll_in_progress = True
+
+        async def runner() -> None:
+            try:
+                await self._refresh_tape_observability()
+            finally:
+                self._tape_poll_in_progress = False
+
+        self.run_worker(
+            runner(),
+            name="poll-tape-service",
+            group="tape-observability",
+            exit_on_error=False,
+        )
+
+    async def _refresh_tape_observability(self, *, force_health: bool = False) -> None:
+        await self.tape_service_controller.refresh("tape")
+        now = datetime.now(timezone.utc)
+        health_due = (
+            force_health
+            or self._last_tape_health_poll_at is None
+            or (now - self._last_tape_health_poll_at).total_seconds()
+            >= TAPE_HEALTH_POLL_INTERVAL_SECONDS
+        )
+        if health_due:
+            self._last_tape_health_poll_at = now
+            try:
+                self._tape_health = await asyncio.to_thread(
+                    _load_tape_health, self.tape_catalog_path
+                )
+                self._tape_health_error = None
+            except Exception as exc:
+                self._tape_health = None
+                self._tape_health_error = str(exc)
+            await self.tape_service_controller.refresh_logs("tape")
+        self.refresh_processes()
+        self._refresh_tape_health_table()
+
 
     def _refresh_config_table(self, settings) -> None:
         table = self.query_one("#live-config", DataTable)
@@ -1194,7 +1410,10 @@ class RoboWeatherTUI(App):
             return
         process_table.clear()
         snapshots = {snapshot.name: snapshot for snapshot in self.process_supervisor.snapshots()}
-        for snapshot in snapshots.values():
+        service_snapshots = {
+            snapshot.name: snapshot for snapshot in self.tape_service_controller.snapshots()
+        }
+        for snapshot in (*snapshots.values(), *service_snapshots.values()):
             process_table.add_row(
                 snapshot.label,
                 _status_text(snapshot.status),
@@ -1217,8 +1436,27 @@ class RoboWeatherTUI(App):
         self.query_one("#stop-live", Button).disabled = (
             snapshots["live"].status != "RUNNING" or "stop-live" in self._process_actions_in_progress
         )
+        tape_status = service_snapshots["tape"].status
+        tape_running = tape_status == "RUNNING"
+        tape_actionable = tape_status not in {"UNKNOWN", "UNAVAILABLE", "NOT_INSTALLED"}
+        tape_busy = bool(
+            {"start-tape", "restart-tape", "stop-tape"}
+            & self._process_actions_in_progress
+        )
+        self.query_one("#start-tape", Button).disabled = (
+            tape_running
+            or not tape_actionable
+            or tape_busy
+        )
+        self.query_one("#restart-tape", Button).disabled = (
+            not tape_running or tape_busy
+        )
+        self.query_one("#stop-tape", Button).disabled = (
+            not tape_running or tape_busy
+        )
         self._refresh_process_log("research", "#research-log")
         self._refresh_process_log("live", "#live-log")
+        self._refresh_tape_log()
 
     def _refresh_process_log(self, name: str, table_id: str) -> None:
         table = self.query_one(table_id, DataTable)
@@ -1236,6 +1474,48 @@ class RoboWeatherTUI(App):
             table.scroll_end(animate=False, immediate=True)
         else:
             table.scroll_to(x=scroll_x, y=scroll_y, animate=False, force=True, immediate=True)
+
+    def _refresh_tape_log(self) -> None:
+        table = self.query_one("#tape-log", DataTable)
+        rows = tuple(self.tape_service_controller.logs("tape")[-200:])
+        if self._process_log_rows.get("tape") == rows:
+            return
+        self._process_log_rows["tape"] = rows
+        table.clear()
+        for line in rows:
+            table.add_row(line[:240])
+
+    def _refresh_tape_health_table(self) -> None:
+        try:
+            table = self.query_one("#tape-health", DataTable)
+        except NoMatches:
+            return
+        table.clear()
+        if self._tape_health is None:
+            table.add_row("health", "UNAVAILABLE")
+            table.add_row("detail", self._tape_health_error or "awaiting first health poll")
+            return
+        report = self._tape_health
+        service = self.tape_service_controller.snapshot("tape")
+        rows = [
+            ("service", f"{service.status} {service.substate}".strip()),
+            ("health", "HEALTHY" if report.healthy else "UNHEALTHY"),
+            ("session", report.session_id or "none"),
+            ("valid tokens", f"{report.valid_subscribed_tokens}/{report.subscribed_tokens}"),
+            ("messages / events", f"{report.messages:,} / {report.events:,}"),
+            ("discovery", report.latest_discovery_status or "none"),
+            (
+                "receipt lag",
+                "n/a" if report.receipt_lag_ms is None else f"{report.receipt_lag_ms:.0f} ms",
+            ),
+            ("queue", f"{report.queue_high_water:,}/{report.queue_capacity:,}"),
+            ("RSS", _fmt_bytes(report.rss_bytes)),
+            ("raw disk", _fmt_bytes(report.raw_disk_bytes)),
+            ("reconstruction errors", str(report.reconstruction_errors)),
+            ("failures", ", ".join(report.failures) if report.failures else "none"),
+        ]
+        for metric, value in rows:
+            table.add_row(metric, value)
 
     def refresh_table(self) -> None:
         store = ExecutionStore(self.db_path)
