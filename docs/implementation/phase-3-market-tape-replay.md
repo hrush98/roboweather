@@ -326,7 +326,7 @@ Repair status, 2026-07-30:
 - The lifecycle cohort was corrected before the next long run so continuously listed near-end markets are right-censored rather than impossible open-market failures. Recorder identity was narrowed from whole-Git-state hashing to recorder-relevant code/data/unit/dependency hashing, preventing unrelated concurrent development from creating a mixed-build failure.
 - A post-correction 90-second probe crossed two complete discovery refreshes, subscribed 1,364 tokens, recorded 60,401 events, reached `VALID` for every token, and passed strict health with queue high-water 1/10,000, no reconnects or reconstruction errors, about 172 MiB peak RSS, and under 69 ms observed receipt lag.
 - Disabled bounded validation run `tape-validation-20260730T183750Z-69556cbf` completed its 72-hour limit with 224,640,317 events, 1,273/1,273 complete discovery refreshes, zero reconstruction errors, queue high-water 1/10,000, 245,784,576 bytes peak recorder RSS, and about 12.0 GB/day projected raw growth. Of 451 matured in-window markets, 418 were excluded for late discovery. Four of 33 eligible markets completed within the 30-second recovery budget; the other 29 had 36.34-41.32 second maximum gaps, with 41.21-second p50 and 41.32-second p95 across eligible markets. Peak receipt lag was 10.969 seconds and is recorded as a warning.
-- Slice 2 exit remains open pending reconnect/recovery improvements and a new scoped first-listing-through-close lifecycle report. Existing tape remains usable only for decision windows that independently pass uninterrupted pre-signal-through-execution coverage.
+- The operator accepts the run's approximately 96.7% valid eligible-token coverage as sufficient for strategy research. Reconnect/recovery and late-discovery improvements are deferred technical debt, and a new full lifecycle report is not on the critical path. Existing tape remains usable only for decision windows that independently pass uninterrupted pre-signal-through-execution coverage; no replay may bridge a gap or claim coverage before actual discovery.
 
 ### Slice 3: Book Reconstruction
 
@@ -414,6 +414,7 @@ Implementation status, 2026-07-29:
 
 ## Decision Log
 
+- 2026-08-03: Accepted the completed 72-hour tape as good-enough strategy-research infrastructure at approximately 96.7% valid eligible-token coverage. Removed reconnect hardening and another lifecycle run from the critical path while retaining fail-closed rejection of every decision window that crosses missing coverage. Recorded the likely missing application heartbeat, reconnect-path rediscovery delay, and late Gamma visibility as deferred technical debt.
 - 2026-08-03: Separated slow-horizon recorder availability from exact execution evidence. Adopted a 30-second lifecycle recovery budget, individual exclusion of late/fallback markets, and peak-lag warnings while retaining uninterrupted `VALID` coverage for every decision window. The completed 72-hour run still failed because only 4/33 eligible markets met the recovery budget.
 - 2026-07-30: Made Phase 3 a policy-neutral measurement substrate for the new
   Phase 3D discovery/freeze gate. Required broad causal snapshot/tape/settlement

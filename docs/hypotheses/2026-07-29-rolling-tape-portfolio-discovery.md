@@ -2,7 +2,7 @@
 
 ## Status
 
-Preliminary positive execution holdout; forward shadow only. Activated for analysis on 2026-07-23 after a 2026-07-22 discovery cutoff. Funded trading remains paused.
+Mixed execution holdout; forward shadow only. Activated for analysis on 2026-07-23 after a 2026-07-22 discovery cutoff. The initial six-date result was positive, but the untouched July 30-August 2 extension was approximately flat for the frozen portfolio. Funded trading remains paused.
 
 ## Hypothesis
 
@@ -59,6 +59,20 @@ This split is a retrospective post-cutoff holdout, not a claim that the exact po
 
 Average executed VWAP was `$0.423`. All missing executions failed closed rather than falling back to snapshot ask data.
 
+## July 30-August 2 Extension
+
+The same three frozen sleeves were replayed on the completed recent 72-hour tape. This is a continuation of the already frozen July 23 portfolio, not permission to retune the original holdout.
+
+| sleeve evaluated alone | executions | wins | cost | PnL | R/R |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| High regression 10m late | 3 | 1 | `$69.71` | `-$22.40` | `-0.321` |
+| MVP late | 12 | 6 | `$267.73` | `+$27.76` | `+0.104` |
+| Dynamic tuned 10m late | 10 | 5 | `$216.73` | `-$13.33` | `-0.062` |
+
+In the original frozen priority order, station/date deduplication produced 22 signals and 13 executions. The combined portfolio earned only `+$5.91` on `$297.43` cost (`+0.020 R/R`), with six wins; eight signals were rejected for invalid continuous coverage and one for no ask at or below `$0.50`.
+
+This weakens the original portfolio claim. `pm_mvp_late` is the only sleeve with positive recent quote-ready taker evidence, but identifying it after inspecting these four dates makes it a newly selected candidate. Its `+0.104 R/R` is discovery evidence only and must be frozen now and evaluated on later untouched tape before any promotion discussion.
+
 ## Falsification And Promotion Gates
 
 Kill or materially revise the hypothesis if any of these occurs:
@@ -103,4 +117,5 @@ Then run the frozen holdout:
 
 ## Decision Log
 
+- 2026-08-03: Extended the frozen portfolio through August 2. The combined portfolio was approximately flat (`+0.020 R/R`), high regression and dynamic tuned were negative when evaluated alone, and MVP late was the only positive individual sleeve (`+0.104 R/R`, 12 executions across four dates). Reclassified the portfolio evidence as mixed and MVP late as a newly selected forward candidate requiring untouched later tape.
 - 2026-07-29: Froze the initial three-family priority portfolio and reproduced the July 23-28 tape holdout. Classified the positive result as forward-shadow hypothesis evidence only; no funded or live-policy change was made.
