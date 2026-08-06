@@ -4,13 +4,21 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-06
 
+- Completed Phase 3D Slice C4. Added continuous activation-bounded evaluation
+  for every active candidate, immutable as-of-watermark forward-shadow and
+  common-date scorecards, explicit selection/execution attrition, conservative/
+  base/optimistic displayed-depth scenarios, venue-only economics, uncertainty,
+  drawdown, capacity, markout, and settlement diagnostics. Actual-order evidence
+  remains a separate stream; the manual CLI applies no role transition or
+  funded authority. C5-C6 and every funded promotion gate remain open.
+
 - Completed Phase 3D Slice C3. Added an append-only recurring discovery
   orchestrator that seals or resumes runs, no-ops unchanged resolved-data
   watermarks, nominates zero or a bounded challenger set, reuses unchanged
   candidate identities, and persists immutable completion, no-nomination, and
   budget/expired-activation outcomes. Added candidate-rule, active-candidate,
-  runtime, and compact diagnostic budgets plus a manual pre-scheduler CLI and deterministic tests.
-  C4-C6 and every funded promotion gate remain open.
+  runtime, and compact diagnostic budgets plus a manual pre-scheduler CLI and
+  deterministic tests. C4-C6 and every funded promotion gate remained open.
 
 ## 2026-08-04
 

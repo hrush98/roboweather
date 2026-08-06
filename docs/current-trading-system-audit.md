@@ -25,13 +25,14 @@ from rewriting earlier evidence.
 The committed Phase 3D path supplies reusable materialization, exact-book
 replay, deterministic hashes, fixed-rule scoring, family collapse, an
 activation-gated venue-settlement-fail-closed evaluator, and the durable C2
-registry plus C3 recurring orchestrator. The registry enforces append-only
+registry plus C3 recurring orchestrator and C4 continuous cohort evaluator. The registry enforces append-only
 definitions/evidence/events, content-addressed candidate versions, activation-bounded cohorts, one-writer
 ownership, read-only observation, and immutable run outcomes. C3 now no-ops
 unchanged resolved watermarks, resumes interrupted sealed runs, nominates a
 bounded challenger set, rejects elapsed activation boundaries, reuses unchanged
-versions, and enforces resource budgets. Its one-winner batch manifest remains transitional. Continuous cohort
-evaluation and champion/challenger transitions are not implemented.
+versions, and enforces resource budgets. C4 appends post-activation forward-shadow
+and aligned common-date scorecards, keeps actual orders separate, and credits
+only venue-authoritative outcomes. Its one-winner batch manifest remains transitional. Champion/challenger transitions are not implemented.
 Both current `resolutions` tables are empty and fill-conditioned markouts remain
 absent, so no candidate can pass to Phase 4.
 
@@ -46,7 +47,7 @@ Current confidence by layer:
 | New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
 | Fair-value/price sheet | V2a Slices 0-3 now produce leak-safe calibration, causal uncertainty reserves, conservative fairs, maximum quotes, and economic gates. The first 98-row Slice 3 read leaves both pilots research-only because no calibrator or untouched forward window was frozen. | Freeze a baseline and forward start before new outcomes; do not promote from the July 16-29 comparison. |
 | Phase 3 shared tape | Slices 1-4 are implemented. Continuous collection resumed August 4 after the accepted 72-hour evidence; its first new session reached 1,474/1,474 valid tokens and strictly verified its first partition. Periodic reconnect gaps and late initial discovery remain known limitations; Slice 4 still lacks one real persisted-quote join. | Continue collection, monitor health/storage through the TUI, use retained tape for strategy work, and reject every affected decision window. |
-| Phase 3D strategy discovery | C0-C3 are implemented: causal batch primitives, the durable append-only registry, and recurring bounded challenger nomination. Continuous cohort evaluation and champion/challenger transitions are open. Venue settlement and markouts are unavailable. | Implement C4-C5, then C6 scheduling; keep batch CLIs research-only and do not pass Phase 4 without venue-aligned forward evidence and markouts. |
+| Phase 3D strategy discovery | C0-C4 are implemented: causal batch primitives, the durable append-only registry, recurring bounded challenger nomination, and activation-bounded continuous scorecards. Champion/challenger transitions are open. Venue settlement and markouts are unavailable. | Implement C5, then C6 scheduling; keep batch CLIs research-only and do not pass Phase 4 without venue-aligned forward evidence and markouts. |
 | Existing candidate-token shadow collector | Useful plumbing prototype, but candidate-scoped and not a continuous causal market tape. | Do not use its fill labels as promotion evidence. |
 | Fillability and adverse selection | Still unresolved. Public L2 data can provide bounds, not exact hypothetical queue position. | Validate shared-tape replay, then run controlled real-order canaries. |
 | Funded readiness | No exact signal + quote policy + size has passed current fill-conditioned gates. | Keep funded trading paused. |
@@ -173,11 +174,17 @@ Update the body of this document when the current assessment changes. Append one
 
 ## Audit Log
 
+- 2026-08-06: Completed Phase 3D C4 with activation-bounded cohorts and
+  immutable forward-shadow/common-date scorecards for every active candidate.
+  Venue-only economics, invalid-tape rejection, markout gates, displayed-depth
+  scenarios, and separate actual-order evidence now fail closed. C5 role
+  transitions remain open; funded status did not change.
+
 - 2026-08-06: Completed Phase 3D C3 with resolved-watermark-triggered recurring
   discovery, bounded multi-challenger nomination, interrupted-run resume,
   unchanged-version reuse, append-only no-nomination/budget outcomes, and
-  explicit candidate/rule/runtime/diagnostic budgets. C4-C5 forward evaluation
-  and role transitions remain open; funded status did not change.
+  explicit candidate/rule/runtime/diagnostic budgets. C4 forward evaluation
+  and C5 role transitions remained open; funded status did not change.
 
 - 2026-08-04: Completed Phase 3D C2 with a durable append-only external
   registry, content-addressed version reuse, activation-bounded cohort and

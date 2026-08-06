@@ -103,8 +103,8 @@
 
 - The discovery and forward-report Phase 3D CLIs are a committed read-only batch vertical slice,
   not the intended continuous scheduler/registry. Use them only for development
-  fixtures while Slices C4-C5 in `docs/implementation/tape-strategy-discovery.md`
-  remain open. Do not treat their one-winner output as the steady-state design.
+  fixtures while Slice C5 in `docs/implementation/tape-strategy-discovery.md`
+  remains open. Do not treat their one-winner output as the steady-state design.
 - Create a generated artifact directory under `reports/` and declare a future
   activation timestamp before running a compatibility discovery. The CLI seals source
   watermarks, tape sessions/partitions, model universe, grammar, folds, costs,
@@ -130,13 +130,13 @@
   `import-batch-v1 ARTIFACT_DIR` only to preserve a compatibility run and
   candidate identity; it intentionally imports no cohort or scorecard evidence.
   One writer holds `<REGISTRY>.writer.lock`; do not bypass it. C3 supplies
-  recurring nominations; C4-C5 will add scorecard updates and role
-  transitions. No registry transition may authorize funded trading.
+  recurring nominations and C4 appends activation-bounded scorecards; C5 will
+  add role transitions. No registry transition may authorize funded trading.
 
 ## Phase 3D manual recurring discovery workflow
 
-- C3 recurring discovery is manual until C4-C5 evaluation/transition semantics
-  pass and C6 adds a bounded dry-run scheduler. Run one idempotent cycle with a
+- C3 recurring discovery and C4 evaluation are manual until C5 transition semantics
+  pass and C6 adds a bounded dry-run scheduler. Run one idempotent discovery cycle with a
   future activation boundary:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_continuous_discovery.py --research-db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --tape-catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite --registry /home/maxrush/.local/state/roboweather/discovery/catalog.sqlite --source-start-date YYYY-MM-DD --discovery-cutoff-exclusive YYYY-MM-DD --activation-timestamp ISO_UTC`
 - The command holds the registry's single-writer lock, skips before
@@ -145,6 +145,15 @@
   repository artifact. Completion, no-nomination, and budget outcomes are
   immutable; an elapsed activation boundary fails closed. Registered
   candidates are research-only `NOMINATED` versions; C3 creates no forward scorecard, champion, Phase 4 request, or funded authority.
+- Append one idempotent C4 scorecard watermark for every active candidate after
+  the exclusive evaluation end date has elapsed:
+  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_continuous_evaluation.py --research-db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --tape-catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite --registry /home/maxrush/.local/state/roboweather/discovery/catalog.sqlite --end-date-exclusive YYYY-MM-DD --as-of-timestamp ISO_UTC`
+- C4 reuses one open cohort per exact candidate activation and appends
+  `FORWARD_SHADOW` plus family-peer `COMMON_DATE` scorecards addressed by the
+  complete as-of watermark. It excludes every pre-activation row, rejects
+  invalid tape, credits only venue-authoritative settlement, requires valid
+  markouts before review readiness, never infers `ACTUAL_ORDER` fills from
+  public tape, and applies no C5 role transition or funded authority.
 
 ## Price Sheet V2a dataset workflow
 

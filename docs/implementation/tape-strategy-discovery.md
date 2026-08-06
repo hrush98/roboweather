@@ -430,6 +430,14 @@ active-candidate, runtime, and persisted-diagnostic budgets are explicit. The ma
 Exit: candidate results update idempotently as new dates resolve, and no row is
 credited to a version before activation.
 
+Implementation: complete. `weather_trader/discovery/evaluator.py` opens or
+reuses each active version's immutable activation-bounded cohort and appends
+watermark-addressed `FORWARD_SHADOW` and `COMMON_DATE` scorecards. It reports
+selection/execution attrition, three declared displayed-depth counterfactuals,
+venue-only economics, uncertainty, drawdown, capacity, markouts, settlement
+provenance, and aligned active-family comparisons. Public tape never
+synthesizes `ACTUAL_ORDER` evidence. `scripts/phase3d_continuous_evaluation.py`
+
 ### Slice C5: Champion/Challenger Transitions
 
 - Implement predeclared nomination, champion, probation, retirement, and
