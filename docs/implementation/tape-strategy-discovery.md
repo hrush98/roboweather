@@ -1,8 +1,8 @@
 # Continuous Versioned Strategy Discovery
 
-Status: C0-C2 implemented; recurring orchestration, continuous evaluation, and role transitions remain open
+Status: C0-C3 implemented; continuous evaluation and role transitions remain open
 
-Last updated: 2026-08-04
+Last updated: 2026-08-06
 
 ## Goal
 
@@ -395,7 +395,7 @@ Exit: repeated registration is idempotent; changed rules create new versions;
 historical evidence cannot be overwritten.
 
 Implementation: complete. `weather_trader/discovery/registry.py` owns schema
-version 1, database-level append-only guards, content-addressed family and
+versions 1-2, database-level append-only guards, content-addressed family and
 candidate registration, activation-bounded cohorts, watermark-addressed
 scorecards, lifecycle events, a nonblocking one-writer lock, and query-only
 observers. `scripts/phase3d_registry.py` initializes/inspects the external
@@ -411,6 +411,14 @@ catalog and can import `batch_v1` identity without importing forward evidence.
 
 Exit: repeated runs over unchanged watermarks are no-ops; later runs append
 new evidence/candidates without changing earlier runs.
+
+Implementation: complete. `weather_trader/discovery/orchestrator.py` seals a
+run before ranking, resumes interrupted sealed runs, skips unchanged resolved
+watermarks, registers zero or a bounded set of challengers, reuses unchanged
+candidate identities, and persists immutable completion/no-nomination/budget/
+expired-activation outcomes through registry schema version 2. Candidate-rule,
+active-candidate, runtime, and persisted-diagnostic budgets are explicit. The manual
+`scripts/phase3d_continuous_discovery.py` CLI is the pre-C6 operating surface.
 
 ### Slice C4: Continuous Cohort Evaluator
 
@@ -472,17 +480,20 @@ Reusable now:
   versions, cohorts, scorecards, lifecycle history, and writer ownership;
 - `scripts/phase3d_registry.py`: registry initialization, read-only status, and
   identity-only `batch_v1` import.
+- `weather_trader/discovery/orchestrator.py`: recurring C3 trigger, nomination,
+  idempotency, recovery, and budget enforcement;
+- `scripts/phase3d_continuous_discovery.py`: manual recurring-run entry point.
 
 Transitional and to be refactored:
 
-- `DiscoveryRunSpec.maximum_winners == 1`;
+- batch-only `winner` compatibility aliases in `discover`;
 - `freeze_winner_manifest` and one-winner/no-winner output semantics;
 - the single-manifest `phase3d_forward_report.py` workflow;
 - tests and docs that treat one global winner as the Phase 3D exit;
 - repository status claims that D0-D3 complete the intended operating system.
 
-Until C3-C5 are implemented, the existing discovery/forward CLIs are read-only batch research
-tools. Do not run them as the production discovery scheduler, create a funded
+Until C4-C5 are implemented, the existing batch discovery/forward CLIs remain
+read-only research tools. Do not run them as the production discovery scheduler,
 strategy from their output, or treat their single manifest as the intended
 steady-state architecture.
 
@@ -492,15 +503,15 @@ steady-state architecture.
 - [x] Implemented tape joins are causal and fail closed on invalid coverage.
 - [x] Existing row/run identities are deterministic for fixed inputs.
 - [x] Registry schema and append-only lifecycle events are implemented.
-- [ ] Discovery runs recur idempotently from resolved-data watermarks.
-- [ ] Runs may nominate zero or a bounded number of challengers.
+- [x] Discovery runs recur idempotently from resolved-data watermarks.
+- [x] Runs may nominate zero or a bounded number of challengers.
 - [x] Unchanged candidate definitions reuse their existing version identity.
 - [x] Changed definitions create a new version identity and require a new
   post-activation cohort.
 - [ ] Active candidates receive continuous scorecard updates.
 - [ ] Common-date champion/challenger comparisons are deterministic.
 - [ ] Family-level evidence survives version replacement and retirement.
-- [ ] Candidate and runtime/storage budgets prevent unbounded growth.
+- [x] Candidate and runtime/storage budgets prevent unbounded growth.
 - [ ] Venue settlement and research-truth disagreement remain explicit.
 - [ ] Conservative/base/optimistic/actual fills remain separate.
 - [ ] Positive optimistic-only evidence cannot trigger a role promotion.
@@ -527,6 +538,13 @@ steady-state architecture.
   stale evaluation, disable the scheduler and retain manual idempotent runs.
 
 ## Decision Log
+
+- 2026-08-06: Completed C3 with a recurring append-only orchestrator, resolved-
+  watermark no-ops, crash resume, bounded multi-challenger nomination,
+  unchanged-version reuse, immutable no-nomination/budget/expired-activation
+  outcomes, and
+  candidate/rule/runtime/diagnostic budgets. Added the manual continuous-run
+  CLI; scheduling remains C6 and no funded state changed.
 
 - 2026-08-04: Respecified Phase 3D as a continuous versioned discovery system.
   Discovery runs now recur, may nominate multiple bounded challengers, and feed

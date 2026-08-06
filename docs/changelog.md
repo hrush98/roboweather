@@ -2,6 +2,16 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-08-06
+
+- Completed Phase 3D Slice C3. Added an append-only recurring discovery
+  orchestrator that seals or resumes runs, no-ops unchanged resolved-data
+  watermarks, nominates zero or a bounded challenger set, reuses unchanged
+  candidate identities, and persists immutable completion, no-nomination, and
+  budget/expired-activation outcomes. Added candidate-rule, active-candidate,
+  runtime, and compact diagnostic budgets plus a manual pre-scheduler CLI and deterministic tests.
+  C4-C6 and every funded promotion gate remain open.
+
 ## 2026-08-04
 
 - Completed Phase 3D Slice C2. Added the external SQLite candidate registry

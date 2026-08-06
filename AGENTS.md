@@ -103,7 +103,7 @@
 
 - The discovery and forward-report Phase 3D CLIs are a committed read-only batch vertical slice,
   not the intended continuous scheduler/registry. Use them only for development
-  fixtures while Slices C3-C5 in `docs/implementation/tape-strategy-discovery.md`
+  fixtures while Slices C4-C5 in `docs/implementation/tape-strategy-discovery.md`
   remain open. Do not treat their one-winner output as the steady-state design.
 - Create a generated artifact directory under `reports/` and declare a future
   activation timestamp before running a compatibility discovery. The CLI seals source
@@ -129,9 +129,22 @@
   and inspect it query-only with the `status` subcommand. Use
   `import-batch-v1 ARTIFACT_DIR` only to preserve a compatibility run and
   candidate identity; it intentionally imports no cohort or scorecard evidence.
-  One writer holds `<REGISTRY>.writer.lock`; do not bypass it. C3-C5 will add
-  recurring nominations, scorecard updates, and role transitions. No registry
-  transition may authorize funded trading.
+  One writer holds `<REGISTRY>.writer.lock`; do not bypass it. C3 supplies
+  recurring nominations; C4-C5 will add scorecard updates and role
+  transitions. No registry transition may authorize funded trading.
+
+## Phase 3D manual recurring discovery workflow
+
+- C3 recurring discovery is manual until C4-C5 evaluation/transition semantics
+  pass and C6 adds a bounded dry-run scheduler. Run one idempotent cycle with a
+  future activation boundary:
+  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_continuous_discovery.py --research-db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --tape-catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite --registry /home/maxrush/.local/state/roboweather/discovery/catalog.sqlite --source-start-date YYYY-MM-DD --discovery-cutoff-exclusive YYYY-MM-DD --activation-timestamp ISO_UTC`
+- The command holds the registry's single-writer lock, skips before
+  materialization when resolved outcomes and the sealed grammar/build/model
+  inputs are unchanged, resumes a sealed interrupted run, and writes no
+  repository artifact. Completion, no-nomination, and budget outcomes are
+  immutable; an elapsed activation boundary fails closed. Registered
+  candidates are research-only `NOMINATED` versions; C3 creates no forward scorecard, champion, Phase 4 request, or funded authority.
 
 ## Price Sheet V2a dataset workflow
 
