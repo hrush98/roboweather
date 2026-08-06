@@ -101,6 +101,7 @@ def main() -> int:
             latency_ms=args.latency_ms,
             pre_signal_seconds=args.pre_signal_seconds,
             target_cost_usd=args.target_cost_usd,
+            maximum_challengers=1,
         )
         args.out.mkdir(parents=True, exist_ok=True)
         # This artifact is persisted before any ranking begins.

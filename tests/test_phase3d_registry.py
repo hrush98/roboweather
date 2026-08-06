@@ -244,3 +244,31 @@ def test_batch_v1_import_preserves_identity_without_forward_evidence(tmp_path: P
         assert counts["candidate_versions"] == 1
         assert counts["evaluation_cohorts"] == 0
         assert counts["candidate_scorecards"] == 0
+
+
+def test_candidate_activation_cannot_precede_registry_creation(tmp_path: Path) -> None:
+    with DiscoveryRegistry(tmp_path / "discovery.sqlite") as registry:
+        run_id = registry.register_discovery_run(
+            run_spec(),
+            created_at_utc="2026-01-10T01:00:00+00:00",
+        )
+        family_id = registry.register_family(
+            definition={"family_id": rule().correlated_family_id, "model_id": "model-1"},
+            economic_rationale="test",
+            grammar_provenance="phase3d_simple_rules_v1",
+            correlation_group=rule().correlated_family_id,
+            created_at_utc="2026-01-10T01:00:00+00:00",
+        )
+
+        with pytest.raises(ValueError, match="registry creation"):
+            registry.register_candidate_version(
+                family_id=family_id,
+                source_run_id=run_id,
+                rule=rule(),
+                activation_timestamp_utc=CREATED,
+                pricing_version="price-v1",
+                execution_version="stable-taker-v1",
+                risk_version="risk-v1",
+                sizing_and_risk={},
+                created_at_utc="2026-01-10T01:00:00+00:00",
+            )

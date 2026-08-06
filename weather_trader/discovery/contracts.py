@@ -9,7 +9,7 @@ from typing import Any
 from weather_trader.pricing.contracts import stable_hash
 
 
-PHASE3D_CONTRACT_VERSION = "phase3d_discovery_v1"
+PHASE3D_CONTRACT_VERSION = "phase3d_discovery_v2"
 
 
 def _utc(value: str) -> datetime:
@@ -38,7 +38,7 @@ class DiscoveryRunSpec:
     local_windows: tuple[tuple[str, str], ...] = (("00:00", "24:00"), ("12:00", "15:00"))
     entry_bands: tuple[tuple[float, float], ...] = ((0.0, 0.50), (0.05, 0.50), (0.05, 0.35))
     fold_rule: str = "contiguous_equal_count_market_date_folds_no_fitted_thresholds"
-    winner_rule: str = "positive_total_and_two_thirds_positive_folds_then_max_penalized_rr"
+    nomination_rule: str = "positive_total_and_two_thirds_positive_folds_then_max_penalized_rr"
     cost_rule: str = "binary_payout_no_fee_discovery_v1"
     fold_count: int = 3
     minimum_effective_dates: int = 8
@@ -47,7 +47,8 @@ class DiscoveryRunSpec:
     latency_ms: int = 250
     pre_signal_seconds: int = 60
     target_cost_usd: float = 25.0
-    maximum_winners: int = 1
+    maximum_challengers: int = 3
+    maximum_candidate_rules: int = 5_000
     complexity_penalty_per_unit: float = 0.01
     portfolio_station_date_cap_usd: float = 25.0
     daily_risk_cap_usd: float = 300.0
@@ -84,9 +85,12 @@ class DiscoveryRunSpec:
             self.target_cost_usd <= 0
             or self.portfolio_station_date_cap_usd <= 0
             or self.daily_risk_cap_usd <= 0
-            or self.maximum_winners != 1
+            or self.maximum_challengers < 1
+            or self.maximum_candidate_rules < self.maximum_challengers
         ):
-            raise ValueError("initial Phase 3D runs require positive size and one winner maximum")
+            raise ValueError(
+                "Phase 3D runs require positive size and bounded candidate/challenger budgets"
+            )
 
     @property
     def run_id(self) -> str:

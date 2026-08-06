@@ -11,7 +11,7 @@ from weather_trader.discovery.contracts import CandidateRule, DiscoveryRunSpec
 from weather_trader.pricing.contracts import stable_hash
 
 
-REGISTRY_SCHEMA_VERSION = 1
+REGISTRY_SCHEMA_VERSION = 2
 LIFECYCLE_EVENT_TYPES = {
     "GENERATED",
     "NOMINATED",
@@ -130,7 +130,12 @@ class DiscoveryRegistry:
             )
         if version == 0:
             self._migrate_v1()
-            self.connection.execute(f"pragma user_version = {REGISTRY_SCHEMA_VERSION}")
+            self.connection.execute("pragma user_version = 1")
+            self.connection.commit()
+            version = 1
+        if version == 1:
+            self._migrate_v2()
+            self.connection.execute("pragma user_version = 2")
             self.connection.commit()
         self._verify_schema()
 
@@ -265,6 +270,39 @@ class DiscoveryRegistry:
                 """
             )
 
+    def _migrate_v2(self) -> None:
+        self.connection.executescript(
+            """
+            create table if not exists discovery_run_outcomes (
+                run_id text primary key references discovery_runs(run_id),
+                outcome_hash text not null unique,
+                status text not null,
+                completed_at_utc text not null,
+                diagnostics_json text not null,
+                nominations_json text not null
+            );
+
+            create index if not exists idx_discovery_run_outcomes_completed
+                on discovery_run_outcomes(completed_at_utc, run_id);
+
+            create trigger if not exists discovery_run_outcomes_append_only_update
+            before update on discovery_run_outcomes
+            begin
+                select raise(abort, 'discovery_run_outcomes is append-only');
+            end;
+            create trigger if not exists discovery_run_outcomes_append_only_delete
+            before delete on discovery_run_outcomes
+            begin
+                select raise(abort, 'discovery_run_outcomes is append-only');
+            end;
+
+            insert or ignore into registry_schema_migrations values (
+                2, strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+                'append-only recurring discovery run outcomes'
+            );
+            """
+        )
+
     def register_discovery_run(
         self,
         spec: DiscoveryRunSpec | Mapping[str, Any],
@@ -306,6 +344,69 @@ class DiscoveryRegistry:
             self._insert_immutable("discovery_runs", "run_id", values)
         return run_id
 
+    def append_discovery_run_outcome(
+        self,
+        *,
+        run_id: str,
+        status: str,
+        completed_at_utc: str,
+        diagnostics: Mapping[str, Any],
+        nominations: Any,
+    ) -> str:
+        if status not in {
+            "COMPLETED",
+            "NO_NOMINATION",
+            "BUDGET_EXCEEDED",
+            "ACTIVATION_EXPIRED",
+        }:
+            raise ValueError(f"unsupported discovery run outcome: {status}")
+        if self.connection.execute(
+            "select 1 from discovery_runs where run_id=?", (run_id,)
+        ).fetchone() is None:
+            raise ValueError(f"unknown discovery run: {run_id}")
+        payload = {
+            "run_id": run_id,
+            "status": status,
+            "completed_at_utc": _utc_text(completed_at_utc),
+            "diagnostics": dict(diagnostics),
+            "nominations": nominations,
+        }
+        outcome_hash = stable_hash(payload)
+        values = {
+            "run_id": run_id,
+            "outcome_hash": outcome_hash,
+            "status": status,
+            "completed_at_utc": payload["completed_at_utc"],
+            "diagnostics_json": _json(diagnostics),
+            "nominations_json": _json(nominations),
+        }
+        with self.connection:
+            self._insert_immutable("discovery_run_outcomes", "run_id", values)
+        return outcome_hash
+
+    def discovery_run_outcome(self, run_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "select * from discovery_run_outcomes where run_id=?", (run_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "run_id": str(row["run_id"]),
+            "outcome_hash": str(row["outcome_hash"]),
+            "status": str(row["status"]),
+            "completed_at_utc": str(row["completed_at_utc"]),
+            "diagnostics": json.loads(row["diagnostics_json"]),
+            "nominations": json.loads(row["nominations_json"]),
+        }
+
+    def latest_completed_run_spec(self) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            """select runs.spec_json from discovery_runs runs
+               join discovery_run_outcomes outcomes using(run_id)
+               order by outcomes.completed_at_utc desc,runs.run_id desc limit 1"""
+        ).fetchone()
+        return None if row is None else dict(json.loads(row["spec_json"]))
+
     def register_family(
         self,
         *,
@@ -318,6 +419,12 @@ class DiscoveryRegistry:
         payload = dict(definition)
         definition_hash = stable_hash(payload)
         family_id = str(payload.get("family_id") or f"p3d_family_{definition_hash[:20]}")
+        existing = self.connection.execute(
+            "select family_id from strategy_families where definition_hash=?",
+            (definition_hash,),
+        ).fetchone()
+        if existing is not None:
+            return str(existing[0])
         with self.connection:
             self._insert_immutable("strategy_families", "family_id", {
                 "family_id": family_id,
@@ -366,12 +473,15 @@ class DiscoveryRegistry:
         created = _utc_text(created_at_utc)
         activation = _utc_text(activation_timestamp_utc)
         run = self.connection.execute(
-            "select cutoff_exclusive from discovery_runs where run_id=?", (source_run_id,)
+            "select cutoff_exclusive,created_at_utc from discovery_runs where run_id=?",
+            (source_run_id,),
         ).fetchone()
         if run is None:
             raise ValueError(f"unknown source discovery run: {source_run_id}")
         if activation < f"{run['cutoff_exclusive']}T00:00:00+00:00":
             raise ValueError("candidate activation must not precede its discovery cutoff")
+        if activation < str(run["created_at_utc"]):
+            raise ValueError("candidate activation must not precede its registry creation")
         with self.connection:
             version = int(self.connection.execute(
                 "select coalesce(max(family_version),0)+1 from candidate_versions where family_id=?",
@@ -652,7 +762,8 @@ class DiscoveryRegistry:
 
     def table_counts(self) -> dict[str, int]:
         tables = (
-            "discovery_runs", "strategy_families", "candidate_versions",
+            "discovery_runs", "discovery_run_outcomes", "strategy_families",
+            "candidate_versions",
             "evaluation_cohorts", "candidate_scorecards", "candidate_lifecycle_events",
         )
         return {

@@ -58,6 +58,10 @@ def discover(
     run: DiscoveryRunSpec,
 ) -> dict[str, Any]:
     rules = generate_candidate_rules(rows, run)
+    if len(rules) > run.maximum_candidate_rules:
+        raise ValueError(
+            f"candidate-rule budget exceeded: {len(rules)} > {run.maximum_candidate_rules}"
+        )
     by_model: dict[tuple[str, str], list[BroadDiscoveryRow]] = {}
     for row in rows:
         if row.discovery_eligible:
@@ -83,7 +87,12 @@ def discover(
             continue
         seen_families.add(family)
         collapsed.append(result)
-    winner = next((result for result in collapsed if result["passes_selection_gate"]), None)
+    nominations = [
+        result for result in collapsed if result["passes_selection_gate"]
+    ][:run.maximum_challengers]
+    # Compatibility aliases keep the batch_v1 manifest workflow readable while
+    # continuous orchestration consumes the bounded nominations list.
+    winner = nominations[0] if nominations else None
     return {
         "run_id": run.run_id,
         "run_hash": stable_hash(run.canonical_payload()),
@@ -91,6 +100,9 @@ def discover(
         "correlated_family_count": len(collapsed),
         "winner_candidate_id": winner["candidate_id"] if winner else None,
         "winner": winner,
+        "nominated_candidate_ids": [item["candidate_id"] for item in nominations],
+        "nominations": nominations,
+        "maximum_challengers": run.maximum_challengers,
         "ranked_families": collapsed,
         "runner_up_candidates_without_holdout_access": [
             item for item in ranked if winner is None or item["candidate_id"] != winner["candidate_id"]
@@ -98,7 +110,7 @@ def discover(
         "selection_rule": (
             "highest complexity-penalized R/R among candidates with positive aggregate PnL, "
             "minimum samples, and positive PnL in at least two-thirds of populated date folds; "
-            "one representative per correlated family"
+            "one representative per correlated family, bounded by maximum_challengers"
         ),
         "threshold_fitting": "none_fixed_predeclared_grammar",
     }

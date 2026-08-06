@@ -20,6 +20,8 @@ from weather_trader.discovery.engine import (
     select_frozen_rows,
 )
 from weather_trader.discovery.materializer import _research_label, materialize_broad_discovery_view
+from weather_trader.discovery.orchestrator import DiscoveryBudgets, RecurringDiscoveryOrchestrator
+from weather_trader.discovery.registry import DiscoveryRegistry
 
 
 def run_spec(**overrides) -> DiscoveryRunSpec:
@@ -289,3 +291,203 @@ def test_research_label_uses_daily_low_for_low_temperature_markets() -> None:
         "selected_side": "BUY_YES",
     }
     assert _research_label(row) == 1
+
+
+def recurring_run_spec(**overrides) -> DiscoveryRunSpec:
+    values = {"earliest_activation_timestamp": "2026-01-10T03:00:00+00:00"}
+    values.update(overrides)
+    return run_spec(**values)
+
+
+def test_recurring_discovery_is_bounded_append_only_and_idempotent(tmp_path: Path) -> None:
+    run = recurring_run_spec(maximum_challengers=2)
+    rows = [broad_row(index) for index in range(1, 10)]
+    registry_path = tmp_path / "discovery.sqlite"
+
+    with DiscoveryRegistry(registry_path) as registry:
+        orchestrator = RecurringDiscoveryOrchestrator(
+            registry, budgets=DiscoveryBudgets(maximum_active_candidates=4)
+        )
+        first = orchestrator.execute(
+            run=run,
+            rows=rows,
+            materialization_diagnostics={"row_set_hash": "rows-1", "counts": {"ELIGIBLE": 9}},
+            started_at_utc="2026-01-10T00:00:00+00:00",
+            completed_at_utc="2026-01-10T01:01:00+00:00",
+        )
+        counts = registry.table_counts()
+        repeated = orchestrator.execute(
+            run=run,
+            rows=rows,
+            materialization_diagnostics={"row_set_hash": "rows-1", "counts": {"ELIGIBLE": 9}},
+            started_at_utc="2026-01-10T02:00:00+00:00",
+            completed_at_utc="2026-01-10T02:01:00+00:00",
+        )
+
+        assert first["status"] == "COMPLETED"
+        assert 0 < len(first["nominations"]) <= 2
+        assert repeated["action"] == "NOOP_ALREADY_COMPLETED"
+        assert registry.table_counts() == counts
+        assert counts["discovery_run_outcomes"] == 1
+        assert counts["candidate_versions"] == len(first["nominations"])
+        assert all(
+            registry.current_role(item["candidate_version_id"]) == "NOMINATED"
+            for item in first["nominations"]
+        )
+        assert first["funded_authorization"] is False
+
+
+def test_recurring_discovery_skips_unchanged_resolved_watermarks(tmp_path: Path) -> None:
+    rows = [broad_row(index) for index in range(1, 10)]
+    with DiscoveryRegistry(tmp_path / "discovery.sqlite") as registry:
+        orchestrator = RecurringDiscoveryOrchestrator(registry)
+        first = recurring_run_spec()
+        orchestrator.execute(
+            run=first,
+            rows=rows,
+            materialization_diagnostics={"row_set_hash": "rows-1"},
+            started_at_utc="2026-01-10T00:00:00+00:00",
+            completed_at_utc="2026-01-10T01:01:00+00:00",
+        )
+        later = recurring_run_spec(
+            discovery_cutoff_exclusive="2026-01-12",
+            earliest_activation_timestamp="2026-01-12T03:00:00+00:00",
+            research_watermark=120,
+        )
+
+        decision = orchestrator.execution_decision(later)
+
+        assert decision["action"] == "NOOP_UNCHANGED_RESOLVED_WATERMARKS"
+        assert registry.table_counts()["discovery_runs"] == 1
+
+
+def test_later_outcomes_append_a_run_and_reuse_unchanged_versions(tmp_path: Path) -> None:
+    rows = [broad_row(index) for index in range(1, 10)]
+    with DiscoveryRegistry(tmp_path / "discovery.sqlite") as registry:
+        orchestrator = RecurringDiscoveryOrchestrator(registry)
+        first = recurring_run_spec(maximum_challengers=2)
+        first_result = orchestrator.execute(
+            run=first,
+            rows=rows,
+            materialization_diagnostics={"row_set_hash": "rows-1"},
+            started_at_utc="2026-01-10T00:00:00+00:00",
+            completed_at_utc="2026-01-10T01:01:00+00:00",
+        )
+        later = recurring_run_spec(
+            discovery_cutoff_exclusive="2026-01-12",
+            earliest_activation_timestamp="2026-01-12T03:00:00+00:00",
+            research_watermark=120,
+            outcome_watermark="2026-01-13T00:00:00+00:00",
+            maximum_challengers=2,
+        )
+        later_result = orchestrator.execute(
+            run=later,
+            rows=rows,
+            materialization_diagnostics={"row_set_hash": "rows-2"},
+            started_at_utc="2026-01-12T00:00:00+00:00",
+            completed_at_utc="2026-01-12T01:01:00+00:00",
+        )
+
+        assert later_result["status"] == "COMPLETED"
+        assert all(item["reused_version"] for item in later_result["nominations"])
+        assert registry.table_counts()["discovery_runs"] == 2
+        assert registry.table_counts()["discovery_run_outcomes"] == 2
+        assert registry.table_counts()["candidate_versions"] == len(first_result["nominations"])
+
+
+def test_no_nomination_and_resource_budgets_are_persisted(tmp_path: Path) -> None:
+    losing_rows = [broad_row(index, won=0) for index in range(1, 10)]
+    with DiscoveryRegistry(tmp_path / "no-nomination.sqlite") as registry:
+        result = RecurringDiscoveryOrchestrator(registry).execute(
+            run=recurring_run_spec(),
+            rows=losing_rows,
+            materialization_diagnostics={"row_set_hash": "losers"},
+            started_at_utc="2026-01-10T00:00:00+00:00",
+            completed_at_utc="2026-01-10T01:01:00+00:00",
+        )
+        assert result["status"] == "NO_NOMINATION"
+        assert registry.table_counts()["candidate_versions"] == 0
+
+    ticks = iter((0.0, 2.0))
+    with DiscoveryRegistry(tmp_path / "runtime-budget.sqlite") as registry:
+        result = RecurringDiscoveryOrchestrator(
+            registry,
+            budgets=DiscoveryBudgets(maximum_runtime_seconds=1.0),
+            clock=lambda: next(ticks),
+        ).execute(
+            run=recurring_run_spec(),
+            rows=[broad_row(index) for index in range(1, 10)],
+            materialization_diagnostics={"row_set_hash": "rows"},
+            started_at_utc="2026-01-10T00:00:00+00:00",
+            completed_at_utc="2026-01-10T01:01:00+00:00",
+        )
+        assert result["status"] == "BUDGET_EXCEEDED"
+        assert registry.table_counts()["candidate_versions"] == 0
+
+    with DiscoveryRegistry(tmp_path / "rule-budget.sqlite") as registry:
+        result = RecurringDiscoveryOrchestrator(registry).execute(
+            run=recurring_run_spec(maximum_challengers=1, maximum_candidate_rules=1),
+            rows=[broad_row(index) for index in range(1, 10)],
+            materialization_diagnostics={"row_set_hash": "rows"},
+            started_at_utc="2026-01-10T00:00:00+00:00",
+            completed_at_utc="2026-01-10T01:01:00+00:00",
+        )
+        assert result["status"] == "BUDGET_EXCEEDED"
+        assert "candidate-rule budget exceeded" in result["diagnostics"]["reason"]
+
+
+def test_active_candidate_budget_bounds_new_versions(tmp_path: Path) -> None:
+    with DiscoveryRegistry(tmp_path / "discovery.sqlite") as registry:
+        result = RecurringDiscoveryOrchestrator(
+            registry, budgets=DiscoveryBudgets(maximum_active_candidates=1)
+        ).execute(
+            run=recurring_run_spec(maximum_challengers=3),
+            rows=[broad_row(index) for index in range(1, 10)],
+            materialization_diagnostics={"row_set_hash": "rows"},
+            started_at_utc="2026-01-10T00:00:00+00:00",
+            completed_at_utc="2026-01-10T01:01:00+00:00",
+        )
+
+        assert result["status"] == "COMPLETED"
+        assert len(result["nominations"]) == 1
+        assert registry.table_counts()["candidate_versions"] == 1
+        assert registry.table_counts()["strategy_families"] == 1
+        assert result["diagnostics"]["skipped_nominations"]
+
+
+def test_sealed_run_resumes_after_interruption(tmp_path: Path) -> None:
+    run = recurring_run_spec(maximum_challengers=1)
+    with DiscoveryRegistry(tmp_path / "discovery.sqlite") as registry:
+        registry.register_discovery_run(
+            run,
+            created_at_utc="2026-01-10T00:00:00+00:00",
+            diagnostics={"state": "sealed_before_ranking"},
+        )
+        orchestrator = RecurringDiscoveryOrchestrator(registry)
+        assert orchestrator.execution_decision(run)["action"] == "RUN_RESUME"
+
+        result = orchestrator.execute(
+            run=run,
+            rows=[broad_row(index) for index in range(1, 10)],
+            materialization_diagnostics={"row_set_hash": "rows"},
+            started_at_utc="2026-01-10T02:00:00+00:00",
+            completed_at_utc="2026-01-10T02:01:00+00:00",
+        )
+
+        assert result["status"] == "COMPLETED"
+        assert registry.table_counts()["discovery_run_outcomes"] == 1
+
+
+def test_recurring_discovery_fails_closed_when_activation_expires(tmp_path: Path) -> None:
+    with DiscoveryRegistry(tmp_path / "discovery.sqlite") as registry:
+        result = RecurringDiscoveryOrchestrator(registry).execute(
+            run=run_spec(),
+            rows=[broad_row(index) for index in range(1, 10)],
+            materialization_diagnostics={"row_set_hash": "rows"},
+            started_at_utc="2026-01-10T00:00:00+00:00",
+            completed_at_utc="2026-01-10T01:00:00+00:00",
+        )
+
+        assert result["status"] == "ACTIVATION_EXPIRED"
+        assert registry.table_counts()["candidate_versions"] == 0
+        assert registry.discovery_run_outcome(run_spec().run_id)["status"] == "ACTIVATION_EXPIRED"
