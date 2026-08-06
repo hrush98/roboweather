@@ -117,14 +117,20 @@ def test_discovery_run_id_and_immutable_write_are_deterministic(tmp_path: Path) 
 class FakeBookProvider:
     def book_at(self, token_id, ready, *, pre_signal_seconds):
         assert token_id == "token-yes"
-        assert ready == datetime(2026, 1, 2, 20, 0, 0, 250000, tzinfo=timezone.utc)
-        assert pre_signal_seconds == 60
+        signal_ready = datetime(2026, 1, 2, 20, 0, 0, 250000, tzinfo=timezone.utc)
+        horizon = int((ready - signal_ready).total_seconds())
+        assert (horizon, pre_signal_seconds) in {(0, 60), (30, 30), (120, 120)}
+        bid, ask = {
+            0: (0.19, 0.20),
+            30: (0.20, 0.22),
+            120: (0.21, 0.23),
+        }[horizon]
         return {
-            "bids": {0.19: 10.0},
-            "asks": {0.20: 200.0},
+            "bids": {bid: 10.0},
+            "asks": {ask: 200.0},
             "session_id": "session-1",
             "coverage_interval_id": 7,
-            "reconstruction_hash": "book-hash",
+            "reconstruction_hash": "book-hash" if horizon == 0 else f"markout-{horizon}",
         }, None
 
 
@@ -181,6 +187,8 @@ def test_broad_materializer_is_policy_neutral_causal_and_settlement_explicit() -
     assert rows[0].research_outcome_label == rows[0].venue_outcome_label == 1
     assert rows[0].settlement_disagreement is False
     assert rows[0].reconstruction_hash == "book-hash"
+    assert rows[0].markouts_valid
+    assert rows[0].markout_midpoints == (("30s", 0.21), ("2m", 0.22))
     assert diagnostics["counts"]["ELIGIBLE"] == 1
 
 

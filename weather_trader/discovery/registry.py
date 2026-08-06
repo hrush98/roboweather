@@ -696,6 +696,57 @@ class DiscoveryRegistry:
         ).fetchone()
         return None if row is None else str(row[0])
 
+    def active_candidate_versions(self) -> list[dict[str, Any]]:
+        """Return immutable definitions for candidates still collecting evidence."""
+        rows = self.connection.execute(
+            """with latest as (
+                   select candidate_version_id,to_role,
+                          row_number() over (
+                              partition by candidate_version_id
+                              order by occurred_at_utc desc,rowid desc
+                          ) event_rank
+                   from candidate_lifecycle_events
+               )
+               select candidates.*,latest.to_role,
+                      runs.research_watermark,runs.tape_watermark_hash,
+                      runs.outcome_watermark,runs.venue_settlement_watermark,
+                      runs.spec_json
+               from candidate_versions candidates
+               join latest using(candidate_version_id)
+               join discovery_runs runs on runs.run_id=candidates.source_run_id
+               where latest.event_rank=1 and latest.to_role in
+                   ('NOMINATED','SHADOW_ACTIVE','CHALLENGER','CHAMPION',
+                    'PROBATION','PHASE4_REQUESTED')
+               order by candidates.activation_timestamp_utc,
+                        candidates.candidate_version_id"""
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["definition"] = json.loads(item.pop("definition_json"))
+            item["source_run_spec"] = json.loads(item.pop("spec_json"))
+            result.append(item)
+        return result
+
+    def evaluation_cohort(self, candidate_version_id: str) -> dict[str, Any] | None:
+        """Return the one open activation-bounded cohort, if it exists."""
+        row = self.connection.execute(
+            """select * from evaluation_cohorts
+               where candidate_version_id=? and eligible_end_utc is null
+               order by eligible_start_utc,cohort_id limit 1""",
+            (candidate_version_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        for field in (
+            "source_watermarks_json",
+            "requirements_json",
+            "initial_completeness_json",
+        ):
+            item[field.removesuffix("_json")] = json.loads(item.pop(field))
+        return item
+
     def import_batch_v1(self, artifact_dir: Path) -> dict[str, Any]:
         """Import batch compatibility identity only, never its forward report."""
         run_path = artifact_dir / "discovery_run.json"

@@ -46,6 +46,7 @@ class DiscoveryRunSpec:
     fill_scenario: str = "stable_taker_immediate_ask_sweep"
     latency_ms: int = 250
     pre_signal_seconds: int = 60
+    markout_horizons_seconds: tuple[tuple[str, int], ...] = (("30s", 30), ("2m", 120))
     target_cost_usd: float = 25.0
     maximum_challengers: int = 3
     maximum_candidate_rules: int = 5_000
@@ -81,6 +82,15 @@ class DiscoveryRunSpec:
             raise ValueError("station/date minimum cannot be below effective-date minimum")
         if self.latency_ms < 0 or self.pre_signal_seconds < 0:
             raise ValueError("latency and pre-signal coverage must be nonnegative")
+        markout_labels = [label for label, _ in self.markout_horizons_seconds]
+        if (
+            not markout_labels
+            or len(set(markout_labels)) != len(markout_labels)
+            or any(not label or seconds <= 0 for label, seconds in self.markout_horizons_seconds)
+        ):
+            raise ValueError(
+                "markout horizons must have unique labels and positive seconds"
+            )
         if (
             self.target_cost_usd <= 0
             or self.portfolio_station_date_cap_usd <= 0

@@ -53,6 +53,7 @@ def materialize_broad_discovery_view(
             reasons.append("TOKEN_NOT_CATALOGED")
         snapshot_at = _timestamp(row.get("timestamp"))
         ready = snapshot_at + timedelta(milliseconds=run.latency_ms) if snapshot_at else None
+
         book: dict[str, Any] | None = None
         tape_reason: str | None = None
         if token_id is not None and ready is not None:
@@ -79,6 +80,30 @@ def materialize_broad_discovery_view(
         )
         if cost <= 0:
             reasons.append("TAPE:NO_ASKS_AT_OR_BELOW_DISCOVERY_CAP")
+
+        markouts: list[tuple[str, float]] = []
+        if token_id is not None and ready is not None and book is not None:
+            for label, seconds in run.markout_horizons_seconds:
+                markout_book, markout_reason = provider.book_at(
+                    token_id,
+                    ready + timedelta(seconds=seconds),
+                    pre_signal_seconds=seconds,
+                )
+                markout_bids = tuple(
+                    sorted(float(price) for price in (markout_book or {}).get("bids", {}))
+                )
+                markout_asks = tuple(
+                    sorted(float(price) for price in (markout_book or {}).get("asks", {}))
+                )
+                if markout_reason or not markout_bids or not markout_asks:
+                    detail = markout_reason or "two_sided_midpoint_unavailable"
+                    diagnostics[f"MARKOUT:{label}:{detail}"] += 1
+                    break
+                markouts.append((
+                    label,
+                    round((markout_bids[-1] + markout_asks[0]) / 2.0, 12),
+                ))
+        markouts_valid = len(markouts) == len(run.markout_horizons_seconds)
 
         research_label = _research_label(row)
         venue_label = _venue_label(row)
@@ -139,8 +164,8 @@ def materialize_broad_discovery_view(
             venue_outcome_label=venue_label,
             venue_resolution_source=str(row["venue_source"]) if row.get("venue_source") else None,
             settlement_disagreement=disagreement,
-            markouts_valid=False,
-            markout_midpoints=(),
+            markouts_valid=markouts_valid,
+            markout_midpoints=tuple(markouts),
             actual_fill_status="UNAVAILABLE_PUBLIC_TAPE_COUNTERFACTUAL",
             discovery_eligible=not reasons,
             discovery_ineligibility_reasons=tuple(sorted(set(reasons))),
