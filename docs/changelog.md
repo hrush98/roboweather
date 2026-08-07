@@ -2,6 +2,23 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-08-07
+
+- Completed Phase 3D Slices C5-C6. Added fail-closed append-only lifecycle
+  validation; deterministic research champion/challenger/probation/retirement/
+  rejection rules; aligned replacement and cap-aware additive comparisons;
+  conservative/base uncertainty, concentration, settlement, and markout gates;
+  and retained family failure history. Added a single-owner, restart-safe,
+  runtime/storage-bounded dry-run scheduler with append-only cycle failures,
+  CLI/TUI status, and a durable user-systemd unit. The service was not enabled,
+  no Phase 4 request was created, and funded behavior did not change.
+
+- Reviewed the recent Phase 3D C3-C4 integrations and repaired the material
+  gaps found: arbitrary/backdated role jumps are now rejected, common-date
+  scorecards include cap-aware portfolio evidence, same-day newly activated
+  candidates no longer break evaluation scheduling, C4 documentation/checklist
+  state is reconciled, and registry v2-to-v3 migration is covered.
+
 ## 2026-08-06
 
 - Completed Phase 3D Slice C4. Added continuous activation-bounded evaluation

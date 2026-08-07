@@ -4,7 +4,7 @@ This is the living financial and systems audit for RoboWeather. Update this docu
 
 Generated or ad hoc analysis may live under `reports/`, but durable conclusions, open risks, and decisions belong here. The current implementation sequence belongs in `docs/execution-rebuild-roadmap.md`; funded operating state belongs in `docs/live-trading-journal.md`.
 
-Last reviewed: 2026-08-06
+Last reviewed: 2026-08-07
 
 ## Current Verdict
 
@@ -25,14 +25,21 @@ from rewriting earlier evidence.
 The committed Phase 3D path supplies reusable materialization, exact-book
 replay, deterministic hashes, fixed-rule scoring, family collapse, an
 activation-gated venue-settlement-fail-closed evaluator, and the durable C2
-registry plus C3 recurring orchestrator and C4 continuous cohort evaluator. The registry enforces append-only
+registry, C3 recurring orchestrator, C4 continuous cohort evaluator, C5 role
+transition engine, and C6 bounded scheduler/status surfaces. The registry enforces append-only
 definitions/evidence/events, content-addressed candidate versions, activation-bounded cohorts, one-writer
 ownership, read-only observation, and immutable run outcomes. C3 now no-ops
 unchanged resolved watermarks, resumes interrupted sealed runs, nominates a
 bounded challenger set, rejects elapsed activation boundaries, reuses unchanged
 versions, and enforces resource budgets. C4 appends post-activation forward-shadow
 and aligned common-date scorecards, keeps actual orders separate, and credits
-only venue-authoritative outcomes. Its one-winner batch manifest remains transitional. Champion/challenger transitions are not implemented.
+only venue-authoritative outcomes. C5 assigns research-only roles from
+predeclared conservative/base uncertainty, concentration, settlement, markout,
+and aligned replacement gates while retaining failed family versions. C6 adds
+restart-safe cycle identities, single scheduler ownership, time/storage
+budgets, append-only failure state, CLI/TUI visibility, and a durable service
+unit. Its one-winner batch manifest remains transitional. The new scheduler
+service is not enabled by this change.
 Both current `resolutions` tables are empty and fill-conditioned markouts remain
 absent, so no candidate can pass to Phase 4.
 
@@ -47,7 +54,7 @@ Current confidence by layer:
 | New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
 | Fair-value/price sheet | V2a Slices 0-3 now produce leak-safe calibration, causal uncertainty reserves, conservative fairs, maximum quotes, and economic gates. The first 98-row Slice 3 read leaves both pilots research-only because no calibrator or untouched forward window was frozen. | Freeze a baseline and forward start before new outcomes; do not promote from the July 16-29 comparison. |
 | Phase 3 shared tape | Slices 1-4 are implemented. Continuous collection resumed August 4 after the accepted 72-hour evidence; its first new session reached 1,474/1,474 valid tokens and strictly verified its first partition. Periodic reconnect gaps and late initial discovery remain known limitations; Slice 4 still lacks one real persisted-quote join. | Continue collection, monitor health/storage through the TUI, use retained tape for strategy work, and reject every affected decision window. |
-| Phase 3D strategy discovery | C0-C4 are implemented: causal batch primitives, the durable append-only registry, recurring bounded challenger nomination, and activation-bounded continuous scorecards. Champion/challenger transitions are open. Venue settlement and markouts are unavailable. | Implement C5, then C6 scheduling; keep batch CLIs research-only and do not pass Phase 4 without venue-aligned forward evidence and markouts. |
+| Phase 3D strategy discovery | C0-C6 are repository-complete: causal primitives, append-only registry, recurring bounded nomination, activation-bounded scorecards, deterministic research roles, bounded scheduling, and operator visibility. The service is not enabled; venue settlement and markouts remain unavailable. | Keep batch CLIs compatibility-only; collect venue-aligned forward evidence and markouts before C7 can request Phase 4. |
 | Existing candidate-token shadow collector | Useful plumbing prototype, but candidate-scoped and not a continuous causal market tape. | Do not use its fill labels as promotion evidence. |
 | Fillability and adverse selection | Still unresolved. Public L2 data can provide bounds, not exact hypothetical queue position. | Validate shared-tape replay, then run controlled real-order canaries. |
 | Funded readiness | No exact signal + quote policy + size has passed current fill-conditioned gates. | Keep funded trading paused. |
@@ -173,6 +180,14 @@ Small funded orders may validate plumbing and replay fidelity, but they confer n
 Update the body of this document when the current assessment changes. Append one short entry below describing the evidence that caused the change; keep detailed generated tables in reproducible reports or scripts.
 
 ## Audit Log
+
+- 2026-08-07: Completed Phase 3D C5-C6 repository implementation. Research
+  roles now require aligned replacement evidence plus conservative/base
+  uncertainty, concentration, settlement, and markout gates; failed versions
+  remain in family history and no role can authorize funding. Added a bounded,
+  restart-safe scheduler, append-only cycle failures, CLI/TUI status, and a
+  durable systemd unit. The unit was not enabled and funded status did not
+  change.
 
 - 2026-08-06: Completed Phase 3D C4 with activation-bounded cohorts and
   immutable forward-shadow/common-date scorecards for every active candidate.

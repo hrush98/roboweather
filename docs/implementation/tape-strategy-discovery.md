@@ -1,8 +1,8 @@
 # Continuous Versioned Strategy Discovery
 
-Status: C0-C3 implemented; continuous evaluation and role transitions remain open
+Status: C0-C6 implemented; Phase 4 handoff remains open
 
-Last updated: 2026-08-06
+Last updated: 2026-08-07
 
 ## Goal
 
@@ -437,6 +437,9 @@ selection/execution attrition, three declared displayed-depth counterfactuals,
 venue-only economics, uncertainty, drawdown, capacity, markouts, settlement
 provenance, and aligned active-family comparisons. Public tape never
 synthesizes `ACTUAL_ORDER` evidence. `scripts/phase3d_continuous_evaluation.py`
+is the idempotent manual C4 surface. Its common-date evidence now records both
+aligned replacement value and cap-aware additive value after the peer consumes
+shared station/date and daily capacity.
 
 ### Slice C5: Champion/Challenger Transitions
 
@@ -449,6 +452,16 @@ synthesizes `ACTUAL_ORDER` evidence. `scripts/phase3d_continuous_evaluation.py`
 Exit: deterministic inputs produce deterministic role transitions; the system
 can select no champion and cannot erase failed evidence through version churn.
 
+Implementation: complete. `weather_trader/discovery/transitions.py` activates
+nominations only after a C4 scorecard exists, applies fixed research-only
+challenger/champion/probation/retirement/rejection transitions, requires
+venue-aligned conservative and base economics with a positive uncertainty
+lower bound, valid markouts, bounded concentration, and aligned replacement
+evidence, and preserves family failure history in append-only lifecycle
+metadata. Registry guards reject role jumps, backdating, and any funded
+authorization metadata. `scripts/phase3d_apply_transitions.py` is the manual C5
+surface. The engine creates no Phase 4 request.
+
 ### Slice C6: Scheduling And Operator Visibility
 
 - Add a bounded dry-run scheduler/service after manual idempotency passes.
@@ -458,6 +471,16 @@ can select no champion and cannot erase failed evidence through version churn.
 
 Exit: continuous discovery/evaluation survives restart without duplicate runs,
 unbounded candidates, silent failure, or TUI lifetime ownership.
+
+Implementation: complete. `weather_trader/discovery/scheduler.py` owns a
+registry-scoped scheduler lock, six-hour deterministic cycle identities,
+weekly discovery cadence, crash resume, subprocess timeouts, whole-cycle
+runtime and registry-size budgets, and append-only started/completed/failed
+events. `scripts/run_phase3d_scheduler.py` runs once or durably under
+`deploy/systemd/roboweather-phase3d-discovery.service`;
+`scripts/phase3d_status.py` and the TUI Processes tab expose cycle state,
+source watermarks, roles, scorecard freshness, storage, and failures. The
+service is repository-complete but is not enabled by this change.
 
 ### Slice C7: Phase 4 Handoff
 
@@ -491,6 +514,14 @@ Reusable now:
 - `weather_trader/discovery/orchestrator.py`: recurring C3 trigger, nomination,
   idempotency, recovery, and budget enforcement;
 - `scripts/phase3d_continuous_discovery.py`: manual recurring-run entry point.
+- `weather_trader/discovery/evaluator.py`: C4 activation-bounded forward and
+  common-date scorecards;
+- `weather_trader/discovery/transitions.py`: C5 deterministic research roles;
+- `weather_trader/discovery/scheduler.py`: C6 bounded recurring scheduler;
+- `weather_trader/discovery/status.py`: read-only C6 operator status;
+- `scripts/phase3d_continuous_evaluation.py`,
+  `scripts/phase3d_apply_transitions.py`, `scripts/run_phase3d_scheduler.py`, and
+  `scripts/phase3d_status.py`: manual, service, and observer surfaces.
 
 Transitional and to be refactored:
 
@@ -500,10 +531,9 @@ Transitional and to be refactored:
 - tests and docs that treat one global winner as the Phase 3D exit;
 - repository status claims that D0-D3 complete the intended operating system.
 
-Until C4-C5 are implemented, the existing batch discovery/forward CLIs remain
-read-only research tools. Do not run them as the production discovery scheduler,
-strategy from their output, or treat their single manifest as the intended
-steady-state architecture.
+The existing batch discovery/forward CLIs remain read-only compatibility tools.
+Do not run them as the continuous scheduler, trade from their output, or treat
+their single manifest as the steady-state architecture.
 
 ## Acceptance Checklist
 
@@ -516,14 +546,14 @@ steady-state architecture.
 - [x] Unchanged candidate definitions reuse their existing version identity.
 - [x] Changed definitions create a new version identity and require a new
   post-activation cohort.
-- [ ] Active candidates receive continuous scorecard updates.
-- [ ] Common-date champion/challenger comparisons are deterministic.
-- [ ] Family-level evidence survives version replacement and retirement.
+- [x] Active candidates receive continuous scorecard updates.
+- [x] Common-date champion/challenger comparisons are deterministic.
+- [x] Family-level evidence survives version replacement and retirement.
 - [x] Candidate and runtime/storage budgets prevent unbounded growth.
-- [ ] Venue settlement and research-truth disagreement remain explicit.
-- [ ] Conservative/base/optimistic/actual fills remain separate.
-- [ ] Positive optimistic-only evidence cannot trigger a role promotion.
-- [ ] No discovery or registry transition can authorize funded trading.
+- [x] Venue settlement and research-truth disagreement remain explicit.
+- [x] Conservative/base/optimistic/actual fills remain separate.
+- [x] Positive optimistic-only evidence cannot trigger a role promotion.
+- [x] No discovery or registry transition can authorize funded trading.
 - [ ] Phase 4 receives only an explicitly approved exact candidate version.
 
 ## Kill And Pivot Rules
@@ -546,6 +576,17 @@ steady-state architecture.
   stale evaluation, disable the scheduler and retain manual idempotent runs.
 
 ## Decision Log
+
+- 2026-08-07: Completed C5-C6 with validated append-only role transitions,
+  aligned replacement and cap-aware additive comparisons, conservative/base
+  uncertainty and concentration gates, retained family failures, a
+  restart-safe bounded scheduler, append-only cycle failures, CLI/TUI status,
+  and a durable user-systemd unit. The service was not enabled and no Phase 4
+  request or funded authority was created.
+
+- 2026-08-06: Completed C4 with activation-bounded forward-shadow and aligned
+  common-date scorecards, venue-only economics, explicit displayed-depth
+  scenarios, markouts, and separate actual-order evidence.
 
 - 2026-08-06: Completed C3 with a recurring append-only orchestrator, resolved-
   watermark no-ops, crash resume, bounded multi-challenger nomination,

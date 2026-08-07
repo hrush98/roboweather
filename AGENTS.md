@@ -130,14 +130,14 @@
   `import-batch-v1 ARTIFACT_DIR` only to preserve a compatibility run and
   candidate identity; it intentionally imports no cohort or scorecard evidence.
   One writer holds `<REGISTRY>.writer.lock`; do not bypass it. C3 supplies
-  recurring nominations and C4 appends activation-bounded scorecards; C5 will
-  add role transitions. No registry transition may authorize funded trading.
+  recurring nominations, C4 appends activation-bounded scorecards, C5 applies
+  research roles, and C6 schedules the loop. No registry transition may
+  authorize funded trading.
 
-## Phase 3D manual recurring discovery workflow
+## Phase 3D continuous discovery workflow
 
-- C3 recurring discovery and C4 evaluation are manual until C5 transition semantics
-  pass and C6 adds a bounded dry-run scheduler. Run one idempotent discovery cycle with a
-  future activation boundary:
+- C3-C6 are repository-complete. Manual idempotent surfaces remain available
+  for diagnostics. Run one discovery cycle with a future activation boundary:
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_continuous_discovery.py --research-db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --tape-catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite --registry /home/maxrush/.local/state/roboweather/discovery/catalog.sqlite --source-start-date YYYY-MM-DD --discovery-cutoff-exclusive YYYY-MM-DD --activation-timestamp ISO_UTC`
 - The command holds the registry's single-writer lock, skips before
   materialization when resolved outcomes and the sealed grammar/build/model
@@ -153,7 +153,28 @@
   complete as-of watermark. It excludes every pre-activation row, rejects
   invalid tape, credits only venue-authoritative settlement, requires valid
   markouts before review readiness, never infers `ACTUAL_ORDER` fills from
-  public tape, and applies no C5 role transition or funded authority.
+  public tape, and applies no role transition or funded authority.
+- Apply one deterministic research-only C5 role review after C4:
+  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_apply_transitions.py --registry /home/maxrush/.local/state/roboweather/discovery/catalog.sqlite --effective-at-timestamp ISO_UTC`
+- C5 requires positive conservative and base uncertainty lower bounds, bounded
+  station/date concentration, venue settlement, valid markouts, and aligned
+  replacement evidence. It may assign no champion. Lifecycle history rejects
+  role jumps/backdating and explicitly denies funded authority; C5 creates no
+  Phase 4 request.
+- For continuous dry-run operation, install
+  `deploy/systemd/roboweather-phase3d-discovery.service` under
+  `~/.config/systemd/user/`, run `systemctl --user daemon-reload`, then enable it
+  with `systemctl --user enable --now roboweather-phase3d-discovery.service`.
+  The service owns a separate scheduler lock, runs C4/C5 every six hours and C3
+  at most weekly, and enforces task, whole-cycle, registry-size, candidate, and
+  diagnostic budgets. Do not bypass either scheduler or registry writer lock.
+- Inspect it with
+  `systemctl --user status roboweather-phase3d-discovery.service --no-pager`,
+  `journalctl --user -u roboweather-phase3d-discovery.service`, and
+  `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_status.py`.
+  The TUI Processes tab reads the same registry status but does not own the
+  service lifetime. Disable the service and return to manual idempotent runs if
+  duplicate cycles, unbounded state, or stale/silent evaluation appears.
 
 ## Price Sheet V2a dataset workflow
 
