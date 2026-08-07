@@ -11,13 +11,19 @@ from weather_trader.discovery.orchestrator import (
     RecurringDiscoveryOrchestrator,
 )
 from weather_trader.discovery.registry import DiscoveryRegistry
+from weather_trader.discovery.scheduler import BoundedDiscoveryScheduler, SchedulerConfig
+from weather_trader.discovery.transitions import ResearchRoleTransitionEngine, TransitionPolicy
 
 __all__ = [
     "BroadDiscoveryRow",
+    "BoundedDiscoveryScheduler",
     "DiscoveryBudgets",
     "CandidateRule",
     "DiscoveryRegistry",
     "DiscoveryRunSpec",
     "RecurringDiscoveryOrchestrator",
+    "ResearchRoleTransitionEngine",
+    "SchedulerConfig",
     "StrategyManifest",
+    "TransitionPolicy",
 ]

@@ -11,7 +11,7 @@ from weather_trader.discovery.contracts import CandidateRule, DiscoveryRunSpec
 from weather_trader.pricing.contracts import stable_hash
 
 
-REGISTRY_SCHEMA_VERSION = 2
+REGISTRY_SCHEMA_VERSION = 3
 LIFECYCLE_EVENT_TYPES = {
     "GENERATED",
     "NOMINATED",
@@ -35,6 +35,26 @@ RESEARCH_ROLES = {
     "PHASE4_REQUESTED",
 }
 EVIDENCE_KINDS = {"DISCOVERY", "FORWARD_SHADOW", "ACTUAL_ORDER", "COMMON_DATE"}
+ALLOWED_ROLE_TRANSITIONS = {
+    (None, "GENERATED", "GENERATED"),
+    ("GENERATED", "NOMINATED", "NOMINATED"),
+    ("NOMINATED", "SHADOW_ACTIVATED", "SHADOW_ACTIVE"),
+    ("SHADOW_ACTIVE", "CHALLENGER_ASSIGNED", "CHALLENGER"),
+    ("CHALLENGER", "CHAMPION_ASSIGNED", "CHAMPION"),
+    ("PROBATION", "CHAMPION_ASSIGNED", "CHAMPION"),
+    ("CHAMPION", "DEGRADED", "PROBATION"),
+    ("NOMINATED", "REJECTED", "REJECTED"),
+    ("SHADOW_ACTIVE", "REJECTED", "REJECTED"),
+    ("CHALLENGER", "REJECTED", "REJECTED"),
+    ("CHAMPION", "REJECTED", "REJECTED"),
+    ("PROBATION", "REJECTED", "REJECTED"),
+    ("NOMINATED", "RETIRED", "RETIRED"),
+    ("SHADOW_ACTIVE", "RETIRED", "RETIRED"),
+    ("CHALLENGER", "RETIRED", "RETIRED"),
+    ("CHAMPION", "RETIRED", "RETIRED"),
+    ("PROBATION", "RETIRED", "RETIRED"),
+    ("CHAMPION", "PHASE4_REQUESTED", "PHASE4_REQUESTED"),
+}
 
 
 class RegistryError(RuntimeError):
@@ -136,6 +156,11 @@ class DiscoveryRegistry:
         if version == 1:
             self._migrate_v2()
             self.connection.execute("pragma user_version = 2")
+            self.connection.commit()
+            version = 2
+        if version == 2:
+            self._migrate_v3()
+            self.connection.execute("pragma user_version = 3")
             self.connection.commit()
         self._verify_schema()
 
@@ -299,6 +324,43 @@ class DiscoveryRegistry:
             insert or ignore into registry_schema_migrations values (
                 2, strftime('%Y-%m-%dT%H:%M:%fZ','now'),
                 'append-only recurring discovery run outcomes'
+            );
+            """
+        )
+
+    def _migrate_v3(self) -> None:
+        self.connection.executescript(
+            """
+            create table if not exists scheduler_events (
+                event_id text primary key,
+                event_hash text not null unique,
+                cycle_id text not null,
+                event_type text not null,
+                scheduled_for_utc text not null,
+                occurred_at_utc text not null,
+                config_hash text not null,
+                tasks_json text not null,
+                details_json text not null,
+                unique(cycle_id,event_type)
+            );
+
+            create index if not exists idx_scheduler_events_time
+                on scheduler_events(occurred_at_utc,cycle_id);
+
+            create trigger if not exists scheduler_events_append_only_update
+            before update on scheduler_events
+            begin
+                select raise(abort, 'scheduler_events is append-only');
+            end;
+            create trigger if not exists scheduler_events_append_only_delete
+            before delete on scheduler_events
+            begin
+                select raise(abort, 'scheduler_events is append-only');
+            end;
+
+            insert or ignore into registry_schema_migrations values (
+                3, strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+                'append-only bounded scheduler lifecycle events'
             );
             """
         )
@@ -631,6 +693,11 @@ class DiscoveryRegistry:
         source_run_id: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> str:
+        transition_metadata = dict(metadata or {})
+        if event_type != "GENERATED":
+            if transition_metadata.get("funded_authorization") not in {None, False}:
+                raise ValueError("research role transitions cannot authorize funded trading")
+            transition_metadata["funded_authorization"] = False
         with self.connection:
             return self._append_lifecycle_event_in_transaction(
                 candidate_version_id=candidate_version_id,
@@ -640,7 +707,7 @@ class DiscoveryRegistry:
                 occurred_at_utc=occurred_at_utc,
                 reason=reason,
                 source_run_id=source_run_id,
-                metadata=metadata or {},
+                metadata=transition_metadata,
             )
 
     def _append_lifecycle_event_in_transaction(
@@ -673,6 +740,31 @@ class DiscoveryRegistry:
         }
         event_hash = stable_hash(payload)
         event_id = f"p3d_event_{event_hash[:24]}"
+        existing = self.connection.execute(
+            "select event_id from candidate_lifecycle_events where event_hash=?",
+            (event_hash,),
+        ).fetchone()
+        if existing is not None:
+            return str(existing["event_id"])
+        latest = self.connection.execute(
+            """select to_role,occurred_at_utc from candidate_lifecycle_events
+               where candidate_version_id=?
+               order by occurred_at_utc desc,rowid desc limit 1""",
+            (candidate_version_id,),
+        ).fetchone()
+        current = None if latest is None else str(latest["to_role"])
+        if current != from_role:
+            raise ImmutableRegistryConflict(
+                f"candidate {candidate_version_id} role is {current!r}, not {from_role!r}"
+            )
+        if latest is not None and payload["occurred_at_utc"] < str(latest["occurred_at_utc"]):
+            raise ValueError("lifecycle transitions cannot be backdated before current state")
+        if (from_role, event_type, to_role) not in ALLOWED_ROLE_TRANSITIONS:
+            raise ValueError(
+                f"unsupported role transition: {from_role!r} --{event_type}--> {to_role!r}"
+            )
+        if event_type != "GENERATED" and metadata.get("funded_authorization") is not False:
+            raise ValueError("research role transitions must deny funded authorization explicitly")
         self._insert_immutable("candidate_lifecycle_events", "event_id", {
             "event_id": event_id,
             "event_hash": event_hash,
@@ -747,6 +839,130 @@ class DiscoveryRegistry:
             item[field.removesuffix("_json")] = json.loads(item.pop(field))
         return item
 
+    def latest_scorecards(self, evidence_kind: str) -> list[dict[str, Any]]:
+        if evidence_kind not in EVIDENCE_KINDS:
+            raise ValueError(f"unsupported evidence kind: {evidence_kind}")
+        rows = self.connection.execute(
+            """with ranked as (
+                   select scorecards.*,
+                          row_number() over (
+                              partition by candidate_version_id
+                              order by created_at_utc desc,rowid desc
+                          ) score_rank
+                   from candidate_scorecards scorecards
+                   where evidence_kind=?
+               )
+               select * from ranked where score_rank=1
+               order by candidate_version_id""",
+            (evidence_kind,),
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item.pop("score_rank", None)
+            for field in ("statistics_json", "rejection_counts_json", "source_refs_json"):
+                item[field.removesuffix("_json")] = json.loads(item.pop(field))
+            result.append(item)
+        return result
+
+    def candidate_lifecycle_history(self, candidate_version_id: str) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """select * from candidate_lifecycle_events
+               where candidate_version_id=?
+               order by occurred_at_utc,rowid""",
+            (candidate_version_id,),
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["metadata"] = json.loads(item.pop("metadata_json"))
+            result.append(item)
+        return result
+
+    def family_failure_history(self, family_id: str) -> dict[str, Any]:
+        rows = self.connection.execute(
+            """select versions.candidate_version_id,events.to_role
+               from candidate_versions versions
+               join candidate_lifecycle_events events using(candidate_version_id)
+               where versions.family_id=?
+               order by events.occurred_at_utc,events.rowid""",
+            (family_id,),
+        ).fetchall()
+        failed = sorted({
+            str(row["candidate_version_id"])
+            for row in rows
+            if row["to_role"] in {"PROBATION", "RETIRED", "REJECTED"}
+        })
+        return {
+            "family_id": family_id,
+            "failed_candidate_version_ids": failed,
+            "failed_version_count": len(failed),
+        }
+
+    def append_scheduler_event(
+        self,
+        *,
+        cycle_id: str,
+        event_type: str,
+        scheduled_for_utc: str,
+        occurred_at_utc: str,
+        config_hash: str,
+        tasks: list[str] | tuple[str, ...],
+        details: Mapping[str, Any],
+    ) -> str:
+        if event_type not in {"STARTED", "COMPLETED", "FAILED", "SKIPPED"}:
+            raise ValueError(f"unsupported scheduler event: {event_type}")
+        payload = {
+            "cycle_id": cycle_id,
+            "event_type": event_type,
+            "scheduled_for_utc": _utc_text(scheduled_for_utc),
+            "occurred_at_utc": _utc_text(occurred_at_utc),
+            "config_hash": config_hash,
+            "tasks": list(tasks),
+            "details": dict(details),
+        }
+        event_hash = stable_hash(payload)
+        event_id = f"p3d_scheduler_{event_hash[:24]}"
+        prior = self.connection.execute(
+            "select event_id,event_hash from scheduler_events where cycle_id=? and event_type=?",
+            (cycle_id, event_type),
+        ).fetchone()
+        if prior is not None:
+            if str(prior["event_hash"]) == event_hash:
+                return str(prior["event_id"])
+            raise ImmutableRegistryConflict(
+                f"scheduler cycle {cycle_id} already has different {event_type} evidence"
+            )
+        with self.connection:
+            self._insert_immutable("scheduler_events", "event_id", {
+                "event_id": event_id,
+                "event_hash": event_hash,
+                "cycle_id": cycle_id,
+                "event_type": event_type,
+                "scheduled_for_utc": payload["scheduled_for_utc"],
+                "occurred_at_utc": payload["occurred_at_utc"],
+                "config_hash": config_hash,
+                "tasks_json": _json(payload["tasks"]),
+                "details_json": _json(details),
+            })
+        return event_id
+
+    def scheduler_cycle_events(self, cycle_id: str) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """select * from scheduler_events where cycle_id=?
+               order by occurred_at_utc,rowid""",
+            (cycle_id,),
+        ).fetchall()
+        return [_scheduler_event(row) for row in rows]
+
+    def recent_scheduler_events(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """select * from scheduler_events
+               order by occurred_at_utc desc,rowid desc limit ?""",
+            (limit,),
+        ).fetchall()
+        return [_scheduler_event(row) for row in rows]
+
     def import_batch_v1(self, artifact_dir: Path) -> dict[str, Any]:
         """Import batch compatibility identity only, never its forward report."""
         run_path = artifact_dir / "discovery_run.json"
@@ -816,6 +1032,7 @@ class DiscoveryRegistry:
             "discovery_runs", "discovery_run_outcomes", "strategy_families",
             "candidate_versions",
             "evaluation_cohorts", "candidate_scorecards", "candidate_lifecycle_events",
+            "scheduler_events",
         )
         return {
             table: int(self.connection.execute(f"select count(*) from {table}").fetchone()[0])
@@ -853,3 +1070,10 @@ def _utc_text(value: str) -> str:
     if parsed.tzinfo is None:
         raise ValueError(f"timestamp must include timezone: {value}")
     return parsed.astimezone(timezone.utc).isoformat()
+
+
+def _scheduler_event(row: sqlite3.Row) -> dict[str, Any]:
+    item = dict(row)
+    item["tasks"] = json.loads(item.pop("tasks_json"))
+    item["details"] = json.loads(item.pop("details_json"))
+    return item

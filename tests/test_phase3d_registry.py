@@ -272,3 +272,36 @@ def test_candidate_activation_cannot_precede_registry_creation(tmp_path: Path) -
                 sizing_and_risk={},
                 created_at_utc="2026-01-10T01:00:00+00:00",
             )
+
+
+def test_registry_migrates_v2_to_v3_scheduler_events_without_rewriting_history(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy-v2.sqlite"
+    connection = sqlite3.connect(path)
+    connection.row_factory = sqlite3.Row
+    legacy = DiscoveryRegistry.__new__(DiscoveryRegistry)
+    legacy.connection = connection
+    legacy._migrate_v1()
+    legacy._migrate_v2()
+    connection.execute("pragma user_version=2")
+    connection.commit()
+    connection.close()
+
+    with DiscoveryRegistry(path) as registry:
+        assert registry.connection.execute("pragma user_version").fetchone()[0] == 3
+        event_id = registry.append_scheduler_event(
+            cycle_id="cycle",
+            event_type="STARTED",
+            scheduled_for_utc=CREATED,
+            occurred_at_utc=CREATED,
+            config_hash="config",
+            tasks=["evaluation"],
+            details={"funded_authorization": False},
+        )
+        assert event_id.startswith("p3d_scheduler_")
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            registry.connection.execute(
+                "update scheduler_events set event_type='FAILED' where event_id=?",
+                (event_id,),
+            )

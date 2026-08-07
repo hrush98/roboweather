@@ -244,6 +244,7 @@ def _evaluate_candidate(
             "missed": len(selected) - len(base),
         },
         "markouts": _markout_summary(list(venue)),
+        "concentration": _concentration_summary(list(venue)),
         "settlement": {
             "required_source": "VENUE_AUTHORITATIVE",
             "venue_resolved": len(venue),
@@ -431,6 +432,32 @@ def _markout_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _concentration_summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    total_cost = sum(float(row["cost"]) for row in rows)
+    by_station: dict[str, float] = {}
+    by_date: dict[str, float] = {}
+    for row in rows:
+        cost = float(row["cost"])
+        station = str(row["station"])
+        market_date = str(row["market_date"])
+        by_station[station] = by_station.get(station, 0.0) + cost
+        by_date[market_date] = by_date.get(market_date, 0.0) + cost
+    return {
+        "maximum_station_cost_share": (
+            round(max(by_station.values()) / total_cost, 6) if total_cost else None
+        ),
+        "maximum_market_date_cost_share": (
+            round(max(by_date.values()) / total_cost, 6) if total_cost else None
+        ),
+        "station_cost_usd": {
+            key: round(value, 6) for key, value in sorted(by_station.items())
+        },
+        "market_date_cost_usd": {
+            key: round(value, 6) for key, value in sorted(by_date.items())
+        },
+    }
+
+
 def _common_date_statistics(
     subject: CandidateEvaluation,
     evaluations: Sequence[CandidateEvaluation],
@@ -448,6 +475,18 @@ def _common_date_statistics(
         peer_rows = [row for date in common_dates for row in peer_by_date[date]]
         subject_summary = _scenario_summary(subject_rows)
         peer_summary = _scenario_summary(peer_rows)
+        subject_sizing = dict(subject.candidate["definition"].get("sizing_and_risk") or {})
+        additive_rows = _incremental_after_peer(
+            subject_rows,
+            peer_rows,
+            station_date_cap_usd=float(subject_sizing.get("station_date_cap_usd", 0)),
+            daily_risk_cap_usd=float(
+                subject_sizing.get(
+                    "daily_risk_cap_usd", subject_sizing.get("daily_cap_usd", 0)
+                )
+            ),
+        )
+        additive_summary = _scenario_summary(additive_rows)
         comparisons.append({
             "peer_candidate_version_id": peer.candidate["candidate_version_id"],
             "peer_role": peer.candidate["to_role"],
@@ -458,11 +497,29 @@ def _common_date_statistics(
             "pnl_delta_usd": round(
                 subject_summary["venue_pnl_usd"] - peer_summary["venue_pnl_usd"], 6
             ),
+            "replacement_incremental": {
+                "pnl_delta_usd": round(
+                    subject_summary["venue_pnl_usd"] - peer_summary["venue_pnl_usd"], 6
+                ),
+                "rr_delta": _optional_delta(
+                    subject_summary["venue_rr"], peer_summary["venue_rr"]
+                ),
+                "subject_complexity": CandidateRule(
+                    **subject.candidate["definition"]["rule"]
+                ).complexity,
+                "peer_complexity": CandidateRule(
+                    **peer.candidate["definition"]["rule"]
+                ).complexity,
+            },
+            "additive_after_peer_caps": additive_summary,
         })
     return {
         "candidate_version_id": subject.candidate["candidate_version_id"],
         "family_id": subject.candidate["family_id"],
-        "comparison_rule": "EXACT_VENUE_RESOLVED_MARKET_DATE_INTERSECTION",
+        "comparison_rule": (
+            "EXACT_VENUE_RESOLVED_MARKET_DATE_INTERSECTION_WITH_"
+            "REPLACEMENT_AND_ADDITIVE_CAPS_V1"
+        ),
         "comparison_status": "AVAILABLE" if comparisons else "NO_ACTIVE_FAMILY_PEER",
         "comparisons": comparisons,
         "funded_authorization": False,
@@ -476,6 +533,59 @@ def _executions_by_date(
     for row in rows:
         result.setdefault(str(row["market_date"]), []).append(row)
     return result
+
+
+def _incremental_after_peer(
+    subject_rows: Sequence[dict[str, Any]],
+    peer_rows: Sequence[dict[str, Any]],
+    *,
+    station_date_cap_usd: float,
+    daily_risk_cap_usd: float,
+) -> list[dict[str, Any]]:
+    """Apply a subject after the peer has consumed shared portfolio caps.
+
+    Rows are proportionally clipped when only part of a cap remains. This is a
+    deterministic capacity counterfactual, not an additional fill claim.
+    """
+    if station_date_cap_usd <= 0 or daily_risk_cap_usd <= 0:
+        return []
+    station_used: dict[tuple[str, str], float] = {}
+    daily_used: dict[str, float] = {}
+    for row in peer_rows:
+        key = (str(row["station"]), str(row["market_date"]))
+        cost = float(row["cost"])
+        station_used[key] = station_used.get(key, 0.0) + cost
+        market_date = str(row["market_date"])
+        daily_used[market_date] = daily_used.get(market_date, 0.0) + cost
+
+    incremental: list[dict[str, Any]] = []
+    for row in subject_rows:
+        market_date = str(row["market_date"])
+        key = (str(row["station"]), market_date)
+        station_remaining = max(
+            station_date_cap_usd - station_used.get(key, 0.0), 0.0
+        )
+        daily_remaining = max(
+            daily_risk_cap_usd - daily_used.get(market_date, 0.0), 0.0
+        )
+        admitted_cost = min(float(row["cost"]), station_remaining, daily_remaining)
+        if admitted_cost <= 0:
+            continue
+        ratio = admitted_cost / float(row["cost"])
+        admitted = dict(row)
+        admitted["cost"] = admitted_cost
+        admitted["shares"] = float(row["shares"]) * ratio
+        admitted["fill_fraction"] = float(row["fill_fraction"]) * ratio
+        incremental.append(admitted)
+        station_used[key] = station_used.get(key, 0.0) + admitted_cost
+        daily_used[market_date] = daily_used.get(market_date, 0.0) + admitted_cost
+    return incremental
+
+
+def _optional_delta(subject: Any, peer: Any) -> float | None:
+    if subject is None or peer is None:
+        return None
+    return round(float(subject) - float(peer), 6)
 
 
 def _utc(value: str) -> datetime:

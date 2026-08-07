@@ -53,6 +53,19 @@ def main() -> int:
                 "role_transitions_applied": False,
             }, indent=2, sort_keys=True))
             return 0
+        mature_candidates = [
+            candidate for candidate in candidates
+            if _utc(str(candidate["activation_timestamp_utc"])).date() < end_date
+        ]
+        if not mature_candidates:
+            print(json.dumps({
+                "status": "NO_MATURE_ACTIVE_CANDIDATES",
+                "active_candidate_count": len(candidates),
+                "scorecards": [],
+                "funded_authorization": False,
+                "role_transitions_applied": False,
+            }, indent=2, sort_keys=True))
+            return 0
         with _readonly(args.research_db) as research, _readonly(args.tape_catalog) as tape:
             research.row_factory = sqlite3.Row
             tape.row_factory = sqlite3.Row

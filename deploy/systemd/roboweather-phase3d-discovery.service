@@ -1,0 +1,28 @@
+[Unit]
+Description=RoboWeather bounded Phase 3D dry-run discovery scheduler
+After=network-online.target roboweather-research.service roboweather-market-tape.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=-%h/General/roboweather
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=%h/miniconda3/envs/roboweather/bin:/usr/bin:/bin
+Environment=ROBOWEATHER_DISCOVERY_SOURCE_START_DATE=2026-07-23
+ExecStartPre=/usr/bin/mkdir -p %h/.local/state/roboweather/discovery
+ExecStart=/usr/bin/env python scripts/run_phase3d_scheduler.py
+Restart=on-failure
+RestartSec=60
+KillSignal=SIGINT
+TimeoutStopSec=60
+MemoryMax=4G
+RuntimeMaxSec=infinity
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=%h/.local/state/roboweather
+
+[Install]
+WantedBy=default.target

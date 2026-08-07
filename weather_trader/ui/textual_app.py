@@ -18,6 +18,7 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, Static, Ta
 
 from weather_trader.execution.clob_executor import ClobExecutor
 from weather_trader.execution.store import ExecutionStore
+from weather_trader.discovery.status import discovery_status_report
 from weather_trader.live.resolution import LiveResolutionService
 from weather_trader.live.settings import decrypt_age_keyfile_with_passphrase, load_live_settings
 from weather_trader.tape.catalog import TapeCatalog
@@ -61,6 +62,7 @@ LIVE_RESOLUTION_POLL_INTERVAL_SECONDS = 6 * 60 * 60
 TAPE_SERVICE_POLL_INTERVAL_SECONDS = 2.0
 TAPE_HEALTH_POLL_INTERVAL_SECONDS = 10.0
 DEFAULT_TAPE_CATALOG = Path.home() / ".local/state/roboweather/market_tape/catalog.sqlite"
+DEFAULT_DISCOVERY_REGISTRY = Path.home() / ".local/state/roboweather/discovery/catalog.sqlite"
 
 DEFAULT_DESC_SORT_COLUMNS = {
     "attempts",
@@ -565,6 +567,10 @@ def _load_tape_health(catalog_path: Path) -> TapeHealthReport:
         return evaluate_tape_health(catalog, verify_segments=False)
 
 
+def _load_discovery_status(registry_path: Path) -> dict[str, Any]:
+    return discovery_status_report(registry_path)
+
+
 def _fmt_bytes(value: int) -> str:
     amount = float(value)
     for suffix in ("B", "KiB", "MiB", "GiB", "TiB"):
@@ -887,6 +893,7 @@ class RoboWeatherTUI(App):
         research_service_controller: SystemdUserServiceController | None = None,
         tape_service_controller: SystemdUserServiceController | None = None,
         tape_catalog_path: Path | None = None,
+        discovery_registry_path: Path | None = None,
     ) -> None:
         super().__init__()
         self.db_path = db_path
@@ -906,10 +913,17 @@ class RoboWeatherTUI(App):
         self.tape_catalog_path = tape_catalog_path or Path(
             os.environ.get("ROBOWEATHER_TAPE_CATALOG", str(DEFAULT_TAPE_CATALOG))
         ).expanduser()
+        self.discovery_registry_path = discovery_registry_path or Path(
+            os.environ.get(
+                "ROBOWEATHER_DISCOVERY_REGISTRY", str(DEFAULT_DISCOVERY_REGISTRY)
+            )
+        ).expanduser()
         self._tape_health: TapeHealthReport | None = None
         self._tape_health_error: str | None = None
         self._last_tape_health_poll_at: datetime | None = None
         self._tape_poll_in_progress = False
+        self._discovery_status: dict[str, Any] | None = None
+        self._discovery_status_error: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -963,6 +977,8 @@ class RoboWeatherTUI(App):
                     yield DataTable(id="process-table")
                     yield Static("Tape Health", classes="section-title")
                     yield DataTable(id="tape-health")
+                    yield Static("Phase 3D Discovery", classes="section-title")
+                    yield DataTable(id="discovery-health")
                     with Horizontal(classes="split"):
                         with Vertical(classes="stack"):
                             yield Static("Research Log", classes="section-title")
@@ -1135,6 +1151,10 @@ class RoboWeatherTUI(App):
         tape_health.cursor_type = "row"
         tape_health.add_columns("metric", "value")
 
+        discovery_health = self.query_one("#discovery-health", DataTable)
+        discovery_health.cursor_type = "row"
+        discovery_health.add_columns("metric", "value")
+
         research_log = self.query_one("#research-log", DataTable)
         research_log.cursor_type = "row"
         research_log.add_columns("line")
@@ -1162,6 +1182,7 @@ class RoboWeatherTUI(App):
         self.refresh_table()
         self.refresh_processes()
         self._refresh_tape_health_table()
+        self._refresh_discovery_health_table()
         self.set_interval(10.0, self.refresh_table)
         self.set_interval(1.0, self.refresh_processes)
         self.set_interval(TAPE_SERVICE_POLL_INTERVAL_SECONDS, self._poll_tape_service)
@@ -1419,10 +1440,19 @@ class RoboWeatherTUI(App):
             except Exception as exc:
                 self._tape_health = None
                 self._tape_health_error = str(exc)
+            try:
+                self._discovery_status = await asyncio.to_thread(
+                    _load_discovery_status, self.discovery_registry_path
+                )
+                self._discovery_status_error = None
+            except Exception as exc:
+                self._discovery_status = None
+                self._discovery_status_error = str(exc)
             await self.research_service_controller.refresh_logs("research")
             await self.tape_service_controller.refresh_logs("tape")
         self.refresh_processes()
         self._refresh_tape_health_table()
+        self._refresh_discovery_health_table()
 
 
     def _refresh_config_table(self, settings) -> None:
@@ -1597,6 +1627,41 @@ class RoboWeatherTUI(App):
             ("raw disk", _fmt_bytes(report.raw_disk_bytes)),
             ("reconstruction errors", str(report.reconstruction_errors)),
             ("failures", ", ".join(report.failures) if report.failures else "none"),
+        ]
+        for metric, value in rows:
+            table.add_row(metric, value)
+
+    def _refresh_discovery_health_table(self) -> None:
+        try:
+            table = self.query_one("#discovery-health", DataTable)
+        except NoMatches:
+            return
+        table.clear()
+        if self._discovery_status is None:
+            table.add_row("health", "UNAVAILABLE")
+            table.add_row(
+                "detail", self._discovery_status_error or "awaiting first status poll"
+            )
+            return
+        report = self._discovery_status
+        event = report.get("latest_scheduler_event") or {}
+        discovery = report.get("latest_discovery_run") or {}
+        failure = (report.get("recent_failures") or [{}])[0]
+        failure_detail = failure.get("details") or {}
+        rows = [
+            ("health", str(report.get("status", "UNKNOWN"))),
+            ("scheduler cycle", f"{event.get('event_type', 'none')} {event.get('scheduled_for_utc', '')}".strip()),
+            ("discovery run", f"{discovery.get('status', 'none')} {discovery.get('run_id', '')}".strip()),
+            ("research watermark", str(discovery.get("research_watermark", "none"))),
+            ("outcome watermark", str(discovery.get("outcome_watermark", "none"))),
+            ("venue watermark", str(discovery.get("venue_settlement_watermark", "none"))),
+            ("active candidates", str(report.get("active_candidate_count", 0))),
+            ("roles", json.dumps(report.get("roles", {}), sort_keys=True)),
+            ("latest scorecard", str(report.get("latest_forward_scorecard_at_utc") or "none")),
+            ("stale evaluation", str(bool(report.get("stale_evaluation")))),
+            ("registry", _fmt_bytes(int(report.get("registry_bytes", 0)))),
+            ("alerts", ", ".join(report.get("alerts", [])) or "none"),
+            ("latest failure", str(failure_detail.get("error") or "none")[:240]),
         ]
         for metric, value in rows:
             table.add_row(metric, value)
