@@ -2,6 +2,15 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-08-09
+
+- Removed the hard-coded three-sleeve tape holdout CLI and its focused tests.
+  Current tape-backed strategy research now routes exclusively through
+  recurring policy-neutral Phase 3D discovery and activation-bounded candidate
+  evaluation. Updated operator guidance to treat failed/timed-out discovery as
+  unhealthy rather than falling back to named historical sleeves; funded
+  behavior did not change.
+
 ## 2026-08-07
 
 - Completed Phase 3D Slices C5-C6. Added fail-closed append-only lifecycle

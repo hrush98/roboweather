@@ -4,7 +4,7 @@ This is the living financial and systems audit for RoboWeather. Update this docu
 
 Generated or ad hoc analysis may live under `reports/`, but durable conclusions, open risks, and decisions belong here. The current implementation sequence belongs in `docs/execution-rebuild-roadmap.md`; funded operating state belongs in `docs/live-trading-journal.md`.
 
-Last reviewed: 2026-08-07
+Last reviewed: 2026-08-09
 
 ## Current Verdict
 
@@ -78,7 +78,7 @@ Durable conclusions from that review:
 
 Evidence source: `reports/research-collection-analysis-2026-07-15.md`. That file is an ad hoc analysis artifact; the conclusions above are canonical here.
 
-The July 29 rolling-discovery/tape holdout added the first execution evidence that was not limited to a previously materialized strategy:
+The July 29 rolling-discovery/tape holdout is retained as retired historical evidence. Its hard-coded three-sleeve report was removed on August 9 because named frozen portfolios must not route current Phase 3D discovery or analysis:
 
 - The research loop was still active with 1,465,280 snapshots through 2026-07-30 00:18 UTC, covering 36 model names and 18 stations. The shared-tape service was also active.
 - A predeclared July 22 discovery cutoff selected three overlapping late US high-temperature families from the general raw-snapshot sweep: PM high regression 10m late, PM MVP late, and PM dynamic-tuned 10m late.
@@ -87,7 +87,7 @@ The July 29 rolling-discovery/tape holdout added the first execution evidence th
 - The 12 simulated taker executions cost `$205.51` and returned `+$93.22`, or `+0.454 R/R`, with six wins and average VWAP `$0.423`.
 - This is a preliminary positive holdout, not promotion evidence: the sample is six correlated dates, partial taker fills are allowed, PnL uses weather outcomes rather than venue settlement, and passive queue fills and markouts are not modeled.
 
-The result is reproducible with `scripts/tape_strategy_holdout_report.py`; the frozen economic hypothesis is `docs/hypotheses/2026-07-29-rolling-tape-portfolio-discovery.md`.
+The historical economic hypothesis remains in `docs/hypotheses/2026-07-29-rolling-tape-portfolio-discovery.md`, but its standalone replay CLI is intentionally no longer available.
 
 The July 30-August 2 extension materially weakened that initial result. The frozen three-sleeve portfolio executed 13 of 22 signals and earned only `+$5.91` on `$297.43` cost (`+0.020 R/R`). Evaluated alone, high regression lost `$22.40` (`-0.321 R/R`, three executions), dynamic tuned lost `$13.33` (`-0.062`, ten executions), and MVP late earned `+$27.76` (`+0.104`, 12 executions). MVP late is therefore the only recent positive candidate, but it was selected after viewing these four dates and requires a newly frozen untouched forward window.
 
@@ -126,7 +126,7 @@ The July 30-August 2 extension materially weakened that initial result. The froz
 3. Stop adding model families merely to expand the leaderboard. New models need demonstrably different predictions or incremental information.
 4. Accept bounded shared-tape validation run `tape-validation-20260730T183750Z-69556cbf` as sufficient infrastructure evidence for strategy discovery. Its approximately 96.7% valid coverage is operationally adequate for this slow market, provided every replay continues to reject decision windows that cross a gap. Keep heartbeat, reconnect, and late-discovery improvements as non-critical technical debt; do not require another lifecycle run before moving to Phase 3D.
 5. Treat the current candidate-token collector and shadow labeler as a prototype only.
-6. Keep the late HRRR-rich tuned dynamic and HRRR-v2 dynamic policies as V2 vertical controls and forward signal hypotheses. Add the frozen three-family late taker portfolio as separate preliminary evidence; do not presume any is the Phase 3D winner, fund it, or retune it on the July 23-28 holdout.
+6. Keep the late HRRR-rich tuned dynamic and HRRR-v2 dynamic policies as V2 vertical controls and forward signal hypotheses. Retain the July three-family taker result only as historical evidence; do not replay or route it into Phase 3D discovery, champion selection, or funding decisions.
 7. Implement `docs/implementation/price-sheet-v2.md`: V2a walk-forward outcome pricing now, then V2b execution reductions/skips on valid tape windows.
 8. Implement `docs/implementation/tape-strategy-discovery.md`: preserve the broad causal materializer, add an append-only candidate registry, run recurring constrained discovery from resolved-data watermarks, and continuously compare post-activation champion/challenger cohorts.
 9. Evaluate passive price-making and a separately tagged stable-taker control from the same tape and economic price ceiling.
@@ -135,7 +135,7 @@ The July 30-August 2 extension materially weakened that initial result. The froz
 12. Extend research and collection to the full market lifecycle. Treat D-1 open, D-1 revision, D0 early, intraday, and late as separate horizons; add them one at a time behind forecast, tape, quote, inventory, exit, and portfolio gates.
 13. For V2a, freeze one calibrator and untouched forward start before additional outcomes are inspected. Do not use the July 16-29 candidate comparison as its own promotion window.
 14. Prioritize finding and forward-validating profitable strategy families over further recorder robustness work. Revisit recorder hardening only when observed gaps materially reduce a candidate's evaluable sample or before production operation requires higher availability.
-15. Retire the frozen three-sleeve portfolio as a presumptive winner. Keep it and `pm_mvp_late` only as historical fixtures/candidate evidence; do not manually install either as the Phase 3D champion.
+15. Keep the retired three-sleeve portfolio only as historical audit evidence. Its executable report has been removed; do not recreate it, manually install its sleeves, or use named frozen portfolios as a fallback when adaptive discovery is unhealthy.
 
 ## Promotion Standard
 
@@ -180,6 +180,12 @@ Small funded orders may validate plumbing and replay fidelity, but they confer n
 Update the body of this document when the current assessment changes. Append one short entry below describing the evidence that caused the change; keep detailed generated tables in reproducible reports or scripts.
 
 ## Audit Log
+
+- 2026-08-09: Removed the hard-coded three-sleeve tape holdout report and its
+  operator routing. Retained the July results only as retired historical
+  evidence. Current tape-backed strategy research must flow through recurring
+  policy-neutral Phase 3D discovery; timeouts and zero completed runs are an
+  unhealthy discovery system, not permission to fall back to named sleeves.
 
 - 2026-08-07: Completed Phase 3D C5-C6 repository implementation. Research
   roles now require aligned replacement evidence plus conservative/base

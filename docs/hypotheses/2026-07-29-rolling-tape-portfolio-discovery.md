@@ -2,7 +2,10 @@
 
 ## Status
 
-Mixed execution holdout; forward shadow only. Activated for analysis on 2026-07-23 after a 2026-07-22 discovery cutoff. The initial six-date result was positive, but the untouched July 30-August 2 extension was approximately flat for the frozen portfolio. Funded trading remains paused.
+Retired historical evidence. The initial six-date result was positive, but the
+July 30-August 2 extension was approximately flat. The hard-coded replay CLI
+was removed on 2026-08-09 so this named portfolio cannot route current Phase 3D
+research. Funded trading remains paused.
 
 ## Hypothesis
 
@@ -94,28 +97,13 @@ Do not request funded promotion until:
 
 ## Reproduction
 
-Run pre-cutoff discovery first:
-
-```bash
-/home/maxrush/miniconda3/envs/roboweather/bin/python \
-  scripts/snapshot_opportunity_sweep.py \
-  --db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite \
-  --end-date 2026-07-22 --market-family HIGH_TEMP \
-  --us-high-temp-only --rolling-summary --min-policy-n 20 --top-n 8
-```
-
-Then run the frozen holdout:
-
-```bash
-/home/maxrush/miniconda3/envs/roboweather/bin/python \
-  scripts/tape_strategy_holdout_report.py \
-  --research-db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite \
-  --tape-catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite \
-  --discovery-cutoff 2026-07-22 --holdout-start 2026-07-23 \
-  --end-date 2026-07-28
-```
+The named-portfolio reproduction surface was intentionally removed on
+2026-08-09. Preserve these results as an audit record; do not recreate the
+hard-coded report. Current analysis must use recurring policy-neutral Phase 3D
+discovery and activation-bounded evaluation of candidates that emerge from it.
 
 ## Decision Log
 
+- 2026-08-09: Retired the named three-sleeve hypothesis from active research routing and removed its executable report. Kept this document only as historical evidence; adaptive Phase 3D discovery must not fall back to it.
 - 2026-08-03: Extended the frozen portfolio through August 2. The combined portfolio was approximately flat (`+0.020 R/R`), high regression and dynamic tuned were negative when evaluated alone, and MVP late was the only positive individual sleeve (`+0.104 R/R`, 12 executions across four dates). Reclassified the portfolio evidence as mixed and MVP late as a newly selected forward candidate requiring untouched later tape.
 - 2026-07-29: Froze the initial three-family priority portfolio and reproduced the July 23-28 tape holdout. Classified the positive result as forward-shadow hypothesis evidence only; no funded or live-policy change was made.

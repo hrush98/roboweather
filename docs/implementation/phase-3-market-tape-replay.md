@@ -414,6 +414,15 @@ Implementation update, 2026-08-04:
   its causal replay but evaluate append-only candidate versions from a registry
   and recurring discovery runs.
 
+Implementation update, 2026-08-09:
+
+- Removed `scripts/tape_strategy_holdout_report.py` and its hard-coded
+  three-sleeve defaults. The July output remains historical evidence only;
+  current tape-backed research must enter through policy-neutral recurring
+  Phase 3D discovery and exact activation-bounded candidate evaluation.
+- A failed or timed-out discovery cycle must remain visible as an operational
+  failure. It must not be masked by replaying a named legacy portfolio.
+
 ## Acceptance Checklist
 
 - [ ] Policy-independent token discovery covers current and future-dated supported weather markets.
