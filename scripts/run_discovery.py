@@ -79,10 +79,13 @@ def main() -> int:
     try:
         with _readonly(args.research_db) as research, _readonly(args.tape_catalog) as tape:
             research_watermark = int(research.execute(
-                "select coalesce(max(id),0) from prediction_snapshots"
+                "select coalesce(max(id),0) from prediction_snapshots where market_date<?",
+                (args.cutoff_exclusive,),
             ).fetchone()[0])
             outcome_watermark = str(research.execute(
-                "select coalesce(max(resolved_at),'0000-00-00T00:00:00+00:00') from station_date_outcomes"
+                """select coalesce(max(resolved_at),'0000-00-00T00:00:00+00:00')
+                   from station_date_outcomes where market_date<?""",
+                (args.cutoff_exclusive,),
             ).fetchone()[0])
             with ExecutableDecisionCache(args.cache) as cache:
                 cache.refresh(
