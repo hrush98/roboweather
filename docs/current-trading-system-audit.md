@@ -4,7 +4,7 @@ This is the living financial and systems audit for RoboWeather. Update this docu
 
 Generated or ad hoc analysis may live under `reports/`, but durable conclusions, open risks, and decisions belong here. The current implementation sequence belongs in `docs/execution-rebuild-roadmap.md`; funded operating state belongs in `docs/live-trading-journal.md`.
 
-Last reviewed: 2026-08-09
+Last reviewed: 2026-08-11
 
 ## Current Verdict
 
@@ -14,34 +14,11 @@ The shared weather market tape contains retained data from July 23 onward and su
 
 Continuous research collection resumed on August 4 under enabled user service `roboweather-market-tape.service`. Fresh session `tape-20260804T152718Z-b341a291` reached `VALID` for all 1,474 subscribed tokens, completed discovery, rotated and strictly verified its first five-minute partition, kept queue high-water at 1/10,000 and RSS near 142 MiB, and recorded zero reconstruction errors. The August 2-to-August 4 outage remains an explicit unusable gap. The TUI now observes and controls the systemd-owned service without stopping it on TUI exit.
 
-Policy-neutral continuous strategy discovery is now a required Phase 3D gate.
-Strategies should emerge repeatedly from broad causal snapshot + tape +
-settlement rows as new dates resolve. Each discovery run seals its source
-watermarks, grammar, folds, costs, complexity, and nomination rules; each exact
-candidate version receives a post-activation cohort. The overall strategy
-program remains adaptive, while version boundaries prevent later rule changes
-from rewriting earlier evidence.
+Policy-neutral causal strategy discovery remains a required Phase 3D gate. The implemented C3-C6 operating workflow failed its production-scale viability test: the scheduler repeatedly spent its full 900-second budget reconstructing historical tape per model row, then terminated recurring discovery with zero completed runs and zero candidate versions. That scheduler is now stopped and disabled while research and tape collection remain active; its historical failures are unhealthy analysis rather than valid no-nomination results.
 
-The committed Phase 3D path supplies reusable materialization, exact-book
-replay, deterministic hashes, fixed-rule scoring, family collapse, an
-activation-gated venue-settlement-fail-closed evaluator, and the durable C2
-registry, C3 recurring orchestrator, C4 continuous cohort evaluator, C5 role
-transition engine, and C6 bounded scheduler/status surfaces. The registry enforces append-only
-definitions/evidence/events, content-addressed candidate versions, activation-bounded cohorts, one-writer
-ownership, read-only observation, and immutable run outcomes. C3 now no-ops
-unchanged resolved watermarks, resumes interrupted sealed runs, nominates a
-bounded challenger set, rejects elapsed activation boundaries, reuses unchanged
-versions, and enforces resource budgets. C4 appends post-activation forward-shadow
-and aligned common-date scorecards, keeps actual orders separate, and credits
-only venue-authoritative outcomes. C5 assigns research-only roles from
-predeclared conservative/base uncertainty, concentration, settlement, markout,
-and aligned replacement gates while retaining failed family versions. C6 adds
-restart-safe cycle identities, single scheduler ownership, time/storage
-budgets, append-only failure state, CLI/TUI visibility, and a durable service
-unit. Its one-winner batch manifest remains transitional. The new scheduler
-service is not enabled by this change.
-Both current `resolutions` tables are empty and fill-conditioned markouts remain
-absent, so no candidate can pass to Phase 4.
+The corrected Phase 3D cache kernel has now passed D0-D2 production gates for a versioned delayed-checkpoint taker counterfactual. A causal 60-second availability ceiling reduced 146,937 model rows to 19,032 decisions. The cold backfill completed in 32.43 seconds, a 200-row stratified sample matched direct replay exactly, the warm no-op took 0.026 seconds, and a 9,216-row increment took 2.52 seconds at roughly 320 MiB peak RSS. Execution occurs at the first full-book checkpoint no more than 30 seconds after readiness with continuous `VALID` coverage through that actual time; later checkpoints are explicit rejections, and the result is not exact-time or actual-fill evidence. D3-D5 remain open: move the bounded historical grid and family collapse onto the cache, preserve the untouched holdout, evaluate exact candidates only after activation, and expose one report through `scripts/run_discovery.py`. The append-only registry remains reusable for attribution; automated champion/challenger transitions and the old scheduler remain compatibility-only.
+
+Causal coverage, gap rejection, immutable candidate definitions, chronological validation, weather-versus-venue provenance, markout requirements, and separate Phase 4 approval remain unchanged. Current venue-resolution and fill-conditioned markout evidence is still insufficient, so no result can pass to Phase 4.
 
 Current confidence by layer:
 
@@ -54,7 +31,7 @@ Current confidence by layer:
 | New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
 | Fair-value/price sheet | V2a Slices 0-3 now produce leak-safe calibration, causal uncertainty reserves, conservative fairs, maximum quotes, and economic gates. The first 98-row Slice 3 read leaves both pilots research-only because no calibrator or untouched forward window was frozen. | Freeze a baseline and forward start before new outcomes; do not promote from the July 16-29 comparison. |
 | Phase 3 shared tape | Slices 1-4 are implemented. Continuous collection resumed August 4 after the accepted 72-hour evidence; its first new session reached 1,474/1,474 valid tokens and strictly verified its first partition. Periodic reconnect gaps and late initial discovery remain known limitations; Slice 4 still lacks one real persisted-quote join. | Continue collection, monitor health/storage through the TUI, use retained tape for strategy work, and reject every affected decision window. |
-| Phase 3D strategy discovery | C0-C6 are repository-complete: causal primitives, append-only registry, recurring bounded nomination, activation-bounded scorecards, deterministic research roles, bounded scheduling, and operator visibility. The service is not enabled; venue settlement and markouts remain unavailable. | Keep batch CLIs compatibility-only; collect venue-aligned forward evidence and markouts before C7 can request Phase 4. |
+| Phase 3D strategy discovery | D0-D2 are accepted on production for the versioned checkpoint taker cache: cold, exact replay, crash-resume, warm, incremental, and resource gates pass. D3-D5 remain open, and no completed cache-backed discovery report or exact candidate exists. | Keep the old scheduler/CLIs compatibility-only; implement the cache-backed grid/report, post-activation evaluation, and one-command cutover while keeping Phase 4 blocked. |
 | Existing candidate-token shadow collector | Useful plumbing prototype, but candidate-scoped and not a continuous causal market tape. | Do not use its fill labels as promotion evidence. |
 | Fillability and adverse selection | Still unresolved. Public L2 data can provide bounds, not exact hypothetical queue position. | Validate shared-tape replay, then run controlled real-order canaries. |
 | Funded readiness | No exact signal + quote policy + size has passed current fill-conditioned gates. | Keep funded trading paused. |
@@ -180,6 +157,16 @@ Small funded orders may validate plumbing and replay fidelity, but they confer n
 Update the body of this document when the current assessment changes. Append one short entry below describing the evidence that caused the change; keep detailed generated tables in reproducible reports or scripts.
 
 ## Audit Log
+
+- 2026-08-11: Accepted Phase 3D D0-D2 for the versioned causal checkpoint
+  taker cache. Stopped and disabled the failed scheduler, completed the
+  146,937-row/19,032-decision cold backfill in 32.43 seconds, matched 200/200
+  stratified direct replays, completed a warm no-op in 0.026 seconds and a
+  9,216-row increment in 2.52 seconds, and retained 30-second-delay, gap, ask,
+  and token failures as explicit rejections. D3-D6 and funded authority remain
+  open.
+
+- 2026-08-11: Reclassified Phase 3D C3-C6 from an implemented operating path to compatibility-only after repeated production cycles timed out at approximately 900 seconds during per-model-row historical tape reconstruction, leaving zero completed runs and zero candidates. Approved an incremental executable-decision cache and one deterministic discovery/report command as the replacement critical path. Causal replay, chronological holdout, correlated-family collapse, immutable activation-bounded candidates, venue settlement, markout, and Phase 4 authority gates remain unchanged.
 
 - 2026-08-09: Removed the hard-coded three-sleeve tape holdout report and its
   operator routing. Retained the July results only as retired historical

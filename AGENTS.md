@@ -101,92 +101,21 @@
   - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/portfolio_promotion_report.py --db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite`
   - Add `--start-date YYYY-MM-DD` for recent-only reviews. Use `--no-depth` only for an upper-bound capacity diagnostic, not promotion evidence.
 
-## Tape-backed rolling portfolio discovery workflow
+## Deterministic tape-backed discovery workflow
 
-- Strategies do not need to be defined before snapshot or shared-tape collection. The canonical Phase 3D contract is `docs/implementation/tape-strategy-discovery.md`: build a policy-neutral causal snapshot + tape + settlement view, run recurring constrained searches from resolved-data watermarks, register a bounded set of versioned challengers, and continuously evaluate each candidate only on decisions after its own activation.
-- The broad discovery materializer must cover every eligible causal snapshot/token decision, not only current policies or frozen V2a pilots. It is a derived view over existing snapshots and tape, not another raw recorder.
-- Do not use hard-coded named portfolios or the removed `scripts/tape_strategy_holdout_report.py` as a substitute for discovery. Historical sleeve results are retained only as audit evidence and must not route current research, nomination, or promotion decisions.
-- Inspect the adaptive system first with `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_status.py`. A completed `NO_NOMINATION` run is a valid zero-candidate result; a timeout, failed scheduler cycle, or absent completed discovery run means discovery is unhealthy and must not fall back to a legacy fixture.
-- Before ranking, seal each recurring run's sources/watermarks, grammar, folds, costs, fill scenario, size, caps, effective-sample rules, complexity penalty, correlated-family collapse, nomination rule, and earliest activation. This makes one run reproducible without freezing the discovery program. Later resolved data create new append-only runs and may register new challenger versions.
-- Candidate versions are immutable only for causal attribution. The program remains adaptive: recurring policy-neutral searches may retain, revise, replace, or retire families as new market dates, tape, execution evidence, and settlement arrive.
-- Tape-backed analysis must use the policy-neutral Phase 3D materializer/orchestrator and exact candidate-version evaluator. Require continuous `VALID` pre-signal-through-execution coverage, quote-ready reconstruction, capped executable asks, venue-authoritative settlement for promotion evidence, and explicit fill/markout provenance. Gaps and unavailable books are rejections, never snapshot-price fills.
-
-## Phase 3D batch compatibility workflow
-
-- The discovery and forward-report Phase 3D CLIs are a committed read-only batch vertical slice,
-  not the intended continuous scheduler/registry. Use them only for development
-  fixtures while Slice C5 in `docs/implementation/tape-strategy-discovery.md`
-  remains open. Do not treat their one-winner output as the steady-state design.
-- Create a generated artifact directory under `reports/` and declare a future
-  activation timestamp before running a compatibility discovery. The CLI seals source
-  watermarks, tape sessions/partitions, model universe, grammar, folds, costs,
-  caps, and winner rule in `discovery_run.json` before ranking:
-  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_strategy_discovery.py --research-db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --tape-catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite --source-start-date YYYY-MM-DD --discovery-cutoff-exclusive YYYY-MM-DD --activation-timestamp ISO_UTC --out reports/phase3d/RUN_NAME`
-- A compatibility run writes exactly one immutable `strategy_manifest.json` or
-  `no_winner.json`. Do not edit or overwrite either result. In the continuous
-  architecture, this becomes zero or more content-addressed candidate versions
-  in an append-only registry; a changed rule starts a new version/cohort rather
-  than modifying earlier evidence.
-- After activation, evaluate the exact manifest only through an exclusive end
-  date:
-  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_forward_report.py --manifest reports/phase3d/RUN_NAME/strategy_manifest.json --research-db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --tape-catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite --end-date-exclusive YYYY-MM-DD --out reports/phase3d-forward/RUN_NAME`
-- The forward report counts only venue-authoritative `resolutions` toward a
-  pass. Empty venue truth, settlement disagreement, insufficient independent
-  dates, nonpositive base economics, missing markouts, or invalid tape cannot
-  be replaced with snapshot prices or IEM-only promotion claims. Leave all
-  generated Phase 3D artifacts uncommitted.
-- The C2 registry lives outside the repository (default
-  `~/.local/state/roboweather/discovery/catalog.sqlite`). Initialize it with
-  `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_registry.py init`
-  and inspect it query-only with the `status` subcommand. Use
-  `import-batch-v1 ARTIFACT_DIR` only to preserve a compatibility run and
-  candidate identity; it intentionally imports no cohort or scorecard evidence.
-  One writer holds `<REGISTRY>.writer.lock`; do not bypass it. C3 supplies
-  recurring nominations, C4 appends activation-bounded scorecards, C5 applies
-  research roles, and C6 schedules the loop. No registry transition may
-  authorize funded trading.
-
-## Phase 3D continuous discovery workflow
-
-- C3-C6 are repository-complete. Manual idempotent surfaces remain available
-  for diagnostics. Run one discovery cycle with a future activation boundary:
-  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_continuous_discovery.py --research-db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --tape-catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite --registry /home/maxrush/.local/state/roboweather/discovery/catalog.sqlite --source-start-date YYYY-MM-DD --discovery-cutoff-exclusive YYYY-MM-DD --activation-timestamp ISO_UTC`
-- The command holds the registry's single-writer lock, skips before
-  materialization when resolved outcomes and the sealed grammar/build/model
-  inputs are unchanged, resumes a sealed interrupted run, and writes no
-  repository artifact. Completion, no-nomination, and budget outcomes are
-  immutable; an elapsed activation boundary fails closed. Registered
-  candidates are research-only `NOMINATED` versions; C3 creates no forward scorecard, champion, Phase 4 request, or funded authority.
-- Append one idempotent C4 scorecard watermark for every active candidate after
-  the exclusive evaluation end date has elapsed:
-  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_continuous_evaluation.py --research-db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --tape-catalog /home/maxrush/.local/state/roboweather/market_tape/catalog.sqlite --registry /home/maxrush/.local/state/roboweather/discovery/catalog.sqlite --end-date-exclusive YYYY-MM-DD --as-of-timestamp ISO_UTC`
-- C4 reuses one open cohort per exact candidate activation and appends
-  `FORWARD_SHADOW` plus family-peer `COMMON_DATE` scorecards addressed by the
-  complete as-of watermark. It excludes every pre-activation row, rejects
-  invalid tape, credits only venue-authoritative settlement, requires valid
-  markouts before review readiness, never infers `ACTUAL_ORDER` fills from
-  public tape, and applies no role transition or funded authority.
-- Apply one deterministic research-only C5 role review after C4:
-  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_apply_transitions.py --registry /home/maxrush/.local/state/roboweather/discovery/catalog.sqlite --effective-at-timestamp ISO_UTC`
-- C5 requires positive conservative and base uncertainty lower bounds, bounded
-  station/date concentration, venue settlement, valid markouts, and aligned
-  replacement evidence. It may assign no champion. Lifecycle history rejects
-  role jumps/backdating and explicitly denies funded authority; C5 creates no
-  Phase 4 request.
-- For continuous dry-run operation, install
-  `deploy/systemd/roboweather-phase3d-discovery.service` under
-  `~/.config/systemd/user/`, run `systemctl --user daemon-reload`, then enable it
-  with `systemctl --user enable --now roboweather-phase3d-discovery.service`.
-  The service owns a separate scheduler lock, runs C4/C5 every six hours and C3
-  at most weekly, and enforces task, whole-cycle, registry-size, candidate, and
-  diagnostic budgets. Do not bypass either scheduler or registry writer lock.
-- Inspect it with
-  `systemctl --user status roboweather-phase3d-discovery.service --no-pager`,
-  `journalctl --user -u roboweather-phase3d-discovery.service`, and
-  `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/phase3d_status.py`.
-  The TUI Processes tab reads the same registry status but does not own the
-  service lifetime. Disable the service and return to manual idempotent runs if
-  duplicate cycles, unbounded state, or stale/silent evaluation appears.
+- The canonical Phase 3D contract is `docs/implementation/tape-strategy-discovery.md`. The corrected critical path is continuous source collection, an incremental executable-decision cache, one deterministic discovery command, historical grid plus untouched holdout, exact existing-candidate forward evaluation, and one report.
+- The existing C3-C6 registry, evaluator, transition, scheduler, service, status, and TUI code is compatibility-only. Production cycles repeatedly timed out during full-history per-model-row tape reconstruction and produced zero completed discovery runs. Do not use those surfaces as the operator workflow or interpret their failure as a valid no-nomination result.
+- Before Phase 3D implementation work or deliberate diagnostics, stop and disable `roboweather-phase3d-discovery.service`; keep the research and market-tape collection services running. Do not bypass registry or cache writer locks.
+- `scripts/exhaustive_constraint_grid.py` is a point-in-time prototype, not the accepted replacement. It demonstrates a bounded grammar, chronological folds, family collapse, untouched holdout, and one report, but it still replays tape per model row and has no incremental cache or integrated existing-candidate forward test.
+- D0-D2 are accepted for decision-cache contract `ab785d646a2143c0db0aa6ca164d4fc64d410fe06b97a5ae5219f6a79bb2afcd`. The contract ceilings persisted model availability to a causal 60-second bucket, adds 250 ms latency, and executes at the first full-book checkpoint within 30 seconds while requiring continuous `VALID` coverage from 60 seconds pre-signal through that checkpoint. It is a delayed public-tape taker counterfactual, not exact-time, passive, or actual-fill evidence.
+- Use `scripts/refresh_executable_decision_cache.py` only for D1-D2 developer backfill/benchmark/verification and cache diagnostics. The default cache is `~/.local/state/roboweather/discovery/decision_cache.sqlite`; generated cache files and locks remain uncommitted. A warm refresh must do zero replay work. Verify deterministic samples with `--verify-only --verify-sample-size 200`. Do not substitute the abandoned `immediate_taker_summary_v1` contract when running D3-D5.
+- The intended operator surface after D5 is `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/run_discovery.py --cutoff-exclusive YYYY-MM-DD --out reports/discovery/RUN_NAME`. Do not document or invoke it as implemented until D1-D5 acceptance passes.
+- Cache one stable executable decision per token/outcome, quote-ready time, latency/pre-signal contract, and replay/execution version. Preserve model-specific fairs, edges, confidence, freshness, and source hashes through separate model-to-decision mappings. Cache explicit rejections as well as successful replay.
+- Require continuous `VALID` coverage through the declared actual execution checkpoint, capped executable asks, exact replay provenance, and no snapshot-price fallback. Public tape supports declared taker counterfactuals only; it does not establish passive or actual fills.
+- Seal each run before ranking. Search only the bounded grammar on chronological discovery dates, cluster uncertainty by market date, apply costs/size/caps, and collapse correlated variants before opening the final holdout.
+- Evaluate every existing exact candidate only on decisions at or after its activation. A changed rule creates a new version and evidence clock. Weather-outcome PnL is diagnostic; venue-authoritative settlement and valid markouts remain mandatory for promotion evidence.
+- Every report must distinguish `COMPLETED_WITH_EMERGED_STRATEGIES`, `COMPLETED_NO_EMERGED_STRATEGIES`, `INCOMPLETE_CACHE`, and `FAILED_ANALYSIS`. Never widen the grammar, revive a named portfolio, or fall back to stale policy rows when analysis is unhealthy.
+- Leave generated caches, databases, reports, ranked CSVs, tape partitions, and logs uncommitted. No discovery result authorizes funded trading or creates a Phase 4 request.
 
 ## Price Sheet V2a dataset workflow
 

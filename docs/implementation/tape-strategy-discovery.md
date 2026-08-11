@@ -1,614 +1,569 @@
-# Continuous Versioned Strategy Discovery
+# Deterministic Tape-Backed Strategy Discovery
 
-Status: C0-C6 implemented; Phase 4 handoff remains open
+Status: D0-D2 accepted on production; D3-D5 implementation open
 
-Last updated: 2026-08-07
+Last updated: 2026-08-11
 
-## Goal
+## Decision
 
-Build a continuous research system in which simple weather-market strategies
-emerge from causal prediction snapshots, market tape, execution evidence, and
-settlement; receive stable version identities; accumulate honest forward
-evidence; and are promoted, retained, revised, or retired as new dates resolve.
+Replace the current operator-facing Phase 3D C3/C4/C5/C6 workflow with one
+deterministic discovery command backed by an incremental executable-decision
+cache.
 
-The strategy program is adaptive. Individual candidate versions are immutable
-only so their evidence remains attributable. A change to a rule creates a new
-version; it does not stop discovery or permanently freeze the family.
+The previous implementation built durable orchestration, append-only candidate
+lifecycle state, scorecards, transitions, scheduling, and status before proving
+that production-scale causal materialization could finish inside its operating
+budget. It repeatedly reconstructed market tape for model rows even when many
+rows referred to the same executable market decision. The scheduler then
+terminated recurring discovery after 900 seconds, leaving zero completed runs
+and zero candidates.
+
+The corrected order is:
 
 ```text
 continuous snapshots + tape + outcomes
-                    |
-                    v
-        policy-neutral causal materializer
-                    |
-                    v
-          recurring discovery runs
-                    |
-                    v
-       versioned candidate registry
-                    |
-                    v
-      forward evaluation by cohort
-                    |
-                    v
-       champion/challenger scorecards
-                    |
-                    v
-   retain / revise / retire / Phase 4 request
-                    |
-                    +----------> repeat
+                  |
+                  v
+ incremental executable-decision cache
+                  |
+                  v
+ one deterministic discovery command
+                  |
+                  +--> historical grid and untouched holdout
+                  |
+                  +--> exact existing-candidate forward test
+                  |
+                  v
+        one human-readable report
 ```
 
-This contract owns discovery, candidate versioning, forward shadow evaluation,
-and research promotion state. Phase 3 owns tape validity and replay semantics;
-Price Sheet V2 owns calibrated economic pricing and execution reductions;
-Phase 4 owns controlled funded validation. No Phase 3D state change can itself
-authorize funded trading.
+Collection remains continuous. Expensive tape reconstruction becomes
+incremental. Discovery is one bounded reproducible analysis. Candidate
+versioning remains only where it protects forward attribution. A completed
+zero-candidate report is valid; an incomplete cache, timeout, or failed report
+is an analysis failure.
 
-## Why Versioning Is Required
+No Phase 3D output authorizes funded trading.
 
-"Versioned" does not mean a strategy is chosen forever. It means the system
-cannot edit yesterday's candidate after seeing today's outcome and continue to
-report the combined record as though the rule never changed.
+## Goals
 
-Every candidate version therefore has:
+1. Reconstruct each distinct executable decision once per declared replay
+   version rather than once per model row or discovery run.
+2. Make repeated discovery runs proportional to new decisions and newly
+   resolved evidence, not to all retained raw tape.
+3. Give the operator one command and one report that answer which simple
+   strategies emerged, whether existing candidates survived forward testing,
+   or why no defensible answer is available.
+4. Preserve causal timing, tape-gap rejection, bounded grammar, chronological
+   validation, correlated-family collapse, exact candidate definitions,
+   activation boundaries, and evidence provenance.
+5. Keep weather-outcome diagnostics distinct from venue-settled promotion
+   evidence and public-tape counterfactuals distinct from actual fills.
 
-- an immutable definition hash;
-- the discovery run and source cutoff that created it;
-- an activation timestamp after that cutoff;
-- a forward-evidence cohort beginning at activation;
-- an append-only lifecycle and score history.
+## Non-Goals
 
-If a discovery run changes a threshold, model, filter, price cap, execution
-arm, or risk rule, the registry creates a new candidate version. The old
-version keeps its original results and may remain active as a comparator.
+- Automatic funded promotion or order authorization.
+- A champion/challenger state machine as a prerequisite for running analysis.
+- Reconstructing passive fills or private order truth from public tape.
+- An expanding grammar, arbitrary station exceptions, or retrospective date
+  filters.
+- Replacing raw snapshot, tape, outcome, or settlement collection.
+- Deleting the existing C2-C6 code before the replacement passes acceptance.
 
-## Operating Principles
+## What Failed In The Previous Design
 
-1. Collection is continuous and independent of strategies.
-2. Discovery recurs whenever enough newly resolved data exist; it is not a
-   one-time winner-selection ceremony.
-3. Candidate definitions are generated from a bounded, versioned grammar, not
-   from an expanding list of hand-named policies.
-4. Multiple challengers may coexist. Zero candidates is also a valid result.
-5. A champion is a reporting/allocation role, not a claim of truth and not
-   permission to trade real money.
-6. Every candidate version is scored on data that became available after its
-   activation as well as on causal walk-forward discovery folds.
-7. Nearby variants share family-level evidence and are not counted as
-   independent discoveries.
-8. Failed versions remain visible. A replacement version cannot erase family
-   drawdowns or reset the evidence clock without disclosure.
-9. Tape gaps, unavailable books, unresolved settlement, and missing markouts
-   remain explicit rejections; no layer fills them from snapshot prices.
-10. Automation may nominate and shadow candidates, but funded promotion always
-    requires the separate Phase 4 authorization path.
+The previous materializer used a model snapshot as its work unit. Model rows
+contain distinct forecast opinions, but the expensive replay state is usually
+shared by every model examining the same token at the same quote-ready time.
+Replaying the book and markout horizons inside the model-row loop multiplied
+identical work.
 
-## Definitions
+The recurring CLI also rebuilt historical rows from raw tape on each run. It
+had no durable cache of successful or rejected replay decisions, so unchanged
+history cost the same on every cycle. Its internal runtime timer began after
+materialization; the external scheduler timeout therefore killed the costly
+stage without a completed discovery outcome.
 
-### Strategy family
+This produced a technically governed but operationally empty system:
 
-A stable economic idea, such as a model/consensus source, side rule, lifecycle
-region, and execution arm. Nearby delay, clock, price-band, or scope variants
-belong to the same family unless they demonstrate independent incremental
-portfolio value.
+- repeated approximately 900-second scheduler failures;
+- zero completed discovery runs and zero candidate versions;
+- C4 evaluation and C5 transitions running with no active candidates;
+- no single report containing the useful analytical answer;
+- no distinction in operator workflow between a valid no-nomination result and
+  a discovery process that never finished.
 
-### Candidate version
-
-One exact, executable rule definition within a family. It includes signal,
-pricing, execution, sizing, deduplication, and risk behavior. Candidate versions
-are immutable and content-addressed.
-
-### Discovery run
-
-One reproducible search over a declared source window and grammar version. A
-run may produce zero, one, or several registry nominations. It never rewrites
-previous runs.
-
-### Evaluation cohort
-
-The rows causally available after a candidate version's activation and before
-an optional retirement boundary. Cohorts are append-only and candidate-specific.
-
-### Champion and challenger
-
-Research roles assigned from comparable evidence. A champion is the current
-best-supported candidate for a declared family/portfolio slot. Challengers
-continue shadow evaluation on the same new dates. There may be no champion.
+The lesson is an architectural gate: prove the causal analysis kernel on
+production cardinality before automating its lifecycle.
 
 ## System Boundaries
 
-### Existing immutable inputs
+### Immutable inputs
 
-- `prediction_snapshots` and station/date outcomes from the research database;
-- policy-independent raw tape, coverage intervals, checkpoints, and catalog;
-- venue-authoritative resolution when available;
-- calibrated price-sheet versions and execution features when available;
-- private order/user-channel truth only after a separately approved canary.
+- `prediction_snapshots` and official station/date outcomes from the research
+  database;
+- policy-independent tape catalog, coverage intervals, checkpoints, and raw
+  partitions;
+- venue-authoritative resolutions when available;
+- declared model, pricing, execution, cost, size, and risk versions;
+- private order truth only after a separately approved canary.
 
-### Derived discovery state
+Collectors remain the only writers to raw research and tape sources. Cache and
+analysis code open those sources read-only.
 
-Store compact registry and score state outside the repository, by default at:
+### Derived state
 
-`~/.local/state/roboweather/discovery/catalog.sqlite`
+Use an external derived database, initially:
 
-This database contains definitions, hashes, watermarks, lifecycle events,
-evaluation references, and compact scorecards. It must not duplicate raw tape,
-snapshot payloads, model artifacts, or bulky materialized datasets. Generated
-row exports and reports remain uncommitted under `reports/`.
+`~/.local/state/roboweather/discovery/decision_cache.sqlite`
 
-### Read/write ownership
+It contains replayable decision state, model-to-decision mappings, incremental
+watermarks, replay provenance, and compact run/candidate records. It does not
+duplicate raw tape partitions, model artifacts, or repository reports. One
+writer lock protects cache updates; reports and status surfaces are read-only.
 
-- Collectors remain the only writers to the research and tape sources.
-- Materialization and discovery open source databases read-only.
-- One discovery scheduler owns registry writes through a database-scoped lock.
-- TUI and reports observe registry state read-only.
+Generated reports remain under `reports/` and uncommitted.
 
-## Policy-Neutral Causal Materializer
+## Incremental Decision Cache
 
-The materializer is a reproducible derived view over source watermarks. It must
-cover every eligible causal snapshot/token decision, not only named policies,
-existing candidates, V2 pilots, or currently active families.
+### Grain
 
-Every row identifies:
+The expensive cache grain is one executable market decision under one replay
+contract, not one model prediction.
 
-- source snapshot IDs and stable payload hashes;
-- model/forecast/observation versions and availability timestamps;
-- station, market date, market family, bucket, side, and token;
-- lifecycle horizon and local decision state;
-- decision and quote-ready timestamps plus latency arm;
-- tape session, partitions, validity interval, and reconstruction hash;
-- quote-ready bid, ask, spread, depth, flow, and capacity;
-- economic fair, maximum price, cost, and sizing versions when available;
-- execution scenario and conservative/base/optimistic labels kept separate;
-- predeclared markouts and actual fill state when available;
-- venue settlement provenance and research-truth disagreement;
-- explicit eligibility or rejection reasons.
+The stable decision identity includes at least:
 
-Rows with missing causal timestamps, invalid coverage, unresolved token
-identity, unavailable required asks, or settlement disagreement remain in the
-view but cannot receive an executable/profitable label.
+- selected token/outcome;
+- quote-ready timestamp;
+- latency and required pre-signal coverage;
+- replay/build version;
+- execution state version needed to interpret the reconstructed book.
 
-Repeated materialization against identical watermarks and configuration must
-produce identical row IDs, values, eligibility decisions, and hashes.
+The accepted D1 contract ceilings each source row's persisted availability
+timestamp to the next 60-second boundary, then applies the declared 250 ms
+latency. The ceiling may delay a model opinion but can never make it available
+early; model rows on the same token/outcome within that causal availability
+bucket share one decision. The execution arm is separately versioned as the
+first full-book tape checkpoint at or after readiness, capped at 30 seconds of
+additional delay. Continuous `VALID` coverage must span the full 60-second
+pre-signal window through the actual checkpoint time. The cache records that
+execution timestamp and delay, and rejects later checkpoints explicitly. This
+is a delayed taker counterfactual, not exact-time, passive, or actual-fill
+evidence.
 
-## Strategy Grammar
+Price caps, target notionals, and fill scenarios may be stored as versioned
+derived execution summaries when their computation depends only on the same
+book. A changed replay or execution contract creates a new cache version; it
+does not overwrite prior evidence.
 
-The grammar defines the dimensions from which strategies may emerge. It is
-versioned independently from any candidate and begins deliberately small:
+Model-specific state lives in a separate mapping keyed to the decision:
 
-- one forecast/model or declared consensus score;
-- market family and lifecycle information-state region;
-- side selection;
-- observation/forecast freshness band;
-- local-time or lifecycle-state window;
-- high-conviction/edge requirement;
-- entry-price band and economic ceiling;
-- first-entry and portfolio deduplication scope;
-- stable-taker or separately modeled passive execution arm;
-- fixed size plus station/date and daily portfolio caps.
+- source prediction snapshot ID and payload hash;
+- model and market family;
+- selected bucket and side;
+- model fair, edge, confidence, forecast/observation freshness, and local
+  lifecycle fields;
+- causal source availability timestamps.
 
-The initial grammar excludes station exception lists, arbitrary date filters,
-deep rule trees, learned online resizing, and unconstrained quote-policy models.
-New dimensions require a grammar version, causal coverage audit, stronger
-complexity control, and explicit family mapping.
+This preserves every model opinion while reconstructing shared market state
+once.
 
-## Recurring Discovery Run
+### Cached decision result
 
-### Trigger
+Store both successful and rejected decisions so deterministic failures are not
+replayed forever. Each decision records:
 
-Run discovery after new venue/research outcomes resolve and at least one new
-effective market date is available. Weekly is the default operating cadence;
-the scheduler may skip a run when source watermarks have no meaningful change.
-Collection and forward evaluation continue between discovery runs.
+- best bid/ask, spread, depth, and required ask levels or stable summaries;
+- fillable notional and VWAP for declared taker caps/sizes;
+- tape session, partition, coverage interval, checkpoint, and reconstruction
+  hash;
+- `VALID` pre-signal-through-quote-ready coverage or an exact rejection reason;
+- replay timestamps, build/config hashes, and source watermarks;
+- settlement and markout references when independently available;
+- explicit absence of actual or passive-fill evidence.
 
-### Immutable run record
+Markouts that have not matured must not block initial decision reconstruction.
+They are appended by an incremental enrichment pass after their horizons exist.
+Settlement enrichment is likewise independent from initial book replay.
 
-Before ranking, persist:
+### Incremental update algorithm
 
-- run ID, creation time, code/build hash, and grammar version;
-- inclusive source start and exclusive cutoff;
-- research/tape/settlement watermarks and selected partitions/sessions;
-- walk-forward folds and clustered sample definitions;
-- costs, execution scenarios, latency, size, and portfolio caps;
-- complexity penalty, family-collapse rules, nomination thresholds, and the
-  maximum number of new challengers;
-- comparison baselines and currently registered champion/challengers.
+1. Read source and cache watermarks.
+2. Load newly available model snapshots up to the sealed source watermark.
+3. Derive stable unique decision keys before opening tape partitions.
+4. Insert model-to-decision mappings idempotently.
+5. Replay only cache misses in deterministic key order.
+6. Commit bounded batches with resumable progress.
+7. Enrich newly matured markouts and settlements separately.
+8. Record raw model-row count, unique decisions, cache hits/misses, rejection
+   counts, elapsed time, and peak resource use.
 
-The run record is immutable historical evidence. The next scheduled run may
-use a later cutoff or a new grammar version without changing prior results.
+An interrupted refresh resumes from committed keys. It never discards a
+completed historical cache or silently bridges tape gaps.
 
-### Search and nomination
+## Single Operator Command
 
-1. Generate all rules allowed by the declared grammar.
-2. Score them using date-ordered walk-forward folds.
-3. Fit calibration or thresholds only on dates preceding each evaluation fold.
-4. Cluster primary uncertainty by market date and report station/date counts.
-5. Apply costs, quote availability, tape validity, size, and portfolio caps.
-6. Collapse correlated variants into families.
-7. Compare candidates with market-only and current-registry baselines.
-8. Nominate zero or more challengers that clear minimum stability, sample,
-   complexity, concentration, and incremental-value gates.
-9. Reuse an existing candidate version when its definition hash is unchanged;
-   otherwise create a new version with a new activation boundary.
-
-Discovery ranking is hypothesis evidence. It cannot authorize funding.
-
-## Candidate Registry
-
-The registry is append-only at the definition and lifecycle-event level.
-
-Required entities:
-
-### `discovery_runs`
-
-Run specification, source watermarks, hashes, status, diagnostics, and output
-references.
-
-### `strategy_families`
-
-Stable family identity, economic rationale, grammar provenance, correlation
-group, and cumulative family-level evidence.
-
-### `candidate_versions`
-
-Candidate ID/version, exact rule payload, content hash, source run, activation,
-pricing/execution/risk versions, and current research role.
-
-### `evaluation_cohorts`
-
-Candidate version, activation boundary, eligible source interval, watermarks,
-coverage/fill/settlement requirements, and current completeness.
-
-### `candidate_scorecards`
-
-As-of watermark, discovery and forward statistics, effective dates,
-station/dates, execution counts, cost, PnL, R/R, uncertainty, drawdown,
-markouts, capacity, concentration, and rejection counts.
-
-### `candidate_lifecycle_events`
-
-Generated, nominated, shadow-activated, champion-assigned, challenger-assigned,
-degraded, retired, rejected, and Phase-4-requested events with reason and time.
-
-No status update deletes an earlier event or scorecard.
-
-## Continuous Forward Evaluation
-
-Each active candidate version is evaluated whenever new tape/outcomes become
-available. Only rows at or after its activation may enter forward evidence.
-
-The evaluator reports:
-
-- raw, eligible, deduplicated, valid, postable, executed, partial, missed, and
-  invalid counts;
-- effective resolved market dates and station/dates;
-- cost, fees, PnL, R/R, uncertainty, drawdown, wins, VWAP, and capacity;
-- conservative/base/optimistic/actual scenarios kept separate;
-- selected-versus-executed and filled-versus-missed comparisons;
-- markouts at declared horizons;
-- settlement provenance/disagreement and all fail-closed reasons;
-- common-date comparison with its family champion and relevant baselines.
-
-Forward evaluation never changes a candidate definition. A revised rule is a
-new candidate version whose evidence starts at its own activation.
-
-## Champion/Challenger Policy
-
-Champion assignment is conservative and scoped by correlated family or
-portfolio slot. It is not necessary to identify one global winner.
-
-- Maintain zero or one research champion per declared slot and a small bounded
-  set of challengers.
-- Compare champion and challengers on common eligible post-activation dates;
-  do not compare one candidate's long history with another's short favorable
-  interval without an aligned-date report.
-- Require incremental portfolio value after the existing champion consumes
-  shared station/date and daily caps.
-- Prefer the simpler candidate when evidence is statistically/economically
-  indistinguishable.
-- A challenger may replace a champion only after predeclared forward sample,
-  economics, uncertainty, concentration, execution, and settlement gates pass.
-- A champion that degrades may move to probation or retirement. The system may
-  return to no champion.
-- Multiple versions from one family do not count as independent confirmation.
-
-Registry role changes affect research/shadow reporting only. Phase 4 remains a
-separate explicit request for an exact candidate version, tactic, and size.
-
-## Continuous Improvement Loop
-
-The default loop is:
-
-1. Collect snapshots, tape, and outcomes continuously.
-2. Resolve new market dates and update active candidate scorecards.
-3. Run discovery on the declared cadence when meaningful new data exist.
-4. Register new challenger versions and preserve unchanged identities.
-5. Evaluate all active candidates prospectively.
-6. Update champion/challenger/retired roles under fixed transition rules.
-7. Publish a compact operator report and TUI health/status view.
-8. Review grammar/model/source changes separately; version them before use.
-9. Repeat without rewriting prior candidate evidence.
-
-The loop should initially be scheduled manually or by a dry-run service. Fully
-automatic research scheduling is allowed only after idempotency, locking,
-bounded candidate counts, runtime/storage limits, and failure visibility pass.
-Automatic funded promotion is out of scope.
-
-## Candidate State Machine
+The intended public surface is:
 
 ```text
-GENERATED
-   | discovery gates pass
-   v
-NOMINATED
-   | activation recorded
-   v
-SHADOW_ACTIVE <--------------------------+
-   |                                     |
-   +--> CHALLENGER --+                   |
-   |                 | common-date pass  |
-   |                 v                   |
-   +-------------> CHAMPION              |
-   |                 |                   |
-   |                 +--> PROBATION -----+
-   |
-   +--> REJECTED
-   +--> RETIRED
-   +--> PHASE4_REQUESTED (separate approval)
+/home/maxrush/miniconda3/envs/roboweather/bin/python \
+  scripts/run_discovery.py \
+  --cutoff-exclusive YYYY-MM-DD \
+  --out reports/discovery/RUN_NAME
 ```
 
-Every transition is an append-only event. A new candidate version starts at
-`GENERATED`; it never inherits the forward evidence of the version it replaces.
+The command may call internal modules, but the operator does not run separate
+materialization, nomination, evaluation, transition, or status commands.
 
-## Build Plan
+One invocation performs these stages in order:
 
-### Slice C0: Respecification And Migration
+1. **Seal inputs.** Record research/tape/outcome/settlement watermarks, source
+   dates, build hashes, grammar, folds, costs, latency, caps, sizes, uncertainty
+   method, family mapping, and existing candidate activations.
+2. **Refresh cache.** Incrementally materialize missing executable decisions
+   and mature eligible markout/settlement fields.
+3. **Run historical discovery.** Generate the bounded rule grid and rank it
+   only on chronological discovery dates.
+4. **Collapse families.** Select at most one representative from nearby
+   timing, delay, price, edge, spread, side, and model variants before opening
+   the final historical holdout.
+5. **Open historical holdout once.** Report whether selected representatives
+   survive untouched dates. Holdout performance does not feed rule tuning in
+   the same run.
+6. **Evaluate existing candidates forward.** Apply each exact immutable rule
+   only to decisions at or after its activation, with common-date and cap-aware
+   comparisons when evidence permits.
+7. **Write one result.** Produce machine-readable JSON/CSV plus one concise
+   Markdown report and a deterministic content hash.
+8. **Append successful identities.** Only after the complete report succeeds,
+   append the run outcome and any bounded research-only emerged candidate
+   definitions. A partial run registers no candidate.
 
-- Replace one-winner terminology with recurring runs and candidate versions.
-- Map the committed batch implementation to reusable versus transitional code.
-- Define registry schema, state machine, cadence, and migration compatibility.
-- Keep existing CLI artifacts readable as `batch_v1` evidence.
+Default paths may resolve from the active host configuration, but the sealed
+manifest must contain their fingerprints and all effective values.
 
-Exit: canonical docs and tests describe one continuous architecture; no code
-path claims that a one-winner batch is the completed Phase 3D system.
+## Search And Evaluation Contract
 
-### Slice C1: Causal Materializer And Replay Primitives
+### Historical discovery
 
-- Retain the implemented broad row contract, read-only source access, exact
-  quote-ready reconstruction, validity checks, and ask-sweep primitives.
-- Separate row materialization from winner/manifest assumptions.
-- Add deterministic materializer fixtures across multiple tape sessions/gaps.
+- Search only a small versioned grammar.
+- Use date-ordered folds and market-date-clustered uncertainty.
+- Apply quote availability, continuous tape validity, executable capped asks,
+  costs, fixed size, station/date caps, and daily risk caps.
+- Deduplicate the first qualifying station/date decision only after applying
+  the exact candidate rule.
+- Penalize complexity and report effective dates, station/dates, concentration,
+  fill fraction, capacity, PnL, R/R, drawdown, and rejection reasons.
+- Collapse correlated variants before inspecting the final holdout.
+- Allow zero passing families without widening the grammar automatically.
 
-Exit: identical sources/configuration produce identical policy-neutral rows,
-and invalid intervals fail closed.
+Weather outcomes may score historical discovery when venue truth is absent,
+but the report must label those results diagnostic only.
 
-### Slice C2: Durable Candidate Registry
+### Existing-candidate forward test
 
-- Add migrations and repositories for runs, families, candidate versions,
-  cohorts, scorecards, and lifecycle events.
-- Enforce unique content hashes, immutable definitions, append-only events,
-  one scheduler writer, and read-only observers.
-- Import optional `batch_v1` outputs without treating them as forward evidence.
+- The candidate definition and activation boundary are immutable.
+- No pre-activation decision enters its forward result.
+- A changed rule is a new version with a new evidence clock.
+- Compare candidates on aligned eligible dates and after shared portfolio caps
+  when the sample permits.
+- Venue-authoritative settlement is required for promotion evidence.
+- Missing markouts, settlement disagreement, invalid coverage, insufficient
+  size, or unavailable asks remain explicit failures.
+- Public tape supports declared taker counterfactuals only. `ACTUAL_ORDER`
+  evidence requires private authoritative order data.
 
-Exit: repeated registration is idempotent; changed rules create new versions;
-historical evidence cannot be overwritten.
+### Required status distinction
 
-Implementation: complete. `weather_trader/discovery/registry.py` owns schema
-versions 1-2, database-level append-only guards, content-addressed family and
-candidate registration, activation-bounded cohorts, watermark-addressed
-scorecards, lifecycle events, a nonblocking one-writer lock, and query-only
-observers. `scripts/phase3d_registry.py` initializes/inspects the external
-catalog and can import `batch_v1` identity without importing forward evidence.
+Every run ends in exactly one top-level analytical state:
 
-### Slice C3: Recurring Discovery Orchestrator
+- `COMPLETED_WITH_EMERGED_STRATEGIES`;
+- `COMPLETED_NO_EMERGED_STRATEGIES`;
+- `INCOMPLETE_CACHE`;
+- `FAILED_ANALYSIS`.
 
-- Generalize the implemented grammar/scoring into a run that nominates a
-  bounded set of challengers rather than one winner.
-- Trigger from meaningful resolved-data watermarks.
-- Persist run diagnostics and no-nomination outcomes.
-- Collapse families and enforce candidate-count/runtime budgets.
+Timeout, unavailable sources, invalid manifest, and resource-budget exhaustion
+are never reported as no nomination.
 
-Exit: repeated runs over unchanged watermarks are no-ops; later runs append
-new evidence/candidates without changing earlier runs.
+## Report Contract
 
-Implementation: complete. `weather_trader/discovery/orchestrator.py` seals a
-run before ranking, resumes interrupted sealed runs, skips unchanged resolved
-watermarks, registers zero or a bounded set of challengers, reuses unchanged
-candidate identities, and persists immutable completion/no-nomination/budget/
-expired-activation outcomes through registry schema version 2. Candidate-rule,
-active-candidate, runtime, and persisted-diagnostic budgets are explicit. The manual
-`scripts/phase3d_continuous_discovery.py` CLI is the pre-C6 operating surface.
+The Markdown report leads with a plain-language answer and contains:
 
-### Slice C4: Continuous Cohort Evaluator
+1. run status and whether any strategy emerged;
+2. sealed source dates, watermarks, build/config hashes, and evidence labels;
+3. cache health: model rows, unique decisions, hits, misses, invalid decisions,
+   elapsed time, and replay version;
+4. historical grid size, fold dates, holdout dates, family collapse, and all
+   gates;
+5. one row per representative family with discovery, conservative-depth, and
+   untouched-holdout results;
+6. one row per existing candidate with exact activation-bounded forward
+   results;
+7. tape-gap, liquidity, settlement, markout, and concentration attrition;
+8. weather-diagnostic versus venue-settled versus actual-order provenance;
+9. an explicit conclusion: emerged, none emerged, continue collecting, or
+   analysis unhealthy;
+10. confirmation that funded authorization is false.
 
-- Evaluate every active candidate from its own activation boundary.
-- Persist scorecards by as-of watermark and common-date comparisons.
-- Separate discovery, post-activation shadow, and actual-order evidence.
-- Preserve venue settlement, markout, and fill-scenario fail-closed gates.
+The report is the operator surface. Registry tables and lifecycle events are
+supporting provenance, not a second workflow the operator must interpret.
 
-Exit: candidate results update idempotently as new dates resolve, and no row is
-credited to a version before activation.
+## Candidate Identity Without Workflow Sprawl
 
-Implementation: complete. `weather_trader/discovery/evaluator.py` opens or
-reuses each active version's immutable activation-bounded cohort and appends
-watermark-addressed `FORWARD_SHADOW` and `COMMON_DATE` scorecards. It reports
-selection/execution attrition, three declared displayed-depth counterfactuals,
-venue-only economics, uncertainty, drawdown, capacity, markouts, settlement
-provenance, and aligned active-family comparisons. Public tape never
-synthesizes `ACTUAL_ORDER` evidence. `scripts/phase3d_continuous_evaluation.py`
-is the idempotent manual C4 surface. Its common-date evidence now records both
-aligned replacement value and cap-aware additive value after the peer consumes
-shared station/date and daily capacity.
+Retain the useful subset of the append-only registry:
 
-### Slice C5: Champion/Challenger Transitions
+- immutable run manifest and outcome;
+- family identity and correlation group;
+- exact candidate definition hash;
+- source run and activation timestamp;
+- append-only forward score snapshots or report references;
+- retirement/supersession reason when explicitly decided.
 
-- Implement predeclared nomination, champion, probation, retirement, and
-  rejection rules.
-- Require aligned-date and incremental-portfolio comparisons.
-- Retain family-level failure history across candidate versions.
-- Keep every transition research-only.
+Do not require automated champion, challenger, probation, or transition roles
+to run discovery. Those may be reconsidered only after the core command has
+produced candidates and accumulated forward evidence. Research identity never
+confers funded authority.
 
-Exit: deterministic inputs produce deterministic role transitions; the system
-can select no champion and cannot erase failed evidence through version churn.
+## Implementation Plan
 
-Implementation: complete. `weather_trader/discovery/transitions.py` activates
-nominations only after a C4 scorecard exists, applies fixed research-only
-challenger/champion/probation/retirement/rejection transitions, requires
-venue-aligned conservative and base economics with a positive uncertainty
-lower bound, valid markouts, bounded concentration, and aligned replacement
-evidence, and preserves family failure history in append-only lifecycle
-metadata. Registry guards reject role jumps, backdating, and any funded
-authorization metadata. `scripts/phase3d_apply_transitions.py` is the manual C5
-surface. The engine creates no Phase 4 request.
+### D0: Respecification And Safe Operating Posture
 
-### Slice C6: Scheduling And Operator Visibility
+- Make this document, the roadmap, audit, and approved direction agree on the
+  corrected architecture.
+- Mark the current multi-command C3-C6 workflow compatibility-only and remove
+  it from operator guidance.
+- Stop scheduling repeated known-failing discovery cycles before implementation
+  work begins; leave raw research and tape collection running.
+- Record a production benchmark fixture: raw model rows, distinct executable
+  decisions, tape calls, elapsed time, and memory.
 
-- Add a bounded dry-run scheduler/service after manual idempotency passes.
-- Expose last run, source watermarks, active candidates, stale evaluation,
-  errors, and scorecard summaries in reports/TUI.
-- Add restart locks, runtime/storage budgets, and alertable failures.
+Exit: one canonical contract and no automated invocation of the known-failing
+operator path. Historical code and registry data remain preserved.
 
-Exit: continuous discovery/evaluation survives restart without duplicate runs,
-unbounded candidates, silent failure, or TUI lifetime ownership.
+### D1: Decision Identity And Incremental Cache
 
-Implementation: complete. `weather_trader/discovery/scheduler.py` owns a
-registry-scoped scheduler lock, six-hour deterministic cycle identities,
-weekly discovery cadence, crash resume, subprocess timeouts, whole-cycle
-runtime and registry-size budgets, and append-only started/completed/failed
-events. `scripts/run_phase3d_scheduler.py` runs once or durably under
-`deploy/systemd/roboweather-phase3d-discovery.service`;
-`scripts/phase3d_status.py` and the TUI Processes tab expose cycle state,
-source watermarks, roles, scorecard freshness, storage, and failures. The
-service is repository-complete but is not enabled by this change.
+- Define schema, deterministic keys, cache/replay versions, model mappings,
+  watermarks, rejection records, locks, and crash-resume semantics.
+- Factor replay so unique decision keys are derived before tape access.
+- Separate initial book reconstruction from later markout and settlement
+  enrichment.
+- Add fixtures for duplicate model rows, gaps, reconnects, partial batches,
+  changed replay versions, and idempotent resume.
 
-### Slice C7: Phase 4 Handoff
+Exit: duplicate model opinions cause one tape reconstruction; repeated refresh
+against unchanged watermarks performs zero replay work; invalid decisions are
+cached with exact reasons; interrupted batches resume without changing hashes.
 
-- Produce an exact candidate-version package only after settlement-aligned,
-  fill-conditioned forward gates pass.
-- Require explicit operator approval for controlled real-order validation.
-- Reconcile public replay with private order truth at the tested tactic/size.
+### D2: Production Backfill And Performance Proof
 
-Exit: Phase 4 receives one exact approved candidate version without stopping
-or constraining the broader discovery loop.
+- Backfill the historical cache in resumable batches against the active
+  research and tape databases.
+- Compare cached decisions with direct replay samples across sessions, gaps,
+  sides, price levels, and market families.
+- Measure cold-backfill throughput, warm no-op runtime, daily incremental
+  runtime, memory, cache size, and cache-hit ratio.
+- Optimize indexes and batch boundaries from measured bottlenecks only.
 
-## Current Repository Mapping
+Exit:
 
-Commits `97baafb` and `a5de0c8` implemented/documented a deterministic batch
-vertical slice. Preserve them as history; modify forward instead of reverting.
+- sampled cached replay is exactly equal to direct replay;
+- the historical backfill completes without an all-or-nothing timeout;
+- a warm unchanged run finishes within 120 seconds;
+- one ordinary newly resolved day refreshes and reports within 300 seconds;
+- peak memory stays within the declared service/command budget;
+- progress and failure diagnostics remain available throughout.
 
-Reusable now:
+### D0-D2 production evidence — 2026-08-11
 
-- `weather_trader/discovery/materializer.py`: causal broad-row construction;
-- `weather_trader/tape/replay.py`: read-only exact-book replay and ask sweep;
-- `CandidateRule`, row hashes, source watermarks, run hashes, and immutable JSON
-  primitives in `weather_trader/discovery/contracts.py`;
-- fixed grammar generation, walk-forward scoring, complexity penalty, and
-  correlated-family collapse in `weather_trader/discovery/engine.py`;
-- fail-closed activation and venue-settlement checks;
-- deterministic unit fixtures in `tests/test_phase3d_discovery.py`.
-- `weather_trader/discovery/registry.py`: durable append-only runs, families,
-  versions, cohorts, scorecards, lifecycle history, and writer ownership;
-- `scripts/phase3d_registry.py`: registry initialization, read-only status, and
-  identity-only `batch_v1` import.
-- `weather_trader/discovery/orchestrator.py`: recurring C3 trigger, nomination,
-  idempotency, recovery, and budget enforcement;
-- `scripts/phase3d_continuous_discovery.py`: manual recurring-run entry point.
-- `weather_trader/discovery/evaluator.py`: C4 activation-bounded forward and
-  common-date scorecards;
-- `weather_trader/discovery/transitions.py`: C5 deterministic research roles;
-- `weather_trader/discovery/scheduler.py`: C6 bounded recurring scheduler;
-- `weather_trader/discovery/status.py`: read-only C6 operator status;
-- `scripts/phase3d_continuous_evaluation.py`,
-  `scripts/phase3d_apply_transitions.py`, `scripts/run_phase3d_scheduler.py`, and
-  `scripts/phase3d_status.py`: manual, service, and observer surfaces.
+D0 stopped and disabled `roboweather-phase3d-discovery.service` while leaving
+`roboweather-research.service` and `roboweather-market-tape.service` active.
+The last three failed scheduler cycles each exhausted the 900-second child
+timeout; systemd reported about 14 minutes 38 seconds of CPU and a measured
+130.4 MiB peak for the final failed cycle, with zero completed discovery runs.
 
-Transitional and to be refactored:
+At the sealed historical watermark `2686364` from source start `2026-07-23`,
+the production grain benchmark found 146,937 selected model rows, 146,937
+legacy exact-write-time decisions, 19,032 causal minute-ceiling decisions, and
+18,628 decisions requiring a tape provider call. The 7.89x minimum replay
+reduction was measured read-only in 7.18 seconds. Exact row write timestamps
+cannot be used for sharing because serial model persistence makes every one
+different; the earlier shared cycle timestamp also cannot be used because it
+precedes actual model availability.
 
-- batch-only `winner` compatibility aliases in `discover`;
-- `freeze_winner_manifest` and one-winner/no-winner output semantics;
-- the single-manifest `phase3d_forward_report.py` workflow;
-- tests and docs that treat one global winner as the Phase 3D exit;
-- repository status claims that D0-D3 complete the intended operating system.
+The versioned checkpoint cache then completed the cold production backfill in
+32.43 seconds internally (33.09 seconds wall) at 325,480 KiB peak RSS. It
+persisted all 146,937 model mappings, 19,032 decision identities, zero pending
+decisions, 1,396 executable successes, and 17,232 exact rejections. The largest
+rejection class was 15,049 checkpoints arriving beyond the declared 30-second
+execution bound; those rows remain visible evidence attrition rather than a
+fallback price.
 
-The existing batch discovery/forward CLIs remain read-only compatibility tools.
-Do not run them as the continuous scheduler, trade from their output, or treat
-their single manifest as the steady-state architecture.
+The unchanged warm run performed zero replay calls in 0.026 seconds internally
+(0.73 seconds wall). A deterministic stratified direct-replay sample matched
+200/200 cached result hashes across `HIGH_TEMP` and `LOW_TEMP`, YES and NO
+tokens, successful and rejected decisions, and 16 tape sessions. An ordinary
+9,216-model-row increment added 1,175 decisions and completed in 2.52 seconds
+internally (3.26 seconds wall), below the 300-second daily gate. Unit fixtures
+also prove one replay for duplicate model opinions, cached gaps and missing
+tokens, changed-version invalidation, writer locking, idempotent warm refresh,
+schema migration, and crash-resume equality.
 
-## Acceptance Checklist
+These results accept D0-D2 for the checkpoint execution contract hash
+`ab785d646a2143c0db0aa6ca164d4fc64d410fe06b97a5ae5219f6a79bb2afcd`.
+They do not accept the abandoned immediate exact-time contract, authorize a
+strategy, or satisfy D3-D6.
 
-- [x] Broad rows are independent of current policies and named V2 pilots.
-- [x] Implemented tape joins are causal and fail closed on invalid coverage.
-- [x] Existing row/run identities are deterministic for fixed inputs.
-- [x] Registry schema and append-only lifecycle events are implemented.
-- [x] Discovery runs recur idempotently from resolved-data watermarks.
-- [x] Runs may nominate zero or a bounded number of challengers.
-- [x] Unchanged candidate definitions reuse their existing version identity.
-- [x] Changed definitions create a new version identity and require a new
-  post-activation cohort.
-- [x] Active candidates receive continuous scorecard updates.
-- [x] Common-date champion/challenger comparisons are deterministic.
-- [x] Family-level evidence survives version replacement and retirement.
-- [x] Candidate and runtime/storage budgets prevent unbounded growth.
-- [x] Venue settlement and research-truth disagreement remain explicit.
-- [x] Conservative/base/optimistic/actual fills remain separate.
-- [x] Positive optimistic-only evidence cannot trigger a role promotion.
-- [x] No discovery or registry transition can authorize funded trading.
-- [ ] Phase 4 receives only an explicitly approved exact candidate version.
+Performance thresholds may be tightened after the first measured backfill, but
+they may not be weakened merely to call the old full-history behavior complete.
+
+### D3: Deterministic Historical Grid And Report
+
+- Refactor the useful parts of `scripts/exhaustive_constraint_grid.py` onto the
+  cache rather than direct per-model tape replay.
+- Seal the manifest before ranking.
+- Implement chronological folds, complexity penalty, correlated-family
+  collapse, untouched final dates, deterministic bootstrap seeds, conservative
+  depth, and cap-aware scoring.
+- Produce the single Markdown/JSON/CSV report and the four-state outcome.
+
+Exit: identical cache, code, cutoff, and configuration produce identical
+content hashes and rankings; the holdout is inaccessible until representatives
+are frozen; zero strategies is a successful report; failed analysis is visibly
+different.
+
+### D4: Existing-Candidate Forward Evaluation
+
+- Reduce the current registry to the candidate identity and activation evidence
+  needed by the command.
+- Evaluate exact existing versions only after activation.
+- Add aligned-date and incremental cap-aware comparisons without automatic
+  research-role transitions.
+- Preserve weather, venue, markout, fill-scenario, and actual-order provenance.
+
+Exit: no pre-activation row can enter a score; changed definitions create new
+versions; repeated evaluation is idempotent; missing venue settlement or
+markouts prevents promotion claims while still allowing clearly labeled
+diagnostics.
+
+### D5: Operator Cutover And Optional Scheduling
+
+- Make `scripts/run_discovery.py` the sole documented discovery command.
+- Retire the old C3/C4/C5/C6 CLIs, service, and TUI controls from operator
+  routing while keeping reusable internals until cleanup is separately proven.
+- Update status reporting to point to the latest complete report and cache
+  health.
+- Run at least three consecutive production manual cycles: cold/resume, warm
+  no-op, and new-data incremental.
+- Only then consider a thin scheduler that invokes the same command. The
+  scheduler adds timing and alerting, not a second analytical architecture.
+
+Exit: “run discovery” means one command and returns one understandable answer;
+manual acceptance passes on production data; any scheduler failure preserves a
+complete prior report and cannot be confused with no strategies emerging.
+
+### D6: Phase 4 Handoff
+
+This remains a later gate, not part of the simplification build. Package an
+exact candidate for controlled funded validation only after venue settlement,
+valid markouts, causal coverage, conservative positive economics,
+concentration limits, useful-size evidence, and explicit human approval pass.
+
+## Verification Matrix
+
+| Concern | Required proof |
+| --- | --- |
+| Correct grain | Many model rows sharing one decision produce one replay and retain every model mapping. |
+| Causality | No book event after quote-ready time or outcome unavailable at the sealed cutoff enters a decision. |
+| Gap safety | Any required non-`VALID` interval rejects the decision; no snapshot-price fallback exists. |
+| Determinism | Same cache/code/config/cutoff yields the same manifest, rows, ranking, and report content hash. |
+| Incrementality | Unchanged watermarks cause zero tape replay; new input touches only new/version-invalidated decisions. |
+| Crash recovery | Killing a cache batch and rerunning produces the same final state as an uninterrupted build. |
+| Holdout integrity | Rule generation and family selection cannot read final holdout outcomes. |
+| Forward integrity | Existing candidate results exclude every pre-activation row. |
+| Correlation | Nearby variants collapse before holdout and do not count as independent evidence. |
+| Execution honesty | Public tape labels only declared taker counterfactuals; passive/actual fills remain unavailable without authoritative truth. |
+| Settlement honesty | Weather scoring is labeled diagnostic; promotion uses venue-authoritative settlement only. |
+| Operator clarity | Completed-none, emerged, incomplete-cache, and failed-analysis outcomes are unmistakable in one report. |
+| Resource bounds | Production warm and incremental runtime/memory gates pass before scheduling. |
+| Authority | Every result states `funded_authorization=false`; Phase 4 remains separately approved. |
+
+## Reuse And Deprecation Map
+
+Reuse:
+
+- causal `CausalBookProvider` and ask-sweep primitives;
+- coverage, checkpoint, partition, and reconstruction provenance;
+- deterministic contracts and stable hashing;
+- bounded grammar, chronological scoring, complexity penalty, and family
+  collapse;
+- candidate definition hashes and activation boundaries;
+- append-only run/candidate evidence where it directly supports attribution.
+
+Compatibility-only until cutover:
+
+- `scripts/phase3d_continuous_discovery.py`;
+- `scripts/phase3d_continuous_evaluation.py`;
+- `scripts/phase3d_apply_transitions.py`;
+- `scripts/run_phase3d_scheduler.py`;
+- `deploy/systemd/roboweather-phase3d-discovery.service`;
+- champion/challenger/probation transition logic and TUI controls.
+
+Do not delete these during D1-D4. After D5 acceptance, remove or archive only
+code proven unused by the single command and its evidence model.
 
 ## Kill And Pivot Rules
 
-- If no family survives costs and walk-forward stability, register no
-  challengers and continue collecting; do not widen the grammar automatically.
-- If a candidate fails forward evaluation, retain the failure and reject or
-  retire that version; do not repair its existing cohort retrospectively.
-- If version churn repeatedly resets the same family, suspend new versions for
-  that family until a materially new causal input or economic rationale exists.
-- If nearby variants alternate at the top, collapse them into one unstable
-  family rather than reporting independent confirmation.
-- If quality depends on station exceptions, tiny fills, one weather date, or
-  research truth that disagrees with venue settlement, reject it.
-- If V2 pricing is positive but execution-aware evidence is negative, kill the
-  tactic rather than expanding the search space automatically.
-- If no forecast/model feature adds value over the causal market baseline,
-  prioritize forecast and target-truth research instead of execution complexity.
-- If continuous scheduling creates duplicate runs, unbounded state, or silent
-  stale evaluation, disable the scheduler and retain manual idempotent runs.
+- If no family survives costs and chronological stability, publish
+  `COMPLETED_NO_EMERGED_STRATEGIES` and continue collecting. Do not widen the
+  grammar automatically.
+- If the cache cannot reproduce sampled direct replay exactly, stop discovery
+  work and repair cache identity/provenance first.
+- If warm or incremental performance gates fail, optimize the decision cache
+  before adding orchestration, scheduling, or lifecycle features.
+- If a candidate fails forward evaluation, preserve that exact result. A
+  revised rule is a new version and evidence clock.
+- If venue settlement or markouts are absent, report weather diagnostics but do
+  not imply promotion readiness.
+- If repeated runs produce only highly correlated threshold variants, tighten
+  family collapse before increasing grammar breadth.
+
+## Acceptance Checklist
+
+- [x] Corrected architecture and failure diagnosis are canonical.
+- [x] Known-failing discovery scheduler is removed from active operation.
+- [x] Production decision-grain benchmark is recorded.
+- [x] Incremental decision-cache schema and deterministic identities pass.
+- [x] Cache replay matches direct replay and survives interruption.
+- [x] Historical backfill and warm/incremental performance gates pass.
+- [ ] Historical grid consumes cached decisions only.
+- [ ] Correlated representatives are frozen before holdout access.
+- [ ] One command writes one complete human-readable report.
+- [ ] Existing candidates are evaluated only after activation.
+- [ ] Completed-none and failed-analysis states are distinct.
+- [ ] Weather, venue, markout, and actual-fill provenance remain distinct.
+- [x] Old multi-command workflow is removed from operator guidance.
+- [ ] Three consecutive production manual acceptance cycles pass.
+- [ ] Any optional scheduler invokes the exact accepted command.
+- [ ] Phase 4 receives only an explicitly approved exact candidate version.
 
 ## Decision Log
 
-- 2026-08-07: Completed C5-C6 with validated append-only role transitions,
-  aligned replacement and cap-aware additive comparisons, conservative/base
-  uncertainty and concentration gates, retained family failures, a
-  restart-safe bounded scheduler, append-only cycle failures, CLI/TUI status,
-  and a durable user-systemd unit. The service was not enabled and no Phase 4
-  request or funded authority was created.
-
-- 2026-08-06: Completed C4 with activation-bounded forward-shadow and aligned
-  common-date scorecards, venue-only economics, explicit displayed-depth
-  scenarios, markouts, and separate actual-order evidence.
-
-- 2026-08-06: Completed C3 with a recurring append-only orchestrator, resolved-
-  watermark no-ops, crash resume, bounded multi-challenger nomination,
-  unchanged-version reuse, immutable no-nomination/budget/expired-activation
-  outcomes, and
-  candidate/rule/runtime/diagnostic budgets. Added the manual continuous-run
-  CLI; scheduling remains C6 and no funded state changed.
-
-- 2026-08-04: Respecified Phase 3D as a continuous versioned discovery system.
-  Discovery runs now recur, may nominate multiple bounded challengers, and feed
-  append-only candidate cohorts plus champion/challenger scorecards. Candidate
-  versions remain immutable for attribution, but the strategy program never
-  freezes. Preserved the committed batch implementation as reusable vertical
-  infrastructure and marked its one-winner orchestration transitional.
-- 2026-08-04: Completed C2 with a durable external registry, schema migration,
-  append-only database guards, single-writer locking, read-only observation,
-  idempotent content-addressed versions/cohorts/scorecards/events, and an
-  identity-only `batch_v1` importer. C3-C5 remain open and no funded state
-  changed.
-- 2026-08-04: Implemented the deterministic batch materializer, fixed grammar,
-  one-winner selection, and fail-closed stable-taker evaluator. No production
-  discovery run or candidate was activated.
-- 2026-07-30: Introduced policy-neutral constrained discovery, causal source
-  cutoffs, complexity control, correlated-family collapse, and post-activation
-  evidence as requirements before controlled funded validation.
+- 2026-08-11: Accepted D0-D2 for the versioned first-post-ready-checkpoint
+  taker contract after stopping the failed scheduler. Production cold, warm,
+  incremental, resource, crash-resume, and 200-row exact replay gates passed.
+  The initial exact-time raw-partition backfill was preserved as an interrupted
+  compatibility contract after measured throughput proved it could not satisfy
+  the daily update budget; no evidence was silently reinterpreted.
+- 2026-08-11: Respecified Phase 3D after the production scheduler repeatedly
+  timed out during full-history per-model-row tape reconstruction. Made an
+  incremental executable-decision cache and one deterministic report command
+  the critical path. Retained causal replay, sealed manifests, chronological
+  validation, correlated-family collapse, immutable candidate versions, and
+  post-activation evidence; demoted the C3-C6 multi-command lifecycle workflow
+  to compatibility-only until the replacement passes production performance.
+- 2026-08-07: C5-C6 role-transition, scheduler, and status code was completed
+  before production-scale materialization viability was established.
+- 2026-08-04: C2-C4 registry, recurring discovery, and forward evaluator code
+  was completed as the prior continuous-versioned architecture.
+- 2026-07-30: Policy-neutral causal tape-backed discovery became a required
+  research gate; that scientific requirement remains in force.

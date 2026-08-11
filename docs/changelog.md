@@ -4,6 +4,20 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-11
 
+- Completed Phase 3D D0-D2 for the versioned causal checkpoint taker cache.
+  Stopped and disabled the repeatedly failing discovery scheduler while keeping
+  research and market-tape collection active. Added deterministic
+  model-to-decision identities, causal availability bucketing, cached success
+  and rejection rows, replay provenance, bounded commits, writer locking,
+  schema migration, crash recovery, exact direct-replay verification, and a
+  D1-D2 developer CLI. Production reduced 146,937 model rows to 19,032
+  decisions, completed cold replay in 32.43 seconds, matched 200/200 sampled
+  direct replays, no-oped warm in 0.026 seconds, and refreshed a 9,216-row
+  increment in 2.52 seconds at roughly 320 MiB peak RSS. D3-D6 and funded
+  authority remain open.
+
+- Respecified the Phase 3D implementation and operator workflow after repeated production scheduler timeouts exposed per-model-row historical tape replay as the wrong computational grain. The new canonical sequence is an incremental executable-decision cache, one deterministic historical and forward analysis command, and one report; the existing C3-C6 lifecycle surfaces are compatibility-only until production performance passes. Funded authority did not change.
+
 - Added a lifecycle-based agent coordination layer without changing funded
   behavior: compact human-approved `agent_loop/STATE.md`, generated runtime and
   repository `facts.json`, a capped work board with append-only closed threads,

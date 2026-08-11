@@ -143,6 +143,8 @@ Known failure modes that should be checked during review:
 | Book-depth replay mismatch | Use recorded ask-sweep fillable fields; treat `--no-depth` as upper bound only. |
 | Snapshot depth treated as deterministic execution | Require fill-conditioned evidence from selected, filled, and unfilled live candidates before funded promotion. |
 | Candidate-scoped event collection treated as a causal market tape | Require policy-independent pre-signal token coverage under the Phase 3 implementation plan. |
+| Model rows treated as distinct tape decisions | Derive stable executable-decision keys first and reconstruct shared tape state once per replay version. |
+| Lifecycle automation built before production analysis viability | Require direct-replay equivalence plus cold/resume, warm no-op, and new-data performance gates before scheduling. |
 | Price changes or book touches treated as executed flow | Authoritative trade-direction tests and deterministic tape replay; fail closed on ambiguous or gapped intervals. |
 | Adverse live fill selection | Run the whole-chain truth report and reject or pause sleeves where filled-subset replay materially underperforms unfilled selected replay. |
 | Station allow-list leakage | Add tests around policy specs and live strategy plans. |
@@ -156,9 +158,9 @@ Known failure modes that should be checked during review:
 
 ## Current Phase
 
-As of 2026-07-16, the Phase 3 shared market-tape collector is reported built and running, with deterministic replay and acceptance evidence accumulating. Price Sheet V2a is the current implementation priority; V2b consumes only valid tape windows. The research-loop memory prerequisite is resolved, and funded live trading remains paused.
+The Phase 3 shared market tape remains the accepted causal execution-evidence substrate. Phase 3D has been respecified because the multi-command scheduler repeatedly timed out before completing discovery. The current build priority is the incremental executable-decision cache followed by one deterministic historical/forward discovery report. Scheduling and lifecycle automation remain deferred until direct-replay equivalence and production performance pass. Funded trading remains paused.
 
-Current phase status and acceptance gates are canonical in `docs/execution-rebuild-roadmap.md` and `docs/implementation/phase-3-market-tape-replay.md`. The current financial and systems verdict is `docs/current-trading-system-audit.md`.
+Current phase status and acceptance gates are canonical in `docs/execution-rebuild-roadmap.md`, `docs/implementation/phase-3-market-tape-replay.md`, and `docs/implementation/tape-strategy-discovery.md`. The current financial and systems verdict is `docs/current-trading-system-audit.md`.
 
 Before any new funded sleeve, promotion, or size-up:
 

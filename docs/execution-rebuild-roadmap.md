@@ -2,7 +2,7 @@
 
 This is the living roadmap for turning RoboWeather research signals into measurable, fill-conditioned trading evidence. Update this document when phase status, sequencing, or exit gates change. Detailed economic ideas belong in `docs/hypotheses/`; active feature design belongs in `docs/implementation/`.
 
-Last updated: 2026-08-07
+Last updated: 2026-08-11
 
 ## Objective
 
@@ -12,10 +12,10 @@ Establish whether an exact weather signal can be traded through an exact executi
 market listing + causal forecast state
 -> calibrated quoteable fair
 -> causal market state
--> recurring policy-neutral discovery
--> versioned candidate registry
--> continuous forward cohorts
--> champion/challenger research state
+-> incremental executable-decision cache
+-> deterministic historical discovery + untouched holdout
+-> exact candidate forward evaluation
+-> one operator report
 -> quote/taker decision
 -> fill or miss
 -> markout
@@ -27,7 +27,7 @@ market listing + causal forecast state
 
 The Phase 3 market-tape recorder has retained policy-independent data since July 23 and the repository includes a frozen-portfolio batch taker holdout. Its completed 72-hour run recorded 224.6 million events with zero reconstruction errors and about 96.7% valid eligible-token coverage. Periodic reconnect gaps and late initial discovery are accepted research limitations, not critical-path blockers; causal replay continues to reject each affected decision window rather than filling across missing tape. Recorder heartbeat/reconnect hardening and another full lifecycle run are deferred unless missing coverage materially obstructs candidate evaluation. One real persisted quote/tape reconstruction, passive fill bounds, markouts, and venue settlement remain open. Price Sheet V2a Slices 0-3 are implemented and have nonempty current-database evidence. Slice 3 keeps calibrator selection unfrozen, computes reserves only from prior out-of-fold market dates, and leaves both pilots research-only until a baseline and untouched forward window are declared.
 
-Phase 3D is now specified as a continuous versioned discovery system. The committed batch vertical slice supplies reusable causal materialization, deterministic run/candidate hashes, fixed-rule scoring, complexity penalties, family collapse, and a post-activation stable-taker evaluator. Slices C2-C6 now supply the durable append-only external registry, recurring resolved-watermark discovery, bounded multi-challenger nomination, activation-bounded forward/common-date scorecards, deterministic research-only role transitions, and a restart-safe bounded dry-run scheduler with status/failure visibility. The one-winner manifest orchestration remains transitional rather than the target architecture. The new service unit is repository-complete but not enabled by this change. Current ledgers have no venue-resolution rows and Phase 3 markouts remain open, so C7 cannot package an exact candidate for Phase 4. The named V2a pilots remain vertical controls and receive no presumption that one must become a champion.
+Phase 3D has completed D0-D2 for the versioned causal checkpoint execution contract. The known-failing scheduler is stopped and disabled; research and tape collection remain active. The production cache reduced 146,937 model rows to 19,032 decisions, completed its cold backfill in 32.43 seconds, matched 200/200 stratified direct replays, completed a warm no-op in 0.026 seconds, and refreshed a 9,216-row increment in 2.52 seconds at roughly 320 MiB peak RSS. The C2-C6 registry, evaluator, transition, scheduler, and status code remains compatibility-only. D3-D5 must now move the bounded historical grid, correlated-family collapse, untouched holdout, exact post-activation candidate evaluation, and one report onto this cache before the operator cutover or any scheduler is considered. Current ledgers still lack sufficient venue-resolution and markout evidence, so no result can pass to Phase 4.
 
 A full-market-lifecycle forecast/data program is approved as a parallel research build. It extends collection to first listing and builds one continuously updating pricing and inventory engine with separately validated D-1, early-day, intraday, and late information states. It does not change the current critical path: the bounded late Price Sheet V2a pilot remains first, with earlier lifecycle regions progressively enabled after their forecast, tape, inventory, and execution gates pass. Funded trading remains paused.
 
@@ -36,7 +36,7 @@ Canonical records:
 - Current assessment: `docs/current-trading-system-audit.md`
 - Economic hypothesis: `docs/hypotheses/2026-07-16-shared-weather-market-tape.md`
 - Tape implementation/acceptance: `docs/implementation/phase-3-market-tape-replay.md`
-- Continuous versioned strategy discovery: `docs/implementation/tape-strategy-discovery.md`
+- Deterministic tape-backed strategy discovery: `docs/implementation/tape-strategy-discovery.md`
 - Active pricing implementation: `docs/implementation/price-sheet-v2.md`
 - Forecast-data implementation: `docs/implementation/forecast-edge-data-program.md`
 - Full-lifecycle implementation: `docs/implementation/full-market-lifecycle-trading.md`
@@ -52,7 +52,7 @@ Canonical records:
 | 1. Quoteable fair/price sheet | Convert model output into a conservative maximum price. | V2a Slices 0-3 repository complete; no calibrator selected and untouched forward gate open | Positive walk-forward quoted-price EV without extreme uncalibrated fairs. |
 | 2. Shadow quote construction | Generate auditable quote intents and cancellation metadata. | Plumbing prototype complete | Deterministic intent construction tests pass. No profitability claim. |
 | 3. Shared market tape and replay | Collect pre-signal active-universe market events and replay quote tactics causally. | Research substrate accepted at about 96.7% valid coverage with gap-affected decisions rejected; recorder hardening deferred. Slice 4 real join and passive/markout Slices 5-6 remain open. | Tape validity, deterministic book replay, conservative fill bounds, and forward shadow reporting pass. |
-| 3D. Continuous versioned strategy discovery | Repeatedly discover simple strategies from broad causal snapshot + tape + settlement rows, register exact candidate versions, and compare forward champion/challenger evidence. | C0-C6 repository-complete: recurring discovery, append-only registry/evidence, deterministic research roles, bounded scheduling, and operator visibility are implemented; C7 is blocked on venue settlement, markouts, and an explicitly approved passing version | Recurring runs are idempotent, candidate evidence is append-only and post-activation, champion/challenger transitions are deterministic, and an exact passing version can request Phase 4. |
+| 3D. Deterministic strategy discovery | Cache each executable tape decision once, search a bounded historical grid, test frozen representatives and existing candidates honestly, and issue one report. | D0-D2 accepted on production for the first-post-ready-checkpoint taker contract; D3 historical grid/report, D4 forward evaluation, and D5 operator cutover remain open. Existing C2-C6 automation is compatibility-only. | Cached replay equals direct replay; warm and incremental runtime gates pass; one command distinguishes emerged, none, incomplete cache, and failed analysis; exact candidates remain activation-bounded. |
 | F. Full-lifecycle forecast/data foundation | Observe weather and market state from first listing and price horizon-specific distributions. | Approved parallel research build; no production consumer | Venue-aligned truth, causal D-1 sources, first-listing tape, horizon calibration, and inventory-aware replay pass. |
 | 4. Funded validation | Validate replay fidelity and useful-size fill-conditioned PnL with controlled real orders. | Blocked on an explicitly approved Phase 3D candidate version with validated V2a + V2b pricing/execution | Plumbing canary passes, then `$50` and `$100` size-specific evidence passes. |
 | 5. Learned quote policy and sizing | Select quote/skip/size from calibrated signal and microstructure state. | Future | Sufficient clean Phase 3/4 data and stable out-of-sample improvement. |
@@ -74,46 +74,42 @@ Canonical records:
 
 The detailed contracts, module boundaries, slices, tests, and acceptance gates are in `docs/implementation/price-sheet-v2.md`.
 
-## Continuous Versioned Strategy Discovery
+## Deterministic Strategy Discovery
 
 Strategy generation is downstream of measurement. Do not hard-code a named MVP,
 model family, side, station exception, or clock variant as the final strategy.
-Discovery recurs as data resolve; exact candidate versions remain immutable only
-so later evidence cannot be attributed to a rule that changed after the fact.
+Exact candidate versions remain immutable so later evidence cannot be attributed
+to a rule changed after the fact, but lifecycle machinery is not a prerequisite
+for obtaining the analytical answer.
 
 ```text
 market tape + causal forecast/model snapshots + venue settlement
--> recurring date-ordered discovery runs
--> complexity penalty and correlated-family collapse
--> bounded versioned challengers
--> append-only post-activation cohorts
--> champion/challenger comparison
+-> incremental executable-decision cache
+-> date-ordered historical grid
+-> complexity penalty and correlated-family collapse before holdout
+-> untouched historical holdout
+-> exact existing-candidate post-activation evaluation
+-> one report
 -> controlled real-order request
 ```
 
 The Phase 3D implementation must:
 
-1. Build a reproducible broad discovery view over all eligible causal
-   snapshot/token decisions, not only selected V2a pilots.
-2. Seal each run's source cutoffs, search grammar, complexity budget, folds,
-   effective-sample requirements, costs, fill scenario, size, caps, stability
-   tests, and challenger-nomination rules before ranking.
-3. Fit calibration and thresholds only on dates before each walk-forward fold,
-   with primary uncertainty clustered by market date.
-4. Collapse nearby delay, window, price-cap, scope, and model variants into
-   correlated families rather than counting them as independent confirmation.
-5. Prefer simple stable families to high in-sample return and nominate only a
-   bounded set of candidates with incremental value.
-6. Register every exact signal, pricing, execution, size, risk, source, code,
-   and activation definition as an immutable candidate version.
-7. Evaluate every active version only on its post-activation cohort with venue
-   settlement, fail-closed coverage, fill-conditioned markouts, and portfolio caps.
-8. Compare champions and challengers on aligned eligible dates, retain family-
-   level failure history, and allow the system to select no champion.
-9. Repeat discovery from later resolved-data watermarks without rewriting prior
-   runs or candidate evidence.
-10. Send only an explicitly approved exact passing candidate version to Phase
-    4; a failed cohort creates no permission to repair that version retrospectively.
+1. Derive unique executable-decision keys before tape access and cache successful
+   and rejected replay results incrementally.
+2. Preserve every model opinion through model-to-decision mappings without
+   reconstructing shared market state for each model row.
+3. Seal source watermarks, grammar, folds, costs, latency, fill scenario, size,
+   caps, uncertainty, family mapping, and candidate activations before ranking.
+4. Use chronological folds and collapse correlated variants before opening the
+   untouched final historical dates.
+5. Evaluate existing exact candidates only on their post-activation decisions.
+6. Fail closed on tape gaps and unavailable asks; keep weather, venue, markout,
+   public-tape counterfactual, and actual-order evidence distinct.
+7. Return one report whose status distinguishes emerged strategies, a valid zero,
+   an incomplete cache, and failed analysis.
+8. Prove warm and daily-incremental production performance before adding a thin
+   scheduler, and send only an explicitly approved passing candidate to Phase 4.
 
 The detailed contract is
 `docs/implementation/tape-strategy-discovery.md`.
