@@ -1,0 +1,4 @@
+interface:
+  display_name: "Park Work Thread"
+  short_description: "Record a resumable work handoff"
+  default_prompt: "Use $park-thread to park the current RoboWeather work with evidence and one next action."

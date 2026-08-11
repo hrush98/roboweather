@@ -1,0 +1,4 @@
+interface:
+  display_name: "Resume Work Thread"
+  short_description: "Resume work from a verified handoff"
+  default_prompt: "Use $resume-thread to resume a RoboWeather board thread after checking current facts."

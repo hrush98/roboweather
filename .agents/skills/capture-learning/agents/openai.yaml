@@ -1,0 +1,4 @@
+interface:
+  display_name: "Capture Learning"
+  short_description: "Preserve a transferable lesson or intuition"
+  default_prompt: "Use $capture-learning to preserve this concept, failure lesson, or design intuition."

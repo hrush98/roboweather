@@ -1,0 +1,107 @@
+{
+  "board": {
+    "active": 0,
+    "closed": 3,
+    "open": 0,
+    "parked": 0,
+    "waiting": 0
+  },
+  "documents": {
+    "audit": {
+      "available": true,
+      "path": "docs/current-trading-system-audit.md",
+      "review_date": "2026-08-11",
+      "word_count": 4228
+    },
+    "improvement_loop": {
+      "available": true,
+      "path": "docs/continuous-improvement-loop.md",
+      "review_date": "2026-08-11",
+      "word_count": 2187
+    },
+    "live_journal": {
+      "available": true,
+      "path": "docs/live-trading-journal.md",
+      "word_count": 5083
+    },
+    "project_overview": {
+      "available": true,
+      "path": "docs/project-overview.md",
+      "review_date": "2026-08-11",
+      "word_count": 1123
+    },
+    "roadmap": {
+      "available": true,
+      "path": "docs/execution-rebuild-roadmap.md",
+      "review_date": "2026-08-11",
+      "word_count": 2126
+    },
+    "state": {
+      "available": true,
+      "path": "agent_loop/STATE.md",
+      "review_date": "2026-08-11",
+      "word_count": 652
+    }
+  },
+  "facts_fingerprint": "093e693d932ed2c909dfd4dc417c88afb6eba091134d5cf1f4cf88492b62e834",
+  "generated_at": "2026-08-11T23:18:18Z",
+  "learning": {
+    "captured": 1,
+    "integrated": 0,
+    "open": 2,
+    "overdue": 0,
+    "revisit": 1,
+    "superseded": 0
+  },
+  "repository": {
+    "branch": {
+      "available": true,
+      "value": "execution-engine-2026-06-15"
+    },
+    "head": {
+      "available": true,
+      "value": "639a15a516bc223bd06d5e46fdcabb848b0b2e64"
+    },
+    "root": "/home/maxrush/General/roboweather"
+  },
+  "runtime": {
+    "discovery_registry": {
+      "available": true,
+      "candidate_version_count": 0,
+      "completed_run_count": 0,
+      "modified_at": "2026-08-11T21:04:30Z",
+      "path": "/home/maxrush/.local/state/roboweather/discovery/catalog.sqlite",
+      "size_bytes": 184320
+    },
+    "research_database": {
+      "available": true,
+      "latest_resolved_market_date": "2026-08-11",
+      "latest_snapshot_timestamp": "2026-08-11T23:14:50.797791+00:00",
+      "modified_at": "2026-08-11T23:14:50Z",
+      "path": "/home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite",
+      "size_bytes": 66105643008,
+      "snapshot_count": 1770476
+    },
+    "services": {
+      "roboweather-market-tape.service": {
+        "available": true,
+        "returncode": 0,
+        "value": "active"
+      },
+      "roboweather-phase3d-discovery.service": {
+        "available": true,
+        "returncode": 0,
+        "value": "active"
+      },
+      "roboweather-research.service": {
+        "available": true,
+        "returncode": 0,
+        "value": "active"
+      }
+    }
+  },
+  "schema_version": 1,
+  "warnings": [
+    "live_journal has no machine-readable Last reviewed/Last updated date"
+  ]
+}

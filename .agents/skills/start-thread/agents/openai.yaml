@@ -1,0 +1,4 @@
+interface:
+  display_name: "Start Work Thread"
+  short_description: "Create one bounded board question"
+  default_prompt: "Use $start-thread to create a bounded RoboWeather work thread for this question."

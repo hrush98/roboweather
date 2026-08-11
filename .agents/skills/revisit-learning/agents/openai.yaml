@@ -1,0 +1,4 @@
+interface:
+  display_name: "Revisit Learning"
+  short_description: "Reflect on and mature a learning card"
+  default_prompt: "Use $revisit-learning to revisit a RoboWeather learning card and record what changed."

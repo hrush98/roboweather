@@ -1,0 +1,4 @@
+interface:
+  display_name: "Close Work Thread"
+  short_description: "Close work into a named durable output"
+  default_prompt: "Use $close-thread to close a RoboWeather board thread and name its durable output."
