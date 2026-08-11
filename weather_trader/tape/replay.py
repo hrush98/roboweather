@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -81,7 +81,11 @@ class CausalBookProvider:
         self.target_tokens = set(target_tokens)
         self.allowed_session_ids = set(allowed_session_ids or ())
         self.allowed_partition_ids = set(allowed_partition_ids or ())
-        self.event_cache: OrderedDict[Path, list[Any]] = OrderedDict()
+        # Partition payloads are indexed once by token.  The previous cache kept
+        # one flat list and every book lookup scanned events for every target
+        # token, which made repeated historical reconstruction proportional to
+        # partition size rather than the selected token's event stream.
+        self.event_cache: OrderedDict[Path, dict[str, list[Any]]] = OrderedDict()
         self.max_cached_partitions = 2
 
     def book_at(
@@ -141,6 +145,7 @@ class CausalBookProvider:
             (interval["session_id"], checkpoint["captured_at_utc"]),
         ).fetchall()
         reached_ready = checkpoint_time >= ready
+        used_partition_ids: list[str] = []
         for partition in partitions:
             if self.allowed_partition_ids and str(partition["partition_id"]) not in self.allowed_partition_ids:
                 continue
@@ -148,22 +153,25 @@ class CausalBookProvider:
             if not path.exists():
                 return None, "missing_raw_partition"
             if path not in self.event_cache:
-                self.event_cache[path] = [
-                    event for event in iter_segment(path) if event.token_id in self.target_tokens
-                ]
+                by_token: dict[str, list[Any]] = defaultdict(list)
+                for event in iter_segment(path):
+                    if event.token_id in self.target_tokens:
+                        by_token[event.token_id].append(event)
+                self.event_cache[path] = dict(by_token)
                 self.event_cache.move_to_end(path)
                 while len(self.event_cache) > self.max_cached_partitions:
                     self.event_cache.popitem(last=False)
             else:
                 self.event_cache.move_to_end(path)
-            for event in self.event_cache[path]:
+            used_partition_ids.append(str(partition["partition_id"]))
+            for event in self.event_cache[path].get(token_id, ()):
                 event_time = utc(event.received_at_utc)
                 if event_time <= checkpoint_time:
                     continue
                 if event_time > ready:
                     reached_ready = True
                     break
-                if event.token_id == token_id and not apply_event(bids, asks, event):
+                if not apply_event(bids, asks, event):
                     return None, "invalid_event_after_checkpoint"
             if utc(partition["closed_at_utc"]) >= ready:
                 reached_ready = True
@@ -183,6 +191,10 @@ class CausalBookProvider:
             "checkpoint_age_s": (ready - checkpoint_time).total_seconds(),
             "session_id": str(interval["session_id"]),
             "coverage_interval_id": int(interval["id"]),
+            "checkpoint_event_id": str(checkpoint["event_id"]),
+            "checkpoint_captured_at_utc": str(checkpoint["captured_at_utc"]),
+            "checkpoint_reconstruction_hash": str(checkpoint["reconstruction_hash"]),
+            "partition_ids": tuple(used_partition_ids),
             "reconstruction_hash": stable_hash(payload),
         }, None
 

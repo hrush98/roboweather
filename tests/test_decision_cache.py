@@ -1,0 +1,301 @@
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import replace
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+
+from weather_trader.discovery.decision_cache import (
+    DecisionCacheContract,
+    ExecutableDecisionCache,
+    benchmark_decision_grain,
+    quote_ready_timestamp,
+)
+
+
+def _research(rows: list[tuple]) -> sqlite3.Connection:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.executescript(
+        """
+        create table prediction_snapshots (
+            id integer primary key,
+            timestamp text not null,
+            station text not null,
+            market_date text not null,
+            decision_time_utc text not null,
+            decision_time_local text not null,
+            latest_obs_time_utc text not null,
+            obs_age_minutes real not null,
+            obs_delay_bucket text not null,
+            strategy_bucket text not null,
+            selected_market_id text,
+            selected_bucket text,
+            selected_side text not null,
+            selected_edge real,
+            selected_fair_yes real,
+            selected_fair_no real,
+            selected_yes_ask real,
+            selected_no_ask real,
+            high_conviction integer not null,
+            model_name text not null,
+            market_family text not null,
+            raw_json text not null
+        );
+        """
+    )
+    connection.executemany(
+        "insert into prediction_snapshots values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        rows,
+    )
+    return connection
+
+
+def _row(
+    snapshot_id: int,
+    timestamp: str,
+    *,
+    model: str,
+    market: str = "market-1",
+    side: str = "BUY_YES",
+) -> tuple:
+    return (
+        snapshot_id,
+        timestamp,
+        "KATL",
+        "2026-01-02",
+        "2026-01-02T19:59:00+00:00",
+        "2026-01-02T13:00:00-07:00",
+        "2026-01-02T19:50:00+00:00",
+        9.0,
+        "10m",
+        "HIGH_CONVICTION",
+        market,
+        "<=90F",
+        side,
+        0.60,
+        0.80,
+        0.20,
+        0.20,
+        0.80,
+        1,
+        model,
+        "HIGH_TEMP",
+        f'{{"snapshot":{snapshot_id}}}',
+    )
+
+
+def _tape(*markets: str) -> sqlite3.Connection:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute("create table tape_tokens(market_id text,outcome text,token_id text)")
+    for market in markets:
+        connection.execute(
+            "insert into tape_tokens values(?,?,?)",
+            (market, "YES", f"token-{market}"),
+        )
+    return connection
+
+
+class CountingProvider:
+    def __init__(self, *, rejection: str | None = None, crash_on_call: int | None = None) -> None:
+        self.calls = 0
+        self.rejection = rejection
+        self.crash_on_call = crash_on_call
+
+    def book_at(self, token_id, ready, *, pre_signal_seconds):
+        self.calls += 1
+        if self.crash_on_call == self.calls:
+            raise RuntimeError("simulated interruption")
+        if self.rejection:
+            return None, self.rejection
+        return {
+            "bids": {0.19: 100.0},
+            "asks": {0.20: 500.0, 0.30: 500.0},
+            "checkpoint_age_s": 0.5,
+            "session_id": "session-1",
+            "coverage_interval_id": 7,
+            "checkpoint_event_id": "event-1",
+            "checkpoint_captured_at_utc": ready.isoformat(),
+            "checkpoint_reconstruction_hash": "checkpoint-hash",
+            "partition_ids": ("partition-1",),
+            "reconstruction_hash": f"book-{token_id}-{ready.isoformat()}",
+        }, None
+
+
+def _factory(provider: CountingProvider):
+    def build(tape, tokens):
+        return provider
+
+    return build
+
+
+def test_quote_ready_uses_causal_availability_ceiling() -> None:
+    contract = DecisionCacheContract(availability_bucket_seconds=60, latency_ms=250)
+    ready = quote_ready_timestamp("2026-01-02T20:00:01.100000+00:00", contract)
+
+    assert ready == datetime(2026, 1, 2, 20, 1, 0, 250000, tzinfo=timezone.utc)
+    assert ready > datetime(2026, 1, 2, 20, 0, 1, 100000, tzinfo=timezone.utc)
+
+
+def test_decision_grain_benchmark_measures_exact_replay_reduction() -> None:
+    research = _research([
+        _row(1, "2026-01-02T20:00:01.100000+00:00", model="model-a"),
+        _row(2, "2026-01-02T20:00:02.900000+00:00", model="model-b"),
+    ])
+
+    result = benchmark_decision_grain(
+        research,
+        _tape("market-1"),
+        contract=DecisionCacheContract(),
+        source_start_date="2026-01-01",
+    )
+
+    assert result["raw_model_rows"] == 2
+    assert result["legacy_exact_timestamp_decisions"] == 2
+    assert result["bucketed_executable_decisions"] == 1
+    assert result["bucketed_provider_calls"] == 1
+    assert result["minimum_replay_reduction_factor"] == 2.0
+
+
+def test_duplicate_model_rows_share_one_replay_and_warm_refresh_is_noop(tmp_path: Path) -> None:
+    research = _research([
+        _row(1, "2026-01-02T20:00:01.100000+00:00", model="model-a"),
+        _row(2, "2026-01-02T20:00:02.900000+00:00", model="model-b"),
+    ])
+    tape = _tape("market-1")
+    provider = CountingProvider()
+    contract = DecisionCacheContract()
+
+    with ExecutableDecisionCache(tmp_path / "cache.sqlite") as cache:
+        first = cache.refresh(
+            research,
+            tape,
+            contract=contract,
+            source_start_date="2026-01-01",
+            book_provider_factory=_factory(provider),
+        )
+        second = cache.refresh(
+            research,
+            tape,
+            contract=contract,
+            source_start_date="2026-01-01",
+            book_provider_factory=_factory(provider),
+        )
+
+        assert cache.table_counts()["model_decision_mappings"] == 2
+        assert cache.table_counts()["executable_decisions"] == 1
+        assert provider.calls == 1
+        assert first["diagnostics"]["REPLAY_CALLS"] == 1
+        assert second["diagnostics"].get("REPLAY_CALLS", 0) == 0
+        assert second["diagnostics"]["PENDING_DECISIONS"] == 0
+
+
+def test_rejections_are_cached_and_replay_version_creates_new_identity(tmp_path: Path) -> None:
+    research = _research([_row(1, "2026-01-02T20:00:01+00:00", model="model-a")])
+    tape = _tape("market-1")
+    rejected_provider = CountingProvider(rejection="no_continuous_valid_interval")
+    contract = DecisionCacheContract()
+
+    with ExecutableDecisionCache(tmp_path / "cache.sqlite") as cache:
+        first = cache.refresh(
+            research,
+            tape,
+            contract=contract,
+            source_start_date="2026-01-01",
+            book_provider_factory=_factory(rejected_provider),
+        )
+        repeated = cache.refresh(
+            research,
+            tape,
+            contract=contract,
+            source_start_date="2026-01-01",
+            book_provider_factory=_factory(rejected_provider),
+        )
+        changed_provider = CountingProvider()
+        changed = cache.refresh(
+            research,
+            tape,
+            contract=replace(contract, replay_version="causal_l2_replay_v2"),
+            source_start_date="2026-01-01",
+            book_provider_factory=_factory(changed_provider),
+        )
+
+        assert first["diagnostics"]["REJECTION:TAPE:no_continuous_valid_interval"] == 1
+        assert repeated["diagnostics"].get("REPLAY_CALLS", 0) == 0
+        assert rejected_provider.calls == 1
+        assert changed_provider.calls == 1
+        assert changed["diagnostics"]["DECISION_SUCCESS"] == 1
+        assert cache.table_counts()["executable_decisions"] == 2
+
+
+def test_interrupted_replay_resumes_from_committed_batch_with_same_hashes(tmp_path: Path) -> None:
+    rows = [
+        _row(1, "2026-01-02T20:00:01+00:00", model="model-a", market="market-1"),
+        _row(2, "2026-01-02T20:01:01+00:00", model="model-a", market="market-2"),
+        _row(3, "2026-01-02T20:02:01+00:00", model="model-a", market="market-3"),
+    ]
+    research = _research(rows)
+    tape = _tape("market-1", "market-2", "market-3")
+    contract = DecisionCacheContract()
+
+    resumed_path = tmp_path / "resumed.sqlite"
+    with ExecutableDecisionCache(resumed_path) as cache:
+        crashing = CountingProvider(crash_on_call=2)
+        with pytest.raises(RuntimeError, match="simulated interruption"):
+            cache.refresh(
+                research,
+                tape,
+                contract=contract,
+                source_start_date="2026-01-01",
+                replay_batch_size=1,
+                book_provider_factory=_factory(crashing),
+            )
+        assert [row["status"] for row in cache.decision_rows(contract.contract_hash)].count("SUCCESS") == 1
+
+        resumed = CountingProvider()
+        cache.refresh(
+            research,
+            tape,
+            contract=contract,
+            source_start_date="2026-01-01",
+            replay_batch_size=1,
+            book_provider_factory=_factory(resumed),
+        )
+        resumed_hashes = [row["result_hash"] for row in cache.decision_rows(contract.contract_hash)]
+        assert resumed.calls == 2
+
+    with ExecutableDecisionCache(tmp_path / "uninterrupted.sqlite") as cache:
+        uninterrupted = CountingProvider()
+        cache.refresh(
+            research,
+            tape,
+            contract=contract,
+            source_start_date="2026-01-01",
+            replay_batch_size=1,
+            book_provider_factory=_factory(uninterrupted),
+        )
+        uninterrupted_hashes = [row["result_hash"] for row in cache.decision_rows(contract.contract_hash)]
+
+    assert resumed_hashes == uninterrupted_hashes
+
+
+def test_uncataloged_token_is_cached_without_calling_tape(tmp_path: Path) -> None:
+    research = _research([_row(1, "2026-01-02T20:00:01+00:00", model="model-a")])
+    provider = CountingProvider()
+
+    with ExecutableDecisionCache(tmp_path / "cache.sqlite") as cache:
+        result = cache.refresh(
+            research,
+            _tape(),
+            contract=DecisionCacheContract(),
+            source_start_date="2026-01-01",
+            book_provider_factory=_factory(provider),
+        )
+
+        decision = cache.decision_rows(result["contract_hash"])[0]
+        assert decision["status"] == "REJECTED"
+        assert decision["rejection_reason"] == "TOKEN_NOT_CATALOGED"
+        assert provider.calls == 0
