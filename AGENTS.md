@@ -15,6 +15,17 @@
   - Local example: `/home/hmrush/Desktop/personal/roboweather/.conda/roboweather/bin/python -m pytest tests/test_live_execution.py`
 - Paths under `/home/maxrush/...` are valid on the remote host where the operator may run Codex, collectors, live/research databases, and production-style commands. A missing `/home/maxrush` path on the local host means use the local equivalent; it is not a repository or runtime failure.
 
+## Agent-loop coordination
+
+- Start every substantial or resumed task with this fixed read order: `AGENTS.md` -> `agent_loop/STATE.md` -> `agent_loop/facts.json` -> `board/INDEX.md` -> the selected `T####` thread -> only the canonical documents linked by that thread.
+- `agent_loop/STATE.md` is the compact human-approved direction layer and must stay below 1,500 words. Agents may propose strategic changes, but changes to priorities, accepted evidence, or funded authority require human approval. Volatile counts and timestamps belong in generated facts, not state prose.
+- `agent_loop/facts.json` and `board/INDEX.md` are generated. Never hand-edit them. Regenerate both with `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/agent_loop.py refresh` or the equivalent local `roboweather` Python path.
+- Use the repository-local `$start-thread`, `$park-thread`, `$resume-thread`, and `$close-thread` skills for work that may cross sessions. The board allows at most seven open threads and three `ACTIVE` threads. Each thread owns one question, exactly one next action, and a named closure output.
+- Use `$capture-learning` when a thread reveals a transferable concept, failure mechanism, experience, or design intuition worth revisiting. Use `$revisit-learning` when a learning card becomes due or new evidence changes the explanation. Learning cards are human learning memory, not trading authority or canonical system conclusions.
+- Do not retrofit every historical plan into the board. Create threads for current bounded work as it begins. Implementation plans remain architecture and acceptance contracts; threads are resumable execution records.
+- Before ending work that changed tracked files, close the thread if its question is settled or park it with exact evidence and one next action. Then run `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/agent_loop.py stop`. Hosts with lifecycle-hook support may invoke `.agents/hooks/stop.py` for the same refresh-and-check behavior.
+- Closed threads under `board/closed/` are append-only history. Do not edit them to change a past answer; open a new thread and explicitly supersede the earlier result.
+
 ## Continuous research-loop operation
 
 - Use `deploy/systemd/roboweather-research.service` for continuous prediction-snapshot and outcome collection. Install it under `~/.config/systemd/user/`, run `systemctl --user daemon-reload`, then enable/start it with `systemctl --user enable --now roboweather-research.service`.
@@ -25,6 +36,10 @@
 ## Documentation architecture
 
 - Prefer a small set of living canonical documents over new one-off narrative reports:
+  - `agent_loop/STATE.md`: compact human-approved direction and authority boundaries; orientation only, not the detailed audit.
+  - `agent_loop/facts.json`: generated machine truth and freshness warnings.
+  - `board/`: bounded in-flight questions and append-only closed handoffs.
+  - `learning/`: human-oriented concept, failure, experience, and design-intuition cards with a generated revisit queue and append-only reflection log.
   - `docs/current-trading-system-audit.md`: current financial/systems verdict, durable evidence, open risks, and promotion blockers. Update the body in place and append a short audit-log entry.
   - `docs/execution-rebuild-roadmap.md`: current phase sequence, status, and exit gates.
   - `docs/implementation/`: active feature/sprint implementation contracts and acceptance checklists.

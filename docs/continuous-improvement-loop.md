@@ -4,12 +4,18 @@ This document defines the closed-loop process for improving RoboWeather trading 
 
 The goal is recursive improvement: every meaningful live or research lesson should either become a better hypothesis, a better replay, a better gate, or a better operating rule.
 
+Last updated: 2026-08-11
+
 ## Storage Model
 
 Use these canonical layers, each with a different job:
 
 | Layer | Location | Purpose |
 | --- | --- | --- |
+| Approved direction | `agent_loop/STATE.md` | Compact human-approved priorities, authority boundaries, and promotion blockers. |
+| Generated facts | `agent_loop/facts.json` | Regenerated repository/runtime truth and freshness warnings; never hand-edited. |
+| In-flight questions | `board/` | Bounded resumable work with one question, one next action, and a named closure output. |
+| Human learning memory | `learning/` | Revisitable concepts, failure mechanisms, experiences, and design intuition; never a substitute for canonical evidence. |
 | Current audit | `docs/current-trading-system-audit.md` | Living financial/systems verdict, durable evidence, open risks, and current promotion blockers. |
 | Current roadmap | `docs/execution-rebuild-roadmap.md` | Living phase sequence, status, and exit gates. |
 | Live state and rationale | `docs/live-trading-journal.md` | What is live now, why it is live, current sizing/risk/execution rules, and material live lessons. |
@@ -21,6 +27,8 @@ Use these canonical layers, each with a different job:
 Do not put every hypothesis directly into the live trading journal. The journal should stay focused on live state and material lessons. Use `docs/hypotheses/` for structured hypotheses and decision records; link the relevant record from the journal when a hypothesis becomes live or materially changes live assumptions.
 
 Do not create a new one-off narrative audit for every review. Update the living audit and preserve detailed tables in a report or script. When an approved hypothesis becomes a build, keep its economic rationale in the hypothesis and move its engineering plan to `docs/implementation/`.
+
+The coordination layer is temporal, not another source of research conclusions. `STATE.md` orients the agent, generated facts report machine truth, and board threads preserve unfinished work. Learning cards preserve what the human wants to understand and revisit. Settled financial or architectural conclusions still belong in the canonical documents above.
 
 ## Improvement Loop
 

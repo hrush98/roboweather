@@ -2,6 +2,23 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-08-11
+
+- Added a lifecycle-based agent coordination layer without changing funded
+  behavior: compact human-approved `agent_loop/STATE.md`, generated runtime and
+  repository `facts.json`, a capped work board with append-only closed threads,
+  deterministic start/park/resume/close tooling, repository-local workflow
+  skills, and a hook-ready end-of-session refresh/check. The board is capped at
+  seven open and three active questions, and generated views are covered by
+  focused lifecycle tests.
+
+- Added human-oriented learning memory for transferable concepts, failure
+  mechanisms, experiences, and design intuition. Learning cards separate the
+  historical incident from its interpretation, carry an originating thread and
+  revisit date, mature through captured/revisit/integrated/superseded states,
+  and accumulate append-only reflections through capture/revisit skills. They
+  confer no trading or canonical-decision authority.
+
 ## 2026-08-09
 
 - Removed the hard-coded three-sleeve tape holdout CLI and its focused tests.

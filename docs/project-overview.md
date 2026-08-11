@@ -2,12 +2,18 @@
 
 RoboWeather is a research-first weather prediction-market system. The current priority is determining whether promising forecast signals can be converted into positive fill-conditioned PnL through causal market-data collection, conservative pricing, and controlled execution evidence.
 
+Last reviewed: 2026-08-11
+
 ## Documentation Map
 
 Use these documents as the canonical entry points:
 
 | Question | Canonical document |
 | --- | --- |
+| What direction and authority has the human approved? | `agent_loop/STATE.md` |
+| What do the repository and runtime report now? | Generated `agent_loop/facts.json` |
+| What bounded work is active, parked, or waiting? | Generated `board/INDEX.md`, then the selected thread |
+| What concepts, failures, and design intuition can I revisit? | Generated `learning/INDEX.md`, then the selected learning card |
 | What is the current financial/systems verdict? | `docs/current-trading-system-audit.md` |
 | What phase are we in and what gates come next? | `docs/execution-rebuild-roadmap.md` |
 | What is currently funded or paused? | `docs/live-trading-journal.md` |
@@ -16,7 +22,7 @@ Use these documents as the canonical entry points:
 | What changed chronologically? | `docs/changelog.md` |
 | Where do generated tables and ad hoc analysis go? | `reports/`, treated as non-canonical evidence |
 
-Update living documents in place. Do not create a new standalone audit report when new evidence can update the current audit, roadmap, hypothesis decision log, or live journal.
+Use the fixed agent read order in `AGENTS.md`. Update living documents in place. Do not create a new standalone audit report when new evidence can update the current audit, roadmap, hypothesis decision log, or live journal. Never hand-edit generated facts or the board index.
 
 ## Current Mode
 
