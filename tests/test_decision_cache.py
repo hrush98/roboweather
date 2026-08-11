@@ -422,3 +422,45 @@ def test_schema_v1_migrates_checkpoint_execution_columns(tmp_path: Path) -> None
 
     assert {"execution_timestamp_utc", "execution_delay_ms_after_ready"} <= columns
     assert version == "2"
+
+
+def test_research_outcome_enrichment_is_separate_and_idempotent(tmp_path: Path) -> None:
+    research = _research([_row(1, "2026-01-02T20:00:01+00:00", model="model-a")])
+    research.executescript(
+        """
+        create table station_date_outcomes (
+            station text, market_date text, final_high_tmpf real,
+            final_low_tmpf real, source text, resolved_at text
+        );
+        insert into station_date_outcomes values (
+            'KATL','2026-01-02',85.0,30.0,'IEM_ASOS','2026-01-03T12:00:00+00:00'
+        );
+        """
+    )
+    contract = DecisionCacheContract()
+    with ExecutableDecisionCache(tmp_path / "cache.sqlite") as cache:
+        cache.refresh(
+            research,
+            _tape("market-1"),
+            contract=contract,
+            source_start_date="2026-01-01",
+            book_provider_factory=_factory(CountingProvider()),
+        )
+        first = cache.enrich_research_outcomes(
+            research,
+            contract_hash=contract.contract_hash,
+            outcome_watermark="2026-01-04T00:00:00+00:00",
+        )
+        repeated = cache.enrich_research_outcomes(
+            research,
+            contract_hash=contract.contract_hash,
+            outcome_watermark="2026-01-04T00:00:00+00:00",
+        )
+        enrichment = cache.connection.execute(
+            "select status,value_json from decision_enrichments"
+        ).fetchone()
+
+    assert first == repeated
+    assert first["available"] == 1
+    assert enrichment["status"] == "AVAILABLE"
+    assert '"label":1' in enrichment["value_json"]

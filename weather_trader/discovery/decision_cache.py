@@ -16,6 +16,7 @@ from typing import Any, Callable, Iterable, Iterator, Protocol
 from weather_trader.discovery.materializer import (
     _lifecycle_horizon,
     _local_hhmm,
+    _research_label,
     _selected_value,
     _source_reasons,
     _timestamp,
@@ -617,6 +618,120 @@ class ExecutableDecisionCache:
             "exact_matches": len(selected) - len(mismatches),
             "mismatches": mismatches,
             "elapsed_seconds": round(time.monotonic() - started, 6),
+            "funded_authorization": False,
+        }
+
+    def enrich_research_outcomes(
+        self,
+        research: sqlite3.Connection,
+        *,
+        contract_hash: str,
+        outcome_watermark: str,
+        enrichment_version: str = "weather_outcome_v1",
+    ) -> dict[str, Any]:
+        """Attach weather-outcome diagnostics without reopening tape replay."""
+        research.row_factory = sqlite3.Row
+        outcome_columns = {
+            str(row[1])
+            for row in research.execute("pragma table_info(station_date_outcomes)")
+        }
+        required = {"station", "market_date", "final_high_tmpf", "source", "resolved_at"}
+        missing = sorted(required - outcome_columns)
+        if missing:
+            raise ValueError(f"station_date_outcomes lacks cache enrichment columns: {', '.join(missing)}")
+        low_field = "final_low_tmpf" if "final_low_tmpf" in outcome_columns else "null"
+        source_rows = self.connection.execute(
+            """select decision_id,min(station) station,min(market_date) market_date,
+                      min(market_family) market_family,min(selected_bucket) selected_bucket,
+                      min(selected_side) selected_side,
+                      count(distinct station || char(31) || market_date || char(31) ||
+                            market_family || char(31) || selected_bucket || char(31) ||
+                            selected_side) source_variants
+               from model_decision_mappings
+               where contract_hash=?
+               group by decision_id order by decision_id""",
+            (contract_hash,),
+        ).fetchall()
+        if not source_rows:
+            return {
+                "status": "COMPLETED",
+                "contract_hash": contract_hash,
+                "outcome_watermark": outcome_watermark,
+                "decisions": 0,
+                "available": 0,
+                "unavailable": 0,
+                "conflicts": 0,
+                "funded_authorization": False,
+            }
+        minimum_date = min(str(row["market_date"]) for row in source_rows)
+        outcomes = {
+            (str(row["station"]), str(row["market_date"])): dict(row)
+            for row in research.execute(
+                f"""select station,market_date,final_high_tmpf,{low_field} final_low_tmpf,
+                            source,resolved_at
+                     from station_date_outcomes
+                     where market_date>=? and resolved_at<=?
+                     order by station,market_date,resolved_at""",
+                (minimum_date, outcome_watermark),
+            )
+        }
+        counts: Counter[str] = Counter()
+        now_utc = _now()
+        with self.writer_lock():
+            for source in source_rows:
+                decision_id = str(source["decision_id"])
+                if int(source["source_variants"]) != 1:
+                    status = "CONFLICT"
+                    value = {
+                        "reason": "MODEL_MAPPING_OUTCOME_IDENTITY_CONFLICT",
+                        "source_variants": int(source["source_variants"]),
+                    }
+                else:
+                    outcome = outcomes.get((str(source["station"]), str(source["market_date"])))
+                    label = _research_label({**dict(source), **(outcome or {})}) if outcome else None
+                    status = "AVAILABLE" if label is not None else "UNAVAILABLE"
+                    value = {
+                        "label": label,
+                        "station": str(source["station"]),
+                        "market_date": str(source["market_date"]),
+                        "market_family": str(source["market_family"]),
+                        "selected_bucket": str(source["selected_bucket"]),
+                        "selected_side": str(source["selected_side"]),
+                        "outcome_source": str(outcome["source"]) if outcome and outcome.get("source") else None,
+                        "outcome_resolved_at": str(outcome["resolved_at"]) if outcome and outcome.get("resolved_at") else None,
+                    }
+                result_hash = stable_hash({
+                    "decision_id": decision_id,
+                    "enrichment_kind": "RESEARCH_OUTCOME",
+                    "enrichment_version": enrichment_version,
+                    "source_watermark": outcome_watermark,
+                    "status": status,
+                    "value": value,
+                })
+                self.connection.execute(
+                    """insert into decision_enrichments(
+                           decision_id,enrichment_kind,enrichment_version,source_watermark,
+                           status,value_json,result_hash,updated_at_utc
+                       ) values(?,?,?,?,?,?,?,?)
+                       on conflict(decision_id,enrichment_kind,enrichment_version) do update set
+                           source_watermark=excluded.source_watermark,
+                           status=excluded.status,value_json=excluded.value_json,
+                           result_hash=excluded.result_hash,updated_at_utc=excluded.updated_at_utc""",
+                    (
+                        decision_id, "RESEARCH_OUTCOME", enrichment_version,
+                        outcome_watermark, status, _json(value), result_hash, now_utc,
+                    ),
+                )
+                counts[status] += 1
+            self.connection.commit()
+        return {
+            "status": "COMPLETED",
+            "contract_hash": contract_hash,
+            "outcome_watermark": outcome_watermark,
+            "decisions": len(source_rows),
+            "available": counts["AVAILABLE"],
+            "unavailable": counts["UNAVAILABLE"],
+            "conflicts": counts["CONFLICT"],
             "funded_authorization": False,
         }
 
