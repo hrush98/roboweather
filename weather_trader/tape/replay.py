@@ -199,6 +199,110 @@ class CausalBookProvider:
         }, None
 
 
+class PostReadyCheckpointBookProvider:
+    """Use the first causal full-book checkpoint shortly after quote readiness.
+
+    The execution delay is explicit and bounded.  This is not a snapshot-price
+    fallback: the returned state is a verified tape checkpoint, and continuous
+    VALID coverage must span the pre-signal window through its capture time.
+    """
+
+    def __init__(
+        self,
+        tape: sqlite3.Connection,
+        target_tokens: Iterable[str],
+        *,
+        maximum_execution_delay_seconds: float = 30.0,
+        allowed_session_ids: Iterable[str] | None = None,
+    ) -> None:
+        if maximum_execution_delay_seconds < 0:
+            raise ValueError("maximum checkpoint execution delay must be nonnegative")
+        self.tape = tape
+        self.target_tokens = set(target_tokens)
+        self.maximum_execution_delay_seconds = maximum_execution_delay_seconds
+        self.allowed_session_ids = tuple(sorted(set(allowed_session_ids or ())))
+
+    def book_at(
+        self,
+        token_id: str,
+        ready: datetime,
+        *,
+        pre_signal_seconds: int,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        if self.target_tokens and token_id not in self.target_tokens:
+            return None, "token_outside_replay_scope"
+        session_filter = ""
+        params: list[Any] = [token_id, ready.isoformat()]
+        if self.allowed_session_ids:
+            placeholders = ",".join("?" for _ in self.allowed_session_ids)
+            session_filter = f" and session_id in ({placeholders})"
+            params.extend(self.allowed_session_ids)
+        checkpoint = self.tape.execute(
+            f"""
+            select checkpoint_id,session_id,event_id,event_offset,captured_at_utc,
+                   reconstruction_hash,raw_json
+            from tape_book_checkpoints
+            where token_id=? and coverage_state='VALID' and captured_at_utc>=?
+              {session_filter}
+            order by captured_at_utc,event_offset limit 1
+            """,
+            params,
+        ).fetchone()
+        if checkpoint is None:
+            return None, "no_post_ready_checkpoint"
+        captured = utc(str(checkpoint["captured_at_utc"]))
+        delay_seconds = (captured - ready).total_seconds()
+        if delay_seconds < 0:
+            return None, "noncausal_post_ready_checkpoint"
+        if delay_seconds > self.maximum_execution_delay_seconds:
+            return None, "post_ready_checkpoint_delay_exceeded"
+        window_start = ready - timedelta(seconds=pre_signal_seconds)
+        interval = self.tape.execute(
+            """
+            select id,session_id,started_at_utc,ended_at_utc
+            from tape_coverage_intervals
+            where token_id=? and session_id=? and state='VALID' and started_at_utc<=?
+              and (ended_at_utc is null or ended_at_utc>=?)
+            order by started_at_utc desc limit 1
+            """,
+            (
+                token_id,
+                checkpoint["session_id"],
+                window_start.isoformat(),
+                captured.isoformat(),
+            ),
+        ).fetchone()
+        if interval is None:
+            return None, "no_continuous_valid_interval_through_execution"
+        try:
+            seed = json.loads(checkpoint["raw_json"])
+            bids = {float(price): float(size) for price, size in seed.get("bids") or []}
+            asks = {float(price): float(size) for price, size in seed.get("asks") or []}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None, "invalid_checkpoint_book"
+        payload = {
+            "token_id": token_id,
+            "quote_ready": ready.isoformat(),
+            "execution_timestamp": captured.isoformat(),
+            "bids": sorted(bids.items()),
+            "asks": sorted(asks.items()),
+        }
+        return {
+            "bids": bids,
+            "asks": asks,
+            "checkpoint_age_s": 0.0,
+            "session_id": str(checkpoint["session_id"]),
+            "coverage_interval_id": int(interval["id"]),
+            "checkpoint_event_id": str(checkpoint["event_id"]),
+            "checkpoint_captured_at_utc": str(checkpoint["captured_at_utc"]),
+            "checkpoint_reconstruction_hash": str(checkpoint["reconstruction_hash"]),
+            "partition_ids": (),
+            "execution_timestamp_utc": captured.isoformat(),
+            "execution_delay_ms_after_ready": delay_seconds * 1000.0,
+            "reconstruction_hash": stable_hash(payload),
+        }, None
+
+
 def sweep_asks(
     asks: dict[float, float] | Iterable[tuple[float, float]],
     *,

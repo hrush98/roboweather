@@ -21,10 +21,14 @@ from weather_trader.discovery.materializer import (
     _timestamp,
 )
 from weather_trader.pricing.contracts import stable_hash
-from weather_trader.tape.replay import CausalBookProvider, sweep_asks
+from weather_trader.tape.replay import (
+    CausalBookProvider,
+    PostReadyCheckpointBookProvider,
+    sweep_asks,
+)
 
 
-DECISION_CACHE_SCHEMA_VERSION = 1
+DECISION_CACHE_SCHEMA_VERSION = 2
 
 
 class DecisionCacheLockedError(RuntimeError):
@@ -57,11 +61,12 @@ class DecisionCacheContract:
     available.
     """
 
-    replay_version: str = "causal_l2_replay_v1"
-    execution_version: str = "immediate_taker_summary_v1"
+    replay_version: str = "causal_full_book_checkpoint_v1"
+    execution_version: str = "first_post_ready_checkpoint_taker_v1"
     availability_bucket_seconds: int = 60
     latency_ms: int = 250
     pre_signal_seconds: int = 60
+    maximum_execution_delay_seconds: float = 30.0
     price_caps: tuple[float, ...] = (0.35, 0.50)
     target_costs_usd: tuple[float, ...] = (25.0, 50.0, 100.0)
 
@@ -72,6 +77,8 @@ class DecisionCacheContract:
             raise ValueError("availability bucket must be positive")
         if self.latency_ms < 0 or self.pre_signal_seconds < 0:
             raise ValueError("latency and pre-signal coverage must be nonnegative")
+        if self.maximum_execution_delay_seconds < 0:
+            raise ValueError("maximum execution delay must be nonnegative")
         if not self.price_caps or any(not 0 < value <= 1 for value in self.price_caps):
             raise ValueError("price caps must be inside (0, 1]")
         if tuple(sorted(set(self.price_caps))) != self.price_caps:
@@ -125,6 +132,7 @@ def decision_identity(
         "availability_bucket_seconds": contract.availability_bucket_seconds,
         "replay_version": contract.replay_version,
         "execution_version": contract.execution_version,
+        "maximum_execution_delay_seconds": contract.maximum_execution_delay_seconds,
     }
     return f"p3d_decision_{stable_hash(payload)[:32]}"
 
@@ -185,6 +193,8 @@ class ExecutableDecisionCache:
                 checkpoint_captured_at_utc text,
                 checkpoint_reconstruction_hash text,
                 partition_ids_json text,
+                execution_timestamp_utc text,
+                execution_delay_ms_after_ready real,
                 reconstruction_hash text,
                 replay_provenance_json text,
                 result_hash text,
@@ -272,13 +282,28 @@ class ExecutableDecisionCache:
         existing = self.connection.execute(
             "select value from cache_metadata where key='schema_version'"
         ).fetchone()
-        if existing is not None and int(existing["value"]) != DECISION_CACHE_SCHEMA_VERSION:
+        existing_version = int(existing["value"]) if existing is not None else 0
+        if existing_version > DECISION_CACHE_SCHEMA_VERSION:
             raise ValueError(
-                f"unsupported decision cache schema {existing['value']}; "
-                f"expected {DECISION_CACHE_SCHEMA_VERSION}"
+                f"unsupported future decision cache schema {existing_version}; "
+                f"maximum supported is {DECISION_CACHE_SCHEMA_VERSION}"
             )
+        if 0 < existing_version < 2:
+            columns = {
+                str(row[1])
+                for row in self.connection.execute("pragma table_info(executable_decisions)")
+            }
+            if "execution_timestamp_utc" not in columns:
+                self.connection.execute(
+                    "alter table executable_decisions add column execution_timestamp_utc text"
+                )
+            if "execution_delay_ms_after_ready" not in columns:
+                self.connection.execute(
+                    "alter table executable_decisions add column execution_delay_ms_after_ready real"
+                )
         self.connection.execute(
-            "insert or ignore into cache_metadata(key,value) values('schema_version',?)",
+            """insert into cache_metadata(key,value) values('schema_version',?)
+               on conflict(key) do update set value=excluded.value""",
             (str(DECISION_CACHE_SCHEMA_VERSION),),
         )
         self.connection.commit()
@@ -400,7 +425,9 @@ class ExecutableDecisionCache:
                     if not str(row["token_id"]).startswith("UNCATALOGED:")
                     and not str(row["token_id"]).startswith("INVALID:")
                 }
-                provider_factory = book_provider_factory or _default_book_provider
+                provider_factory = book_provider_factory or (
+                    lambda source, tokens: _default_book_provider(source, tokens, contract)
+                )
                 provider = provider_factory(tape, target_tokens)
                 while True:
                     pending = self.connection.execute(
@@ -484,6 +511,114 @@ class ExecutableDecisionCache:
             "select * from executable_decisions where contract_hash=? order by decision_id",
             (contract_hash,),
         ).fetchall()
+
+    def verify_direct_replay(
+        self,
+        tape: sqlite3.Connection,
+        *,
+        contract: DecisionCacheContract,
+        sample_size: int = 100,
+        book_provider_factory: BookProviderFactory | None = None,
+        progress: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
+        """Reconstruct a deterministic stratified sample and compare exact hashes."""
+        if sample_size < 1:
+            raise ValueError("direct replay sample size must be positive")
+        tape.row_factory = sqlite3.Row
+        candidates = self.connection.execute(
+            """select d.*,
+                      (select m.market_family from model_decision_mappings m
+                       where m.decision_id=d.decision_id
+                       order by m.source_snapshot_id limit 1) market_family
+               from executable_decisions d
+               where d.contract_hash=? and d.status<>'PENDING'
+                 and d.token_id not like 'UNCATALOGED:%'
+                 and d.token_id not like 'INVALID:%'
+               order by d.result_hash,d.decision_id""",
+            (contract.contract_hash,),
+        ).fetchall()
+        groups: dict[tuple[str, str, str, str, str], list[sqlite3.Row]] = {}
+        for row in candidates:
+            best_ask = _finite(row["best_ask"])
+            ask_band = (
+                "NO_ASK"
+                if best_ask is None
+                else "LE_0.10"
+                if best_ask <= 0.10
+                else "LE_0.35"
+                if best_ask <= 0.35
+                else "LE_0.50"
+                if best_ask <= 0.50
+                else "GT_0.50"
+            )
+            group = (
+                str(row["status"]),
+                str(row["tape_session_id"] or row["rejection_reason"] or "NONE"),
+                str(row["outcome"]),
+                str(row["market_family"] or "UNKNOWN"),
+                ask_band,
+            )
+            groups.setdefault(group, []).append(row)
+        selected: list[sqlite3.Row] = []
+        group_keys = sorted(groups)
+        offset = 0
+        while len(selected) < sample_size:
+            added = False
+            for key in group_keys:
+                rows = groups[key]
+                if offset < len(rows):
+                    selected.append(rows[offset])
+                    added = True
+                    if len(selected) == sample_size:
+                        break
+            if not added:
+                break
+            offset += 1
+
+        target_tokens = {str(row["token_id"]) for row in selected}
+        provider_factory = book_provider_factory or (
+            lambda source, tokens: _default_book_provider(source, tokens, contract)
+        )
+        provider = provider_factory(tape, target_tokens)
+        started = time.monotonic()
+        mismatches: list[dict[str, Any]] = []
+        sampled_groups: Counter[str] = Counter()
+        for index, decision in enumerate(selected, start=1):
+            outcome = self._replay_decision(decision, provider, contract)
+            actual_hash = _outcome_result_hash(str(decision["decision_id"]), outcome)
+            expected_hash = str(decision["result_hash"] or "")
+            if actual_hash != expected_hash:
+                mismatches.append({
+                    "decision_id": str(decision["decision_id"]),
+                    "expected_status": str(decision["status"]),
+                    "actual_status": str(outcome["status"]),
+                    "expected_rejection_reason": decision["rejection_reason"],
+                    "actual_rejection_reason": outcome.get("rejection_reason"),
+                    "expected_result_hash": expected_hash,
+                    "actual_result_hash": actual_hash,
+                })
+            sampled_groups[f"STATUS:{decision['status']}"] += 1
+            sampled_groups[f"SIDE:{decision['outcome']}"] += 1
+            sampled_groups[f"FAMILY:{decision['market_family'] or 'UNKNOWN'}"] += 1
+            sampled_groups[f"SESSION:{decision['tape_session_id'] or 'REJECTED'}"] += 1
+            if progress and (index % 10 == 0 or index == len(selected)):
+                progress({
+                    "stage": "DIRECT_REPLAY_VERIFICATION",
+                    "completed": index,
+                    "total": len(selected),
+                    "mismatches": len(mismatches),
+                })
+        return {
+            "status": "PASS" if not mismatches and selected else "FAIL",
+            "contract_hash": contract.contract_hash,
+            "candidate_decisions": len(candidates),
+            "sampled_decisions": len(selected),
+            "sampled_groups": dict(sorted(sampled_groups.items())),
+            "exact_matches": len(selected) - len(mismatches),
+            "mismatches": mismatches,
+            "elapsed_seconds": round(time.monotonic() - started, 6),
+            "funded_authorization": False,
+        }
 
     def _register_contract(self, contract: DecisionCacheContract, now_utc: str) -> None:
         payload = _json(asdict(contract))
@@ -756,6 +891,7 @@ class ExecutableDecisionCache:
             "replay_version": contract.replay_version,
             "execution_version": contract.execution_version,
             "pre_signal_seconds": contract.pre_signal_seconds,
+            "maximum_execution_delay_seconds": contract.maximum_execution_delay_seconds,
         }
         payload = {
             "status": "SUCCESS",
@@ -772,6 +908,8 @@ class ExecutableDecisionCache:
             "checkpoint_captured_at_utc": book.get("checkpoint_captured_at_utc"),
             "checkpoint_reconstruction_hash": book.get("checkpoint_reconstruction_hash"),
             "partition_ids_json": _json(book.get("partition_ids") or ()),
+            "execution_timestamp_utc": book.get("execution_timestamp_utc") or decision["quote_ready_timestamp_utc"],
+            "execution_delay_ms_after_ready": book.get("execution_delay_ms_after_ready", 0.0),
             "reconstruction_hash": book.get("reconstruction_hash"),
             "replay_provenance_json": _json(provenance),
             "provider_called": True,
@@ -783,11 +921,7 @@ class ExecutableDecisionCache:
 
     def _store_decision_outcome(self, decision_id: str, outcome: dict[str, Any], now_utc: str) -> None:
         if outcome["status"] == "REJECTED":
-            result_hash = stable_hash({
-                "decision_id": decision_id,
-                "status": "REJECTED",
-                "rejection_reason": outcome["rejection_reason"],
-            })
+            result_hash = _outcome_result_hash(decision_id, outcome)
             self.connection.execute(
                 """update executable_decisions set
                        status='REJECTED',rejection_reason=?,result_hash=?,replayed_at_utc=?,updated_at_utc=?
@@ -801,7 +935,8 @@ class ExecutableDecisionCache:
                    depth_at_best_ask=?,ask_levels_json=?,execution_summaries_json=?,
                    tape_session_id=?,coverage_interval_id=?,checkpoint_event_id=?,
                    checkpoint_captured_at_utc=?,checkpoint_reconstruction_hash=?,
-                   partition_ids_json=?,reconstruction_hash=?,replay_provenance_json=?,
+                   partition_ids_json=?,execution_timestamp_utc=?,execution_delay_ms_after_ready=?,
+                   reconstruction_hash=?,replay_provenance_json=?,
                    result_hash=?,replayed_at_utc=?,updated_at_utc=?
                where decision_id=?""",
             (
@@ -810,7 +945,8 @@ class ExecutableDecisionCache:
                 outcome["execution_summaries_json"], outcome["tape_session_id"],
                 outcome["coverage_interval_id"], outcome["checkpoint_event_id"],
                 outcome["checkpoint_captured_at_utc"], outcome["checkpoint_reconstruction_hash"],
-                outcome["partition_ids_json"], outcome["reconstruction_hash"],
+                outcome["partition_ids_json"], outcome["execution_timestamp_utc"],
+                outcome["execution_delay_ms_after_ready"], outcome["reconstruction_hash"],
                 outcome["replay_provenance_json"], outcome["result_hash"], now_utc, now_utc,
                 decision_id,
             ),
@@ -912,8 +1048,20 @@ def benchmark_decision_grain(
     }
 
 
-def _default_book_provider(tape: sqlite3.Connection, target_tokens: Iterable[str]) -> BookProvider:
-    return CausalBookProvider(tape, target_tokens)
+def _default_book_provider(
+    tape: sqlite3.Connection,
+    target_tokens: Iterable[str],
+    contract: DecisionCacheContract,
+) -> BookProvider:
+    if contract.execution_version == "first_post_ready_checkpoint_taker_v1":
+        return PostReadyCheckpointBookProvider(
+            tape,
+            target_tokens,
+            maximum_execution_delay_seconds=contract.maximum_execution_delay_seconds,
+        )
+    if contract.execution_version == "immediate_taker_summary_v1":
+        return CausalBookProvider(tape, target_tokens)
+    raise ValueError(f"unsupported decision-cache execution version: {contract.execution_version}")
 
 
 def _finite(value: Any) -> float | None:
@@ -930,3 +1078,13 @@ def _json(value: Any) -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _outcome_result_hash(decision_id: str, outcome: dict[str, Any]) -> str:
+    if outcome["status"] == "REJECTED":
+        return stable_hash({
+            "decision_id": decision_id,
+            "status": "REJECTED",
+            "rejection_reason": outcome["rejection_reason"],
+        })
+    return str(outcome["result_hash"])

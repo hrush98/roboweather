@@ -13,6 +13,7 @@ from weather_trader.discovery.decision_cache import (
     benchmark_decision_grain,
     quote_ready_timestamp,
 )
+from weather_trader.tape.replay import PostReadyCheckpointBookProvider
 
 
 def _research(rows: list[tuple]) -> sqlite3.Connection:
@@ -99,6 +100,33 @@ def _tape(*markets: str) -> sqlite3.Connection:
     return connection
 
 
+def _checkpoint_tape() -> sqlite3.Connection:
+    connection = _tape("market-1")
+    connection.executescript(
+        """
+        create table tape_book_checkpoints (
+            checkpoint_id text primary key, session_id text, token_id text,
+            event_id text, event_offset integer, captured_at_utc text,
+            reconstruction_hash text, coverage_state text, raw_json text
+        );
+        create table tape_coverage_intervals (
+            id integer primary key, session_id text, token_id text, state text,
+            started_at_utc text, ended_at_utc text
+        );
+        insert into tape_book_checkpoints values (
+            'checkpoint-1','session-1','token-market-1','event-1',1,
+            '2026-01-02T20:01:10+00:00','checkpoint-hash','VALID',
+            '{"bids":[[0.19,100.0]],"asks":[[0.20,500.0]]}'
+        );
+        insert into tape_coverage_intervals values (
+            7,'session-1','token-market-1','VALID',
+            '2026-01-02T19:59:00+00:00','2026-01-02T20:02:00+00:00'
+        );
+        """
+    )
+    return connection
+
+
 class CountingProvider:
     def __init__(self, *, rejection: str | None = None, crash_on_call: int | None = None) -> None:
         self.calls = 0
@@ -138,6 +166,27 @@ def test_quote_ready_uses_causal_availability_ceiling() -> None:
 
     assert ready == datetime(2026, 1, 2, 20, 1, 0, 250000, tzinfo=timezone.utc)
     assert ready > datetime(2026, 1, 2, 20, 0, 1, 100000, tzinfo=timezone.utc)
+
+
+def test_post_ready_checkpoint_provider_is_causal_bounded_and_gap_safe() -> None:
+    tape = _checkpoint_tape()
+    ready = datetime(2026, 1, 2, 20, 1, 0, 250000, tzinfo=timezone.utc)
+    provider = PostReadyCheckpointBookProvider(
+        tape,
+        {"token-market-1"},
+        maximum_execution_delay_seconds=30.0,
+    )
+
+    book, reason = provider.book_at("token-market-1", ready, pre_signal_seconds=60)
+
+    assert reason is None
+    assert book is not None
+    assert min(book["asks"]) == 0.20
+    assert book["execution_delay_ms_after_ready"] == pytest.approx(9_750.0)
+    tape.execute("update tape_coverage_intervals set started_at_utc='2026-01-02T20:00:30+00:00'")
+    rejected, rejection = provider.book_at("token-market-1", ready, pre_signal_seconds=60)
+    assert rejected is None
+    assert rejection == "no_continuous_valid_interval_through_execution"
 
 
 def test_decision_grain_benchmark_measures_exact_replay_reduction() -> None:
@@ -229,6 +278,46 @@ def test_rejections_are_cached_and_replay_version_creates_new_identity(tmp_path:
         assert changed_provider.calls == 1
         assert changed["diagnostics"]["DECISION_SUCCESS"] == 1
         assert cache.table_counts()["executable_decisions"] == 2
+
+
+def test_direct_replay_verifier_requires_exact_cached_hashes(tmp_path: Path) -> None:
+    research = _research([
+        _row(1, "2026-01-02T20:00:01+00:00", model="model-a", market="market-1"),
+        _row(2, "2026-01-02T20:01:01+00:00", model="model-b", market="market-2"),
+    ])
+    tape = _tape("market-1", "market-2")
+    contract = DecisionCacheContract()
+
+    with ExecutableDecisionCache(tmp_path / "cache.sqlite") as cache:
+        cache.refresh(
+            research,
+            tape,
+            contract=contract,
+            source_start_date="2026-01-01",
+            book_provider_factory=_factory(CountingProvider()),
+        )
+        verifier_provider = CountingProvider()
+        passed = cache.verify_direct_replay(
+            tape,
+            contract=contract,
+            sample_size=10,
+            book_provider_factory=_factory(verifier_provider),
+        )
+        cache.connection.execute(
+            "update executable_decisions set result_hash='corrupt' where decision_id=(select min(decision_id) from executable_decisions)"
+        )
+        failed = cache.verify_direct_replay(
+            tape,
+            contract=contract,
+            sample_size=10,
+            book_provider_factory=_factory(CountingProvider()),
+        )
+
+    assert passed["status"] == "PASS"
+    assert passed["sampled_decisions"] == passed["exact_matches"] == 2
+    assert verifier_provider.calls == 2
+    assert failed["status"] == "FAIL"
+    assert len(failed["mismatches"]) == 1
 
 
 def test_interrupted_replay_resumes_from_committed_batch_with_same_hashes(tmp_path: Path) -> None:

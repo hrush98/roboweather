@@ -49,15 +49,27 @@ def main() -> int:
     parser.add_argument("--availability-bucket-seconds", type=int, default=60)
     parser.add_argument("--latency-ms", type=int, default=250)
     parser.add_argument("--pre-signal-seconds", type=int, default=60)
+    parser.add_argument(
+        "--execution-version",
+        choices=("first_post_ready_checkpoint_taker_v1", "immediate_taker_summary_v1"),
+        default="first_post_ready_checkpoint_taker_v1",
+    )
+    parser.add_argument("--maximum-execution-delay-seconds", type=float, default=30.0)
     parser.add_argument("--mapping-batch-size", type=int, default=2_000)
     parser.add_argument("--replay-batch-size", type=int, default=100)
     parser.add_argument("--benchmark-only", action="store_true")
+    parser.add_argument("--verify-only", action="store_true")
+    parser.add_argument("--verify-sample-size", type=int, default=100)
     args = parser.parse_args()
+    if args.benchmark_only and args.verify_only:
+        parser.error("--benchmark-only and --verify-only are mutually exclusive")
 
     contract = DecisionCacheContract(
         availability_bucket_seconds=args.availability_bucket_seconds,
         latency_ms=args.latency_ms,
         pre_signal_seconds=args.pre_signal_seconds,
+        execution_version=args.execution_version,
+        maximum_execution_delay_seconds=args.maximum_execution_delay_seconds,
     )
     with _readonly(args.research_db) as research, _readonly(args.tape_catalog) as tape:
         if args.benchmark_only:
@@ -69,6 +81,14 @@ def main() -> int:
                 sealed_research_watermark=args.sealed_research_watermark,
                 batch_size=args.mapping_batch_size,
             )
+        elif args.verify_only:
+            with ExecutableDecisionCache(args.cache) as cache:
+                result = cache.verify_direct_replay(
+                    tape,
+                    contract=contract,
+                    sample_size=args.verify_sample_size,
+                    progress=_progress,
+                )
         else:
             with ExecutableDecisionCache(args.cache) as cache:
                 result = cache.refresh(
@@ -82,7 +102,7 @@ def main() -> int:
                     progress=_progress,
                 )
     print(json.dumps(result, indent=2, sort_keys=True))
-    return 0
+    return 0 if result.get("status") not in {"FAIL", "FAILED"} else 2
 
 
 def _readonly(path: Path) -> sqlite3.Connection:
