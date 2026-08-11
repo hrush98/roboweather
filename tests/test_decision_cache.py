@@ -9,6 +9,7 @@ import pytest
 
 from weather_trader.discovery.decision_cache import (
     DecisionCacheContract,
+    DecisionCacheLockedError,
     ExecutableDecisionCache,
     benchmark_decision_grain,
     quote_ready_timestamp,
@@ -388,3 +389,36 @@ def test_uncataloged_token_is_cached_without_calling_tape(tmp_path: Path) -> Non
         assert decision["status"] == "REJECTED"
         assert decision["rejection_reason"] == "TOKEN_NOT_CATALOGED"
         assert provider.calls == 0
+
+
+def test_cache_writer_lock_rejects_a_second_writer(tmp_path: Path) -> None:
+    path = tmp_path / "cache.sqlite"
+    with ExecutableDecisionCache(path) as first, ExecutableDecisionCache(path) as second:
+        with first.writer_lock():
+            with pytest.raises(DecisionCacheLockedError):
+                with second.writer_lock():
+                    pass
+
+
+def test_schema_v1_migrates_checkpoint_execution_columns(tmp_path: Path) -> None:
+    path = tmp_path / "cache.sqlite"
+    with ExecutableDecisionCache(path):
+        pass
+    connection = sqlite3.connect(path)
+    connection.execute("update cache_metadata set value='1' where key='schema_version'")
+    connection.execute("alter table executable_decisions drop column execution_timestamp_utc")
+    connection.execute("alter table executable_decisions drop column execution_delay_ms_after_ready")
+    connection.commit()
+    connection.close()
+
+    with ExecutableDecisionCache(path) as migrated:
+        columns = {
+            str(row[1])
+            for row in migrated.connection.execute("pragma table_info(executable_decisions)")
+        }
+        version = migrated.connection.execute(
+            "select value from cache_metadata where key='schema_version'"
+        ).fetchone()[0]
+
+    assert {"execution_timestamp_utc", "execution_delay_ms_after_ready"} <= columns
+    assert version == "2"
