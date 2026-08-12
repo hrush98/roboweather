@@ -1,6 +1,6 @@
 # Deterministic Tape-Backed Strategy Discovery
 
-Status: D0-D2 accepted on production; D3-D5 implementation open
+Status: D0-D4 accepted; D5 operator cutover open
 
 Last updated: 2026-08-11
 
@@ -445,6 +445,57 @@ versions; repeated evaluation is idempotent; missing venue settlement or
 markouts prevents promotion claims while still allowing clearly labeled
 diagnostics.
 
+### D3 production evidence — 2026-08-11
+
+The cache-backed historical runner sealed cutoff-scoped snapshot and outcome
+watermarks, enriched official weather outcomes separately from tape replay,
+loaded only successful high-conviction cache mappings, and generated the
+bounded grammar without reading raw snapshots or tape partitions during
+ranking. Unit fixtures prove that discovery representative identities and
+discovery score hashes do not change when untouched-holdout labels change.
+
+At exclusive cutoff `2026-08-12`, the production run loaded 4,281 eligible
+cache rows with zero invalid cached rows and zero pending decisions. It ranked
+20,736 rules on 14 chronological discovery dates, found 252 passing rules,
+collapsed them to 12 correlated representatives, froze representative hash
+`4d2e606ba948bbaca9da702c38d39a37615c2f46ca802710b10b19225211da81`,
+and then opened the five dates from August 7 through August 11. No family
+survived, so the correct state was `COMPLETED_NO_EMERGED_STRATEGIES`.
+
+After narrowing source seals to pre-cutoff dates, two consecutive production
+runs produced analytical content hash
+`46b61545682ea4fca95adb7f0db7a61ae2b39adae6004c9e09c5b62977917ab5`
+and byte-identical JSON, Markdown, and ranked CSV artifacts. The full command
+finished in about five seconds and remained a weather-outcome diagnostic with
+`funded_authorization=false`. D4 exact existing-candidate evaluation is still
+absent from that report, so D5 operator cutover is not accepted.
+
+### D4 acceptance evidence — 2026-08-12
+
+The single command now reads immutable candidate definitions, definition
+hashes, source runs, versions, and activation timestamps directly from the
+append-only registry. It applies each exact rule only at or after activation,
+selects cached execution summaries using the candidate's registered price cap
+and target cost, applies individual and shared portfolio caps, and reports
+common-date and incremental comparisons without changing lifecycle roles.
+
+Tests with synthetic immutable candidates prove that every pre-activation row
+is excluded, registered execution caps select the exact cached tactic, input
+ordering does not change the result, and shared station/date capacity is
+consumed in the declared activation/version order. Registry tests preserve
+changed definitions as new immutable identities. Weather PnL remains
+diagnostic; unavailable venue settlement, markouts, and authoritative orders
+force `CONTINUE_COLLECTING` and `funded_authorization=false`.
+
+The production registry contained zero candidate versions at the sealed D4
+run. The complete production report therefore recorded
+`NO_EXISTING_CANDIDATES` rather than manufacturing a forward verdict. Two
+consecutive runs emitted analytical content hash
+`3e868620b941eab8a07c80ffd0a3237d04ff5a78e14533756abd037b414532bc`
+and byte-identical JSON, Markdown, and CSV. D4 is accepted from the combined
+synthetic contract proof and honest zero-candidate production result; no exact
+candidate has passed promotion.
+
 ### D5: Operator Cutover And Optional Scheduling
 
 - Make `scripts/run_discovery.py` the sole documented discovery command.
@@ -535,12 +586,12 @@ code proven unused by the single command and its evidence model.
 - [x] Incremental decision-cache schema and deterministic identities pass.
 - [x] Cache replay matches direct replay and survives interruption.
 - [x] Historical backfill and warm/incremental performance gates pass.
-- [ ] Historical grid consumes cached decisions only.
-- [ ] Correlated representatives are frozen before holdout access.
+- [x] Historical grid consumes cached decisions only.
+- [x] Correlated representatives are frozen before holdout access.
 - [ ] One command writes one complete human-readable report.
-- [ ] Existing candidates are evaluated only after activation.
-- [ ] Completed-none and failed-analysis states are distinct.
-- [ ] Weather, venue, markout, and actual-fill provenance remain distinct.
+- [x] Existing candidates are evaluated only after activation.
+- [x] Completed-none and failed-analysis states are distinct.
+- [x] Weather, venue, markout, and actual-fill provenance remain distinct.
 - [x] Old multi-command workflow is removed from operator guidance.
 - [ ] Three consecutive production manual acceptance cycles pass.
 - [ ] Any optional scheduler invokes the exact accepted command.
@@ -548,6 +599,16 @@ code proven unused by the single command and its evidence model.
 
 ## Decision Log
 
+- 2026-08-12: Accepted D4 after immutable synthetic candidates proved exact
+  post-activation selection, registered execution-cap lookup, aligned/shared-
+  cap comparisons, idempotence, and fail-closed evidence semantics. The
+  production registry contained zero versions, so repeated complete reports
+  honestly recorded `NO_EXISTING_CANDIDATES`; no promotion claim was made.
+
+- 2026-08-11: Accepted D3 after the cache-only production grid ranked 20,736
+  rules, froze 12 correlated representatives before the untouched five-date
+  holdout, returned a healthy completed-none result, and repeated with
+  byte-identical JSON, Markdown, CSV, and content hashes. D4-D6 remain open.
 - 2026-08-11: Accepted D0-D2 for the versioned first-post-ready-checkpoint
   taker contract after stopping the failed scheduler. Production cold, warm,
   incremental, resource, crash-resume, and 200-row exact replay gates passed.

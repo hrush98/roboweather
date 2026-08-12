@@ -16,7 +16,7 @@ Continuous research collection resumed on August 4 under enabled user service `r
 
 Policy-neutral causal strategy discovery remains a required Phase 3D gate. The implemented C3-C6 operating workflow failed its production-scale viability test: the scheduler repeatedly spent its full 900-second budget reconstructing historical tape per model row, then terminated recurring discovery with zero completed runs and zero candidate versions. That scheduler is now stopped and disabled while research and tape collection remain active; its historical failures are unhealthy analysis rather than valid no-nomination results.
 
-The corrected Phase 3D cache kernel has now passed D0-D2 production gates for a versioned delayed-checkpoint taker counterfactual. A causal 60-second availability ceiling reduced 146,937 model rows to 19,032 decisions. The cold backfill completed in 32.43 seconds, a 200-row stratified sample matched direct replay exactly, the warm no-op took 0.026 seconds, and a 9,216-row increment took 2.52 seconds at roughly 320 MiB peak RSS. Execution occurs at the first full-book checkpoint no more than 30 seconds after readiness with continuous `VALID` coverage through that actual time; later checkpoints are explicit rejections, and the result is not exact-time or actual-fill evidence. D3-D5 remain open: move the bounded historical grid and family collapse onto the cache, preserve the untouched holdout, evaluate exact candidates only after activation, and expose one report through `scripts/run_discovery.py`. The append-only registry remains reusable for attribution; automated champion/challenger transitions and the old scheduler remain compatibility-only.
+The corrected Phase 3D path has now passed D0-D4 gates for a versioned delayed-checkpoint taker counterfactual. A causal 60-second availability ceiling reduced 146,937 model rows to 19,032 decisions. The cold backfill completed in 32.43 seconds, a 200-row stratified sample matched direct replay exactly, the warm no-op took 0.026 seconds, and a 9,216-row increment took 2.52 seconds at roughly 320 MiB peak RSS. Execution occurs at the first full-book checkpoint no more than 30 seconds after readiness with continuous `VALID` coverage through that actual time; later checkpoints are explicit rejections, and the result is not exact-time or actual-fill evidence. The cache-only D3 run ranked 20,736 rules on 14 discovery dates, collapsed 252 passing variants to 12 representatives before opening five untouched dates, and correctly returned `COMPLETED_NO_EMERGED_STRATEGIES` when none survived. Repeated reports were byte-identical. D4 now reads immutable registry versions, excludes pre-activation decisions, uses registered execution caps, applies aligned/shared-cap comparisons, and keeps weather diagnostics distinct from unavailable venue/markout/order evidence. Production had zero registered versions and correctly reported that fact, so no candidate passed. D5 operator cutover remains open. The append-only registry remains reusable for attribution; automated champion/challenger transitions and the old scheduler remain compatibility-only.
 
 Causal coverage, gap rejection, immutable candidate definitions, chronological validation, weather-versus-venue provenance, markout requirements, and separate Phase 4 approval remain unchanged. Current venue-resolution and fill-conditioned markout evidence is still insufficient, so no result can pass to Phase 4.
 
@@ -31,7 +31,7 @@ Current confidence by layer:
 | New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
 | Fair-value/price sheet | V2a Slices 0-3 now produce leak-safe calibration, causal uncertainty reserves, conservative fairs, maximum quotes, and economic gates. The first 98-row Slice 3 read leaves both pilots research-only because no calibrator or untouched forward window was frozen. | Freeze a baseline and forward start before new outcomes; do not promote from the July 16-29 comparison. |
 | Phase 3 shared tape | Slices 1-4 are implemented. Continuous collection resumed August 4 after the accepted 72-hour evidence; its first new session reached 1,474/1,474 valid tokens and strictly verified its first partition. Periodic reconnect gaps and late initial discovery remain known limitations; Slice 4 still lacks one real persisted-quote join. | Continue collection, monitor health/storage through the TUI, use retained tape for strategy work, and reject every affected decision window. |
-| Phase 3D strategy discovery | D0-D2 are accepted on production for the versioned checkpoint taker cache: cold, exact replay, crash-resume, warm, incremental, and resource gates pass. D3-D5 remain open, and no completed cache-backed discovery report or exact candidate exists. | Keep the old scheduler/CLIs compatibility-only; implement the cache-backed grid/report, post-activation evaluation, and one-command cutover while keeping Phase 4 blocked. |
+| Phase 3D strategy discovery | D0-D4 are accepted for the versioned checkpoint taker cache. Cold, exact replay, crash-resume, warm, incremental, resource, cache-only grid, family-collapse, untouched-holdout, four-state, deterministic-report, and exact post-activation forward-integrity gates pass. D5 remains open and no exact candidate has passed forward evaluation. | Keep the old scheduler/CLIs compatibility-only; complete the one-command manual-cycle cutover while keeping Phase 4 blocked. |
 | Existing candidate-token shadow collector | Useful plumbing prototype, but candidate-scoped and not a continuous causal market tape. | Do not use its fill labels as promotion evidence. |
 | Fillability and adverse selection | Still unresolved. Public L2 data can provide bounds, not exact hypothetical queue position. | Validate shared-tape replay, then run controlled real-order canaries. |
 | Funded readiness | No exact signal + quote policy + size has passed current fill-conditioned gates. | Keep funded trading paused. |
@@ -157,6 +157,18 @@ Small funded orders may validate plumbing and replay fidelity, but they confer n
 Update the body of this document when the current assessment changes. Append one short entry below describing the evidence that caused the change; keep detailed generated tables in reproducible reports or scripts.
 
 ## Audit Log
+
+- 2026-08-12: Accepted Phase 3D D4 from tested immutable synthetic candidates
+  plus an honest zero-candidate production report. The evaluator excludes all
+  pre-activation decisions, uses registered execution price/size, reports
+  aligned and shared-cap diagnostics, and cannot promote without venue
+  settlement and markouts. Repeated complete reports were byte-identical.
+
+- 2026-08-11: Accepted Phase 3D D3 after the production cache-only grid ranked
+  20,736 rules, collapsed 252 passing variants to 12 representatives before
+  the untouched five-date holdout, returned a healthy completed-none result,
+  and repeated with byte-identical JSON, Markdown, CSV, and content hashes.
+  D4-D6 and funded authority remain open.
 
 - 2026-08-11: Accepted Phase 3D D0-D2 for the versioned causal checkpoint
   taker cache. Stopped and disabled the failed scheduler, completed the

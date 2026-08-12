@@ -2,7 +2,26 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-08-12
+
+- Completed Phase 3D D4 exact-candidate forward evaluation. The single report
+  now seals immutable candidate identities and activations, excludes every
+  pre-activation row, selects the registered execution cap/size, reports
+  aligned and shared-cap comparisons, and leaves venue settlement, markouts,
+  and actual-order evidence explicitly unavailable. Production contained zero
+  registered candidate versions and correctly emitted `NO_EXISTING_CANDIDATES`;
+  no funded or promotion authority changed.
+
 ## 2026-08-11
+
+- Completed Phase 3D D3. Added separate versioned weather-outcome enrichment,
+  a cache-only bounded historical grid, chronological folds, complexity
+  penalty, pre-holdout correlated-family collapse, immutable representative
+  freeze hashes, untouched holdout evaluation, four analytical states, and
+  deterministic JSON/Markdown/CSV output. The production cutoff ranked 20,736
+  rules, collapsed 252 passing variants to 12 representatives, returned
+  `COMPLETED_NO_EMERGED_STRATEGIES`, and repeated byte-for-byte. D4-D6 and
+  funded authority remain open.
 
 - Completed Phase 3D D0-D2 for the versioned causal checkpoint taker cache.
   Stopped and disabled the repeatedly failing discovery scheduler while keeping
