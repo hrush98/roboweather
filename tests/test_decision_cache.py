@@ -239,7 +239,8 @@ def test_duplicate_model_rows_share_one_replay_and_warm_refresh_is_noop(tmp_path
         assert cache.table_counts()["executable_decisions"] == 1
         assert provider.calls == 1
         assert first["diagnostics"]["REPLAY_CALLS"] == 1
-        assert second["diagnostics"].get("REPLAY_CALLS", 0) == 0
+        assert second["diagnostics"]["REPLAY_CALLS"] == 0
+        assert second["diagnostics"]["SOURCE_ROWS_SCANNED"] == 0
         assert second["diagnostics"]["PENDING_DECISIONS"] == 0
 
 

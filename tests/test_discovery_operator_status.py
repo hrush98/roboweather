@@ -65,7 +65,7 @@ def test_latest_complete_status_validates_report_and_cache(tmp_path: Path) -> No
         cache=connection,
         refresh_result={
             "refresh_id": "refresh-1",
-            "diagnostics": {"TAPE_REPLAY_CALLS": 0},
+            "diagnostics": {"REPLAY_CALLS": 0},
         },
     )
     status = latest_complete_status_report(status_path)

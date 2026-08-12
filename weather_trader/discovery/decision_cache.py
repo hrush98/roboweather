@@ -356,6 +356,12 @@ class ExecutableDecisionCache:
         refresh_id = f"p3d_cache_refresh_{stable_hash({'contract': contract.contract_hash, 'scope': source_scope_hash, 'watermark': watermark, 'started': started_at})[:24]}"
         diagnostics: Counter[str] = Counter()
         diagnostics["SEALED_RESEARCH_WATERMARK"] = watermark
+        # Keep zero-work refreshes explicit in operator status instead of
+        # requiring absence-of-key inference.
+        diagnostics["SOURCE_ROWS_SCANNED"] = 0
+        diagnostics["MAPPINGS_INSERTED"] = 0
+        diagnostics["UNIQUE_DECISIONS_CREATED"] = 0
+        diagnostics["REPLAY_CALLS"] = 0
 
         with self.writer_lock():
             self._register_contract(contract, started_at)

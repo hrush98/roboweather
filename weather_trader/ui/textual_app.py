@@ -1660,7 +1660,7 @@ class RoboWeatherTUI(App):
             ("cache mappings", str(cache.get("model_mappings", "none"))),
             ("cache decisions", str(cache.get("decisions", "none"))),
             ("cache pending", str(cache.get("pending_decisions", "none"))),
-            ("refresh replay calls", str(refresh.get("TAPE_REPLAY_CALLS", "none"))),
+            ("refresh replay calls", str(refresh.get("REPLAY_CALLS", "none"))),
             ("existing candidates", str(latest.get("existing_candidate_evaluation_status", "none"))),
             ("alerts", ", ".join(report.get("alerts", [])) or "none"),
         ]

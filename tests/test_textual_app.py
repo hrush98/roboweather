@@ -1100,7 +1100,7 @@ def test_tui_exposes_latest_complete_discovery_report_and_cache_health(tmp_path)
                         "model_mappings": 200,
                         "decisions": 20,
                         "pending_decisions": 0,
-                        "refresh_diagnostics": {"TAPE_REPLAY_CALLS": 0},
+                        "refresh_diagnostics": {"REPLAY_CALLS": 0},
                     },
                 },
                 "alerts": ["LATEST_RESULT_HASH_MISMATCH"],
