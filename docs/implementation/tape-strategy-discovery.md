@@ -496,6 +496,20 @@ and byte-identical JSON, Markdown, and CSV. D4 is accepted from the combined
 synthetic contract proof and honest zero-candidate production result; no exact
 candidate has passed promotion.
 
+A same-day emerged-path audit found that the zero-candidate production result
+had not exercised one essential bridge: D3 historical rules carried wildcard
+strategy-bucket semantics plus edge and spread thresholds that the immutable
+candidate contract could not represent, and the sole command opened the
+registry read-only. The correction makes those predicates part of immutable
+candidate identity, seals deterministic candidate IDs and a future activation
+boundary in the report, and atomically appends the completed run plus every
+surviving family only after all three report artifacts exist. Synthetic
+end-to-end evidence proves the registered version reuses the exact identity,
+accepts the historical wildcard semantics, rejects edge/spread near-misses,
+and scores only post-activation rows. A corrupt sealed identity leaves the run,
+family, candidate, and lifecycle tables unchanged. Completed-none behavior is
+unchanged and no registration creates funded authority.
+
 ### D5: Operator Cutover And Optional Scheduling
 
 - Make `scripts/run_discovery.py` the sole documented discovery command.
@@ -565,6 +579,7 @@ concentration limits, useful-size evidence, and explicit human approval pass.
 | Crash recovery | Killing a cache batch and rerunning produces the same final state as an uninterrupted build. |
 | Holdout integrity | Rule generation and family selection cannot read final holdout outcomes. |
 | Forward integrity | Existing candidate results exclude every pre-activation row. |
+| Emerged identity | Every surviving historical predicate is losslessly representable, registered atomically after report success, and evaluated only from its future activation. |
 | Correlation | Nearby variants collapse before holdout and do not count as independent evidence. |
 | Execution honesty | Public tape labels only declared taker counterfactuals; passive/actual fills remain unavailable without authoritative truth. |
 | Settlement honesty | Weather scoring is labeled diagnostic; promotion uses venue-authoritative settlement only. |
@@ -624,6 +639,7 @@ separate cleanup after their lack of consumers is proven.
 - [x] Correlated representatives are frozen before holdout access.
 - [x] One command writes one complete human-readable report.
 - [x] Existing candidates are evaluated only after activation.
+- [x] Surviving historical rules register losslessly and atomically as immutable future-activated candidates.
 - [x] Completed-none and failed-analysis states are distinct.
 - [x] Weather, venue, markout, and actual-fill provenance remain distinct.
 - [x] Old multi-command workflow is removed from operator guidance.
@@ -632,6 +648,13 @@ separate cleanup after their lack of consumers is proven.
 - [x] Phase 4 remains blocked to an explicitly approved exact candidate version.
 
 ## Decision Log
+
+- 2026-08-12: Closed the emerged-path gap exposed by the D0-D5 audit. The
+  historical wildcard strategy-bucket, edge, and spread predicates now survive
+  immutable registration; the sole command seals a future activation in its
+  report and atomically appends the completed outcome and bounded research-only
+  candidate set after artifact success. End-to-end tests cover idempotent
+  identity reuse, exact post-activation matching, and all-or-nothing failure.
 
 - 2026-08-12: Accepted D5 after the sole command passed interrupted cold/resume,
   explicit warm no-op, and natural new-watermark production cycles. Added an

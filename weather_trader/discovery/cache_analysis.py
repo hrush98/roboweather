@@ -747,6 +747,25 @@ def _markdown_report(result: dict[str, Any]) -> str:
         )
     if not result["family_representatives"]:
         lines.append("| — | — | — | — | — | — | No representative reached holdout |")
+    registration = result.get("emerged_candidate_registration", {})
+    emerged_candidates = registration.get("candidates", [])
+    lines.extend((
+        "",
+        "## Emerged immutable candidates",
+        "",
+    ))
+    if emerged_candidates:
+        lines.extend((
+            "| Candidate | Family | Activation | Source rule |",
+            "|---|---|---|---|",
+        ))
+        for item in emerged_candidates:
+            lines.append(
+                f"| {item['candidate_version_id']} | {item['family_id']} | "
+                f"{item['activation_timestamp_utc']} | {item['source_rule_id']} |"
+            )
+    else:
+        lines.append("No historical family survived, so this report registers no new candidate.")
     lines.extend((
         "",
         "## Existing candidates",

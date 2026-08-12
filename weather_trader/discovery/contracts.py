@@ -124,16 +124,27 @@ class CandidateRule:
     entry_price_min: float
     entry_price_max: float
     require_high_conviction: bool
+    minimum_model_edge_at_best_ask: float = 0.0
+    maximum_spread: float | None = None
     dedupe_scope: str = "station_date"
     execution_arm: str = "stable_taker"
 
     def __post_init__(self) -> None:
-        if not self.model_id or not self.market_family or self.selected_side not in {"BUY_YES", "BUY_NO", "ANY"}:
+        if (
+            not self.model_id
+            or not self.market_family
+            or not self.strategy_bucket
+            or self.selected_side not in {"BUY_YES", "BUY_NO", "ANY"}
+        ):
             raise ValueError("candidate requires a model and a valid side rule")
         if self.local_start >= self.local_end:
             raise ValueError("candidate local window must be increasing")
         if not 0 <= self.entry_price_min <= self.entry_price_max <= 1:
             raise ValueError("candidate entry band must be ordered")
+        if not 0 <= self.minimum_model_edge_at_best_ask <= 1:
+            raise ValueError("candidate minimum edge must be between zero and one")
+        if self.maximum_spread is not None and not 0 <= self.maximum_spread <= 1:
+            raise ValueError("candidate maximum spread must be between zero and one")
         if self.dedupe_scope != "station_date" or self.execution_arm != "stable_taker":
             raise ValueError("initial grammar supports station/date stable-taker rules only")
 
@@ -149,6 +160,8 @@ class CandidateRule:
                 self.observation_delay_bucket is not None,
                 self.local_start != "00:00" or self.local_end != "24:00",
                 self.entry_price_min > 0 or self.entry_price_max < 1,
+                self.minimum_model_edge_at_best_ask > 0,
+                self.maximum_spread is not None,
                 self.require_high_conviction,
             )
         )
@@ -160,10 +173,6 @@ class CandidateRule:
             "model_id": self.model_id,
             "market_family": self.market_family,
             "selected_side": self.selected_side,
-            "strategy_bucket": self.strategy_bucket,
-            "require_high_conviction": self.require_high_conviction,
-            "dedupe_scope": self.dedupe_scope,
-            "execution_arm": self.execution_arm,
         }
         return f"p3d_family_{stable_hash(payload)[:20]}"
 

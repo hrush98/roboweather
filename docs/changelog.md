@@ -4,6 +4,14 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-12
 
+- Fixed the Phase 3D emerged-strategy path that production's zero-survivor run
+  had not exercised. Historical wildcard strategy-bucket, minimum-edge, and
+  maximum-spread predicates now freeze losslessly into immutable candidates;
+  `scripts/run_discovery.py` seals their future activation in the report and
+  atomically registers the completed run and bounded research-only candidates
+  only after report artifacts succeed. Added end-to-end coverage for identity
+  reuse, exact post-activation evaluation, and rollback without partial rows.
+
 - Completed Phase 3D D5 operator cutover. `scripts/run_discovery.py` is the
   sole discovery command and atomically publishes the latest complete report,
   artifact hashes, watermarks, and cache health for the TUI. Final production

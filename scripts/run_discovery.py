@@ -9,6 +9,7 @@ import hashlib
 import json
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +33,11 @@ from weather_trader.discovery.forward_analysis import (
     evaluate_existing_candidates,
     load_existing_candidate_versions,
 )
+from weather_trader.discovery.emergence import (
+    attach_emerged_candidate_plan,
+    register_emerged_candidate_plan,
+    require_future_activation,
+)
 from weather_trader.discovery.registry import DiscoveryRegistry
 from weather_trader.discovery.operator_status import write_latest_complete_status
 from weather_trader.pricing.contracts import stable_hash
@@ -43,6 +49,10 @@ DEFAULT_STATE = Path.home() / ".local/state/roboweather"
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cutoff-exclusive", required=True)
+    parser.add_argument(
+        "--activation-timestamp",
+        help="future immutable activation boundary; defaults to cutoff midnight UTC",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--source-start-date", default="2026-07-23")
     parser.add_argument(
@@ -78,6 +88,10 @@ def main() -> int:
     parser.add_argument("--mapping-batch-size", type=int, default=2_000)
     parser.add_argument("--replay-batch-size", type=int, default=500)
     args = parser.parse_args()
+    activation_timestamp = (
+        args.activation_timestamp
+        or f"{args.cutoff_exclusive}T00:00:00+00:00"
+    )
 
     config = HistoricalDiscoveryConfig(
         source_start_date=args.source_start_date,
@@ -89,6 +103,8 @@ def main() -> int:
         bootstrap_repetitions=args.bootstrap_repetitions,
     )
     contract = DecisionCacheContract()
+    report_written = False
+    registration_result: dict[str, object] | None = None
     try:
         with _readonly(args.research_db) as research, _readonly(args.tape_catalog) as tape:
             research_watermark = int(research.execute(
@@ -160,7 +176,23 @@ def main() -> int:
                         ),
                     ),
                 )
+                result = attach_emerged_candidate_plan(
+                    result,
+                    activation_timestamp_utc=activation_timestamp,
+                    execution_version=contract.execution_version,
+                    config=config,
+                )
+                registered_at_utc = datetime.now(timezone.utc).isoformat()
+                require_future_activation(result, now_utc=registered_at_utc)
                 write_discovery_report(result, args.out)
+                report_written = True
+                with DiscoveryRegistry(args.registry) as registry:
+                    registration_result = register_emerged_candidate_plan(
+                        registry,
+                        result,
+                        report_dir=args.out,
+                        registered_at_utc=registered_at_utc,
+                    )
                 write_latest_complete_status(
                     args.latest_status,
                     result=result,
@@ -172,13 +204,17 @@ def main() -> int:
         print(json.dumps({
             "status": result["status"],
             "result_content_hash": result["result_content_hash"],
+            "registry": registration_result,
             "out": str(args.out),
             "funded_authorization": False,
         }, indent=2, sort_keys=True))
         return 0
     except Exception as exc:
         result = _failed_result(args, config, contract, exc)
-        _write_failed_report(result, args.out)
+        if report_written:
+            _write_post_report_failure(result, args.out)
+        elif not args.out.exists():
+            _write_failed_report(result, args.out)
         print(json.dumps(result, indent=2, sort_keys=True))
         return 2
 
@@ -228,6 +264,14 @@ def _write_failed_report(result: dict[str, object], output_dir: Path) -> None:
         csv.writer(handle).writerow(("rule_id", "status"))
 
 
+def _write_post_report_failure(result: dict[str, object], output_dir: Path) -> None:
+    """Preserve the completed report while making publication failure explicit."""
+    (output_dir / "registration_failure.json").write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _readonly(path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(f"file:{path.expanduser()}?mode=ro", uri=True)
     connection.execute("pragma query_only=ON")
@@ -246,6 +290,7 @@ def _code_hash() -> str:
         REPO_ROOT / "weather_trader/discovery/cache_analysis.py",
         REPO_ROOT / "weather_trader/discovery/decision_cache.py",
         REPO_ROOT / "weather_trader/discovery/forward_analysis.py",
+        REPO_ROOT / "weather_trader/discovery/emergence.py",
         REPO_ROOT / "weather_trader/discovery/operator_status.py",
         REPO_ROOT / "weather_trader/discovery/registry.py",
         REPO_ROOT / "weather_trader/tape/replay.py",

@@ -292,13 +292,19 @@ def _evaluate_one(
 def _matches_rule(row: CachedAnalysisRow, rule: CandidateRule) -> bool:
     if rule.selected_side != "ANY" and row.selected_side != rule.selected_side:
         return False
-    if row.strategy_bucket != rule.strategy_bucket:
+    if rule.strategy_bucket != "ANY" and row.strategy_bucket != rule.strategy_bucket:
         return False
     if rule.observation_delay_bucket is not None and row.observation_delay_bucket != rule.observation_delay_bucket:
         return False
     if not rule.local_start <= row.local_hhmm < rule.local_end:
         return False
     if not rule.entry_price_min <= row.best_ask <= rule.entry_price_max:
+        return False
+    if row.edge_at_best + 1e-12 < rule.minimum_model_edge_at_best_ask:
+        return False
+    if rule.maximum_spread is not None and (
+        row.spread is None or row.spread > rule.maximum_spread + 1e-12
+    ):
         return False
     if rule.require_high_conviction and not row.high_conviction:
         return False
@@ -372,6 +378,8 @@ def _candidate_rule_payload(rule: CandidateRule) -> dict[str, Any]:
         "entry_price_min": rule.entry_price_min,
         "entry_price_max": rule.entry_price_max,
         "require_high_conviction": rule.require_high_conviction,
+        "minimum_model_edge_at_best_ask": rule.minimum_model_edge_at_best_ask,
+        "maximum_spread": rule.maximum_spread,
         "dedupe_scope": rule.dedupe_scope,
         "execution_arm": rule.execution_arm,
     }

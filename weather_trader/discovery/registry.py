@@ -365,6 +365,208 @@ class DiscoveryRegistry:
             """
         )
 
+    def register_completed_analysis(
+        self,
+        *,
+        run_spec: Mapping[str, Any],
+        created_at_utc: str,
+        completed_at_utc: str,
+        outcome_status: str,
+        diagnostics: Mapping[str, Any],
+        output_refs: Mapping[str, Any],
+        nominations: list[Mapping[str, Any]],
+        source_kind: str,
+    ) -> dict[str, Any]:
+        """Atomically append one completed report and its emerged candidates."""
+        if outcome_status not in {"COMPLETED", "NO_NOMINATION"}:
+            raise ValueError("completed analysis outcome must be completed or no nomination")
+        if (outcome_status == "NO_NOMINATION") != (not nominations):
+            raise ValueError("completed analysis outcome and nominations disagree")
+        payload = dict(run_spec)
+        supplied_run_id = payload.pop("run_id", None)
+        run_hash = stable_hash(payload)
+        run_id = str(supplied_run_id or f"p3d_run_{run_hash[:24]}")
+        created = _utc_text(created_at_utc)
+        completed = _utc_text(completed_at_utc)
+        cutoff = str(payload.get("discovery_cutoff_exclusive", "UNKNOWN"))
+        tape_hash = stable_hash({
+            "session_ids": payload.get("tape_session_ids", ()),
+            "partition_ids": payload.get("tape_partition_ids", ()),
+        })
+        prepared = []
+        for nomination in nominations:
+            item = dict(nomination)
+            family_definition = dict(item["family_definition"])
+            family_hash = stable_hash(family_definition)
+            family_id = str(
+                family_definition.get("family_id")
+                or f"p3d_family_{family_hash[:20]}"
+            )
+            rule_payload = dict(item["rule"])
+            CandidateRule(**rule_payload)
+            activation = _utc_text(str(item["activation_timestamp_utc"]))
+            if activation < f"{cutoff}T00:00:00+00:00":
+                raise ValueError("candidate activation must not precede its discovery cutoff")
+            if activation < created:
+                raise ValueError("candidate activation must not precede registry creation")
+            definition = {
+                "family_id": family_id,
+                "rule": rule_payload,
+                "pricing_version": str(item["pricing_version"]),
+                "execution_version": str(item["execution_version"]),
+                "risk_version": str(item["risk_version"]),
+                "sizing_and_risk": dict(item.get("sizing_and_risk") or {}),
+            }
+            definition_hash = stable_hash(definition)
+            candidate_id = f"p3d_version_{definition_hash[:24]}"
+            if item.get("candidate_version_id") != candidate_id:
+                raise ValueError("sealed candidate identity does not match its definition")
+            prepared.append({
+                "source": item,
+                "family_id": family_id,
+                "family_hash": family_hash,
+                "family_definition": family_definition,
+                "activation": activation,
+                "definition": definition,
+                "definition_hash": definition_hash,
+                "candidate_id": candidate_id,
+            })
+
+        registered = []
+        try:
+            self.connection.execute("begin immediate")
+            existing_run = self.connection.execute(
+                "select run_id from discovery_runs where run_hash=?", (run_hash,)
+            ).fetchone()
+            if existing_run is not None:
+                run_id = str(existing_run["run_id"])
+            else:
+                self._insert_immutable("discovery_runs", "run_id", {
+                    "run_id": run_id,
+                    "run_hash": run_hash,
+                    "source_kind": source_kind,
+                    "status": "COMPLETED_REPORT",
+                    "created_at_utc": created,
+                    "source_start_date": str(payload.get("source_start_date", "UNKNOWN")),
+                    "cutoff_exclusive": cutoff,
+                    "research_watermark": str(payload.get("research_watermark", "UNKNOWN")),
+                    "tape_watermark_hash": tape_hash,
+                    "outcome_watermark": str(payload.get("outcome_watermark", "UNKNOWN")),
+                    "venue_settlement_watermark": str(
+                        payload.get("venue_settlement_watermark", "UNKNOWN")
+                    ),
+                    "grammar_version": str(payload.get("grammar_version", "UNKNOWN")),
+                    "spec_json": _json(payload),
+                    "diagnostics_json": _json(diagnostics),
+                    "output_refs_json": _json(output_refs),
+                })
+
+            existing_outcome = self.connection.execute(
+                "select nominations_json from discovery_run_outcomes where run_id=?",
+                (run_id,),
+            ).fetchone()
+            if existing_outcome is not None:
+                self.connection.commit()
+                return {
+                    "run_id": run_id,
+                    "candidate_version_ids": [
+                        str(item["candidate_version_id"])
+                        for item in json.loads(existing_outcome["nominations_json"])
+                    ],
+                    "reused": True,
+                }
+
+            for item in prepared:
+                existing_family = self.connection.execute(
+                    "select family_id from strategy_families where definition_hash=?",
+                    (item["family_hash"],),
+                ).fetchone()
+                family_id = (
+                    str(existing_family["family_id"])
+                    if existing_family is not None else item["family_id"]
+                )
+                if existing_family is None:
+                    self._insert_immutable("strategy_families", "family_id", {
+                        "family_id": family_id,
+                        "definition_hash": item["family_hash"],
+                        "economic_rationale": "Executable model-versus-market disagreement surviving chronological discovery and untouched holdout.",
+                        "grammar_provenance": "phase3d_bounded_grid_v1",
+                        "correlation_group": item["family_id"],
+                        "created_at_utc": created,
+                        "definition_json": _json(item["family_definition"]),
+                    })
+                if family_id != item["family_id"]:
+                    raise ImmutableRegistryConflict("sealed candidate family identity changed")
+
+                existing_candidate = self.connection.execute(
+                    "select candidate_version_id from candidate_versions where definition_hash=?",
+                    (item["definition_hash"],),
+                ).fetchone()
+                candidate_id = item["candidate_id"]
+                if existing_candidate is None:
+                    version = int(self.connection.execute(
+                        "select coalesce(max(family_version),0)+1 from candidate_versions where family_id=?",
+                        (family_id,),
+                    ).fetchone()[0])
+                    self._insert_immutable("candidate_versions", "candidate_version_id", {
+                        "candidate_version_id": candidate_id,
+                        "family_id": family_id,
+                        "family_version": version,
+                        "definition_hash": item["definition_hash"],
+                        "source_run_id": run_id,
+                        "activation_timestamp_utc": item["activation"],
+                        "pricing_version": item["definition"]["pricing_version"],
+                        "execution_version": item["definition"]["execution_version"],
+                        "risk_version": item["definition"]["risk_version"],
+                        "source_kind": source_kind,
+                        "created_at_utc": created,
+                        "definition_json": _json(item["definition"]),
+                    })
+                    self._append_lifecycle_event_in_transaction(
+                        candidate_version_id=candidate_id,
+                        event_type="GENERATED",
+                        from_role=None,
+                        to_role="GENERATED",
+                        occurred_at_utc=created,
+                        reason="candidate version registered from completed deterministic report",
+                        source_run_id=run_id,
+                        metadata={"source_kind": source_kind, "funded_authorization": False},
+                    )
+                else:
+                    candidate_id = str(existing_candidate["candidate_version_id"])
+                if candidate_id != item["candidate_id"]:
+                    raise ImmutableRegistryConflict("sealed candidate identity changed")
+                registered.append({
+                    "candidate_version_id": candidate_id,
+                    "family_id": family_id,
+                    "source_rule_id": item["source"]["source_rule_id"],
+                })
+
+            outcome_payload = {
+                "run_id": run_id,
+                "status": outcome_status,
+                "completed_at_utc": completed,
+                "diagnostics": dict(diagnostics),
+                "nominations": registered,
+            }
+            self._insert_immutable("discovery_run_outcomes", "run_id", {
+                "run_id": run_id,
+                "outcome_hash": stable_hash(outcome_payload),
+                "status": outcome_status,
+                "completed_at_utc": completed,
+                "diagnostics_json": _json(diagnostics),
+                "nominations_json": _json(registered),
+            })
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
+        return {
+            "run_id": run_id,
+            "candidate_version_ids": [item["candidate_version_id"] for item in registered],
+            "reused": False,
+        }
+
     def register_discovery_run(
         self,
         spec: DiscoveryRunSpec | Mapping[str, Any],
