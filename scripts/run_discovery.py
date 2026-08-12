@@ -38,6 +38,7 @@ from weather_trader.discovery.forward_analysis import (
     load_existing_candidate_versions,
 )
 from weather_trader.discovery.registry import DiscoveryRegistry
+from weather_trader.discovery.operator_status import write_latest_complete_status
 from weather_trader.pricing.contracts import stable_hash
 
 
@@ -68,6 +69,11 @@ def main() -> int:
         "--registry",
         type=Path,
         default=DEFAULT_STATE / "discovery/catalog.sqlite",
+    )
+    parser.add_argument(
+        "--latest-status",
+        type=Path,
+        default=DEFAULT_STATE / "discovery/latest_complete.json",
     )
     parser.add_argument("--holdout-dates", type=int, default=5)
     parser.add_argument("--fold-count", type=int, default=3)
@@ -100,7 +106,7 @@ def main() -> int:
                 (args.cutoff_exclusive,),
             ).fetchone()[0])
             with ExecutableDecisionCache(args.cache) as cache:
-                cache.refresh(
+                refresh_result = cache.refresh(
                     research,
                     tape,
                     contract=contract,
@@ -159,7 +165,15 @@ def main() -> int:
                         ),
                     ),
                 )
-        write_discovery_report(result, args.out)
+                write_discovery_report(result, args.out)
+                write_latest_complete_status(
+                    args.latest_status,
+                    result=result,
+                    report_dir=args.out,
+                    cache_path=args.cache,
+                    cache=cache.connection,
+                    refresh_result=refresh_result,
+                )
         print(json.dumps({
             "status": result["status"],
             "result_content_hash": result["result_content_hash"],
@@ -237,6 +251,7 @@ def _code_hash() -> str:
         REPO_ROOT / "weather_trader/discovery/cache_analysis.py",
         REPO_ROOT / "weather_trader/discovery/decision_cache.py",
         REPO_ROOT / "weather_trader/discovery/forward_analysis.py",
+        REPO_ROOT / "weather_trader/discovery/operator_status.py",
         REPO_ROOT / "weather_trader/discovery/registry.py",
         REPO_ROOT / "weather_trader/tape/replay.py",
     ):

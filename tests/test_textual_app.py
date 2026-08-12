@@ -1074,7 +1074,7 @@ def test_tui_tape_service_health_and_controls(tmp_path) -> None:
     asyncio.run(scenario())
 
 
-def test_tui_exposes_phase3d_scheduler_watermarks_roles_and_failures(tmp_path) -> None:
+def test_tui_exposes_latest_complete_discovery_report_and_cache_health(tmp_path) -> None:
     async def scenario() -> None:
         app = RoboWeatherTUI(
             tmp_path / "tui.sqlite",
@@ -1087,37 +1087,37 @@ def test_tui_exposes_phase3d_scheduler_watermarks_roles_and_failures(tmp_path) -
         async with app.run_test(size=(140, 55)):
             app._discovery_status = {
                 "status": "ATTENTION",
-                "latest_scheduler_event": {
-                    "event_type": "FAILED",
-                    "scheduled_for_utc": "2026-08-07T12:00:00+00:00",
+                "latest_complete": {
+                    "analytical_status": "COMPLETED_NO_EMERGED_STRATEGIES",
+                    "published_at_utc": "2026-08-07T12:00:00+00:00",
+                    "cutoff_exclusive": "2026-08-07",
+                    "result_content_hash": "result-hash",
+                    "report_dir": "/tmp/report",
+                    "sealed_research_watermark": 100,
+                    "sealed_outcome_watermark": "outcome-1",
+                    "existing_candidate_evaluation_status": "NO_EXISTING_CANDIDATES",
+                    "cache": {
+                        "model_mappings": 200,
+                        "decisions": 20,
+                        "pending_decisions": 0,
+                        "refresh_diagnostics": {"TAPE_REPLAY_CALLS": 0},
+                    },
                 },
-                "latest_discovery_run": {
-                    "status": "COMPLETED",
-                    "run_id": "run-1",
-                    "research_watermark": "100",
-                    "outcome_watermark": "outcome-1",
-                    "venue_settlement_watermark": "venue-1",
-                },
-                "active_candidate_count": 2,
-                "roles": {"CHAMPION": 1, "CHALLENGER": 1},
-                "latest_forward_scorecard_at_utc": "2026-08-07T10:00:00+00:00",
-                "stale_evaluation": False,
-                "registry_bytes": 1024,
-                "alerts": ["LATEST_SCHEDULER_CYCLE_FAILED"],
-                "recent_failures": [{"details": {"error": "evaluation failed"}}],
+                "alerts": ["LATEST_RESULT_HASH_MISMATCH"],
             }
             app._refresh_discovery_health_table()
 
             table = app.query_one("#discovery-health", DataTable)
-            assert table.row_count == 13
+            assert table.row_count == 14
+
             rendered = "\n".join(
                 " ".join(str(cell) for cell in table.get_row_at(index))
                 for index in range(table.row_count)
             )
-            assert "FAILED" in rendered
-            assert "CHAMPION" in rendered
+            assert "COMPLETED_NO_EMERGED_STRATEGIES" in rendered
+            assert "result-hash" in rendered
             assert "outcome-1" in rendered
-            assert "evaluation failed" in rendered
+            assert "LATEST_RESULT_HASH_MISMATCH" in rendered
 
     asyncio.run(scenario())
 

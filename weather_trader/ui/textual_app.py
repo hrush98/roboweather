@@ -18,7 +18,7 @@ from textual.widgets import Button, DataTable, Footer, Header, Input, Static, Ta
 
 from weather_trader.execution.clob_executor import ClobExecutor
 from weather_trader.execution.store import ExecutionStore
-from weather_trader.discovery.status import discovery_status_report
+from weather_trader.discovery.operator_status import latest_complete_status_report
 from weather_trader.live.resolution import LiveResolutionService
 from weather_trader.live.settings import decrypt_age_keyfile_with_passphrase, load_live_settings
 from weather_trader.tape.catalog import TapeCatalog
@@ -62,7 +62,7 @@ LIVE_RESOLUTION_POLL_INTERVAL_SECONDS = 6 * 60 * 60
 TAPE_SERVICE_POLL_INTERVAL_SECONDS = 2.0
 TAPE_HEALTH_POLL_INTERVAL_SECONDS = 10.0
 DEFAULT_TAPE_CATALOG = Path.home() / ".local/state/roboweather/market_tape/catalog.sqlite"
-DEFAULT_DISCOVERY_REGISTRY = Path.home() / ".local/state/roboweather/discovery/catalog.sqlite"
+DEFAULT_DISCOVERY_STATUS = Path.home() / ".local/state/roboweather/discovery/latest_complete.json"
 
 DEFAULT_DESC_SORT_COLUMNS = {
     "attempts",
@@ -567,8 +567,8 @@ def _load_tape_health(catalog_path: Path) -> TapeHealthReport:
         return evaluate_tape_health(catalog, verify_segments=False)
 
 
-def _load_discovery_status(registry_path: Path) -> dict[str, Any]:
-    return discovery_status_report(registry_path)
+def _load_discovery_status(status_path: Path) -> dict[str, Any]:
+    return latest_complete_status_report(status_path)
 
 
 def _fmt_bytes(value: int) -> str:
@@ -894,6 +894,7 @@ class RoboWeatherTUI(App):
         tape_service_controller: SystemdUserServiceController | None = None,
         tape_catalog_path: Path | None = None,
         discovery_registry_path: Path | None = None,
+        discovery_status_path: Path | None = None,
     ) -> None:
         super().__init__()
         self.db_path = db_path
@@ -913,9 +914,9 @@ class RoboWeatherTUI(App):
         self.tape_catalog_path = tape_catalog_path or Path(
             os.environ.get("ROBOWEATHER_TAPE_CATALOG", str(DEFAULT_TAPE_CATALOG))
         ).expanduser()
-        self.discovery_registry_path = discovery_registry_path or Path(
+        self.discovery_status_path = discovery_status_path or discovery_registry_path or Path(
             os.environ.get(
-                "ROBOWEATHER_DISCOVERY_REGISTRY", str(DEFAULT_DISCOVERY_REGISTRY)
+                "ROBOWEATHER_DISCOVERY_STATUS", str(DEFAULT_DISCOVERY_STATUS)
             )
         ).expanduser()
         self._tape_health: TapeHealthReport | None = None
@@ -1442,7 +1443,7 @@ class RoboWeatherTUI(App):
                 self._tape_health_error = str(exc)
             try:
                 self._discovery_status = await asyncio.to_thread(
-                    _load_discovery_status, self.discovery_registry_path
+                    _load_discovery_status, self.discovery_status_path
                 )
                 self._discovery_status_error = None
             except Exception as exc:
@@ -1644,24 +1645,24 @@ class RoboWeatherTUI(App):
             )
             return
         report = self._discovery_status
-        event = report.get("latest_scheduler_event") or {}
-        discovery = report.get("latest_discovery_run") or {}
-        failure = (report.get("recent_failures") or [{}])[0]
-        failure_detail = failure.get("details") or {}
+        latest = report.get("latest_complete") or {}
+        cache = latest.get("cache") or {}
+        refresh = cache.get("refresh_diagnostics") or {}
         rows = [
             ("health", str(report.get("status", "UNKNOWN"))),
-            ("scheduler cycle", f"{event.get('event_type', 'none')} {event.get('scheduled_for_utc', '')}".strip()),
-            ("discovery run", f"{discovery.get('status', 'none')} {discovery.get('run_id', '')}".strip()),
-            ("research watermark", str(discovery.get("research_watermark", "none"))),
-            ("outcome watermark", str(discovery.get("outcome_watermark", "none"))),
-            ("venue watermark", str(discovery.get("venue_settlement_watermark", "none"))),
-            ("active candidates", str(report.get("active_candidate_count", 0))),
-            ("roles", json.dumps(report.get("roles", {}), sort_keys=True)),
-            ("latest scorecard", str(report.get("latest_forward_scorecard_at_utc") or "none")),
-            ("stale evaluation", str(bool(report.get("stale_evaluation")))),
-            ("registry", _fmt_bytes(int(report.get("registry_bytes", 0)))),
+            ("latest complete", str(latest.get("analytical_status", "none"))),
+            ("published", str(latest.get("published_at_utc", "none"))),
+            ("cutoff", str(latest.get("cutoff_exclusive", "none"))),
+            ("result hash", str(latest.get("result_content_hash", "none"))),
+            ("report", str(latest.get("report_dir", "none"))),
+            ("research watermark", str(latest.get("sealed_research_watermark", "none"))),
+            ("outcome watermark", str(latest.get("sealed_outcome_watermark", "none"))),
+            ("cache mappings", str(cache.get("model_mappings", "none"))),
+            ("cache decisions", str(cache.get("decisions", "none"))),
+            ("cache pending", str(cache.get("pending_decisions", "none"))),
+            ("refresh replay calls", str(refresh.get("TAPE_REPLAY_CALLS", "none"))),
+            ("existing candidates", str(latest.get("existing_candidate_evaluation_status", "none"))),
             ("alerts", ", ".join(report.get("alerts", [])) or "none"),
-            ("latest failure", str(failure_detail.get("error") or "none")[:240]),
         ]
         for metric, value in rows:
             table.add_row(metric, value)
