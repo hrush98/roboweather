@@ -1,7 +1,7 @@
 {
   "board": {
     "active": 0,
-    "closed": 15,
+    "closed": 16,
     "open": 0,
     "parked": 0,
     "pillars": {
@@ -18,7 +18,7 @@
       "available": true,
       "path": "docs/current-trading-system-audit.md",
       "review_date": "2026-08-12",
-      "word_count": 5193
+      "word_count": 5332
     },
     "improvement_loop": {
       "available": true,
@@ -41,7 +41,7 @@
       "available": true,
       "path": "docs/execution-rebuild-roadmap.md",
       "review_date": "2026-08-12",
-      "word_count": 2245
+      "word_count": 2259
     },
     "state": {
       "available": true,
@@ -50,12 +50,12 @@
       "word_count": 900
     }
   },
-  "facts_fingerprint": "f043352d5754f37ee0c06b40fcf19fa557ed4527fe73c99688acd5e1c57f3c24",
-  "generated_at": "2026-08-12T04:16:26Z",
+  "facts_fingerprint": "27d4092673cee21729cc515c0ee9c53378127bde90f5a3fe3d3c9989a0bd9b32",
+  "generated_at": "2026-08-12T17:44:24Z",
   "learning": {
-    "captured": 9,
+    "captured": 10,
     "integrated": 0,
-    "open": 10,
+    "open": 11,
     "overdue": 0,
     "revisit": 1,
     "superseded": 0
@@ -67,7 +67,7 @@
     },
     "head": {
       "available": true,
-      "value": "0b9d42e4bba0aca4cb7d14c846aed7e272e53fc6"
+      "value": "b9a416745da61914c64cf273f54d8eabd41525aa"
     },
     "root": "/home/maxrush/General/roboweather"
   },
@@ -83,11 +83,11 @@
     "research_database": {
       "available": true,
       "latest_resolved_market_date": "2026-08-11",
-      "latest_snapshot_timestamp": "2026-08-12T00:21:01.772067+00:00",
-      "modified_at": "2026-08-12T04:13:55Z",
+      "latest_snapshot_timestamp": "2026-08-12T17:42:42.934014+00:00",
+      "modified_at": "2026-08-12T17:42:41Z",
       "path": "/home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite",
-      "size_bytes": 66233266176,
-      "snapshot_count": 1772116
+      "size_bytes": 66745409536,
+      "snapshot_count": 1783496
     },
     "services": {
       "roboweather-market-tape.service": {

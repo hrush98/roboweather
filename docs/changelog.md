@@ -4,6 +4,17 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-12
 
+- Completed forecast-edge Slice F1. Added
+  `forecast_source_vintage_v1`, a separate content-addressed runtime catalog,
+  listing-bounded NBM/HRRR/IEM collectors, strict WeatherNext/RRFS manifest
+  imports, source-format validation, bounded rate-limit retry and byte/artifact
+  ceilings, immutable revision/failure telemetry, causal replay queries, and a
+  reproducible coverage report. Bounded host evidence captured and decoded
+  three NBM and three HRRR station subsets plus one IEM observation vintage.
+  WeatherNext access and an operational RRFS contract remain explicit
+  limitations; no forecast skill, pricing promotion, or funded authority
+  changed.
+
 - Completed forecast-edge Slice F0. Added `scripts/forecast_truth_audit.py`
   and `us_high_temperature_truth_v1` source-separated settlement primitives,
   including civil-versus-standard-day boundaries, rounded-display intervals,

@@ -132,6 +132,27 @@
 - Generated manifests and JSONL rows are research outputs. Inspect them for nonzero fit/evaluation counts and label/reference diagnostics, but leave the output directory uncommitted.
 - On the local `/home/hmrush` checkout, use `/home/hmrush/Desktop/personal/roboweather/.conda/roboweather/bin/python` with a locally available DB. The checked-in May DB predates the pilot HRRR-rich/HRRR-v2 families and is useful for schema compatibility only; zero pilot rows there are expected.
 
+## Causal forecast source-vintage workflow
+
+- F1 forecast inputs use a separate runtime catalog at
+  `~/.local/state/roboweather/forecast_sources/catalog.sqlite` with
+  content-addressed raw artifacts under the adjacent `raw/` directory. Do not
+  point this collector at the research or live trading databases and do not
+  commit its generated state.
+- Plan or collect listing-bounded current US high-temperature sources with:
+  - `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/forecast_source_catalog.py --research-db /home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite --plan-only`
+  - remove `--plan-only` to run the default bounded NBM, HRRR, and IEM
+    collection; set explicit `--max-artifacts` and `--max-bytes` for probes.
+- Generate the current uncommitted coverage report with
+  `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/forecast_source_catalog.py --report-only --report-out reports/forecast-edge/f1-source-catalog-current`.
+- WeatherNext 2 collection requires an approved-access manifest whose rows
+  include provider `ingestion_time` as `provider_available_at_utc`. RRFS
+  remains manifest-only until an operational product/version and endpoint are
+  frozen. Missing access or timestamps fail closed.
+- Causal replay uses WeatherNext provider ingestion time and first successful
+  local observation for NOAA/IEM artifacts. Preserve HTTP `Last-Modified` as
+  provenance only; never use it to backdate replay visibility.
+
 ## Legacy candidate-scoped shadow collection workflow
 
 - The current candidate-scoped collector is a plumbing prototype, not the Phase 3 shared market tape. It begins from policy-candidate tokens after candidate generation and its existing shadow labels are not promotion evidence.
