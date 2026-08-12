@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the bounded Phase 3D C4-C6 dry-run scheduler."""
+"""Compatibility-only failed C4-C6 scheduler; do not use operationally."""
 
 from __future__ import annotations
 

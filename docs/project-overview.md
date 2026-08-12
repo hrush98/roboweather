@@ -26,7 +26,7 @@ Use the fixed agent read order in `AGENTS.md`. Update living documents in place.
 
 ## Current Mode
 
-Funded trading is paused. The Phase 3 shared market tape is the execution-evidence substrate. The prior Phase 3D C3-C6 operator workflow failed production runtime and is compatibility-only; the approved replacement is an incremental executable-decision cache and one deterministic discovery/report command. Phase 4 remains blocked on venue-authoritative settlement, valid markouts, and an exact candidate that passes the complete conservative/base evidence gate. Forecast-edge and full-market-lifecycle work may continue as approved parallel research. Current machine status belongs in `agent_loop/facts.json`; the current financial verdict remains in `docs/current-trading-system-audit.md`.
+Funded trading is paused. The Phase 3 shared market tape is the execution-evidence substrate. The prior Phase 3D C3-C6 operator workflow failed production runtime and is retired; the accepted replacement is the incremental executable-decision cache plus the sole deterministic `scripts/run_discovery.py` report command. Phase 4 remains blocked on venue-authoritative settlement, valid markouts, and an exact candidate that passes the complete conservative/base evidence gate. Forecast-edge and full-market-lifecycle work may continue as approved parallel research. Current machine status belongs in `agent_loop/facts.json`; the current financial verdict remains in `docs/current-trading-system-audit.md`.
 
 The research loop:
 

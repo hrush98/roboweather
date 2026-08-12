@@ -4,6 +4,15 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-12
 
+- Completed Phase 3D D5 operator cutover. `scripts/run_discovery.py` is the
+  sole discovery command and atomically publishes the latest complete report,
+  artifact hashes, watermarks, and cache health for the TUI. Final production
+  cold/resume, warm no-op, and natural new-watermark cycles completed in
+  40.05, 7.07, and 7.10 seconds; a deliberately failed run preserved the prior
+  latest-complete record byte-for-byte. Archived the failed service unit,
+  retained legacy CLIs only as labeled compatibility code, and enabled no
+  scheduler. D6/Phase 4 funded authority remains blocked.
+
 - Completed Phase 3D D4 exact-candidate forward evaluation. The single report
   now seals immutable candidate identities and activations, excludes every
   pre-activation row, selects the registered execution cap/size, reports

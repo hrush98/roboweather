@@ -158,7 +158,7 @@ Known failure modes that should be checked during review:
 
 ## Current Phase
 
-The Phase 3 shared market tape remains the accepted causal execution-evidence substrate. Phase 3D has been respecified because the multi-command scheduler repeatedly timed out before completing discovery. The current build priority is the incremental executable-decision cache followed by one deterministic historical/forward discovery report. Scheduling and lifecycle automation remain deferred until direct-replay equivalence and production performance pass. Funded trading remains paused.
+The Phase 3 shared market tape remains the accepted causal execution-evidence substrate. Phase 3D D0-D5 are accepted: the incremental executable-decision cache and `scripts/run_discovery.py` are the sole discovery workflow, and the TUI observes its atomically published latest-complete report/cache status. The failed multi-command scheduler remains retired and no replacement scheduler is enabled. Funded trading remains paused behind the separate Phase 4 gate.
 
 Current phase status and acceptance gates are canonical in `docs/execution-rebuild-roadmap.md`, `docs/implementation/phase-3-market-tape-replay.md`, and `docs/implementation/tape-strategy-discovery.md`. The current financial and systems verdict is `docs/current-trading-system-audit.md`.
 

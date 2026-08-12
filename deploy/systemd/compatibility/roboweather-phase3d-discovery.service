@@ -1,5 +1,7 @@
+# Compatibility archive only. Do not install or start this failed C3-C6
+# scheduler. The accepted operator surface is scripts/run_discovery.py.
 [Unit]
-Description=RoboWeather bounded Phase 3D dry-run discovery scheduler
+Description=RoboWeather legacy Phase 3D dry-run discovery scheduler (compatibility only)
 After=network-online.target roboweather-research.service roboweather-market-tape.service
 Wants=network-online.target
 StartLimitIntervalSec=300

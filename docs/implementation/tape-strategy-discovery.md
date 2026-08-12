@@ -1,6 +1,6 @@
 # Deterministic Tape-Backed Strategy Discovery
 
-Status: D0-D4 accepted; D5 operator cutover open
+Status: D0-D5 accepted; D6 remains the separate Phase 4 gate
 
 Last updated: 2026-08-11
 
@@ -512,6 +512,40 @@ Exit: “run discovery” means one command and returns one understandable answe
 manual acceptance passes on production data; any scheduler failure preserves a
 complete prior report and cannot be confused with no strategies emerging.
 
+### D5 acceptance evidence — 2026-08-12
+
+`scripts/run_discovery.py` is now the sole operator command. A successful run
+atomically publishes `~/.local/state/roboweather/discovery/latest_complete.json`
+only after its JSON, Markdown, and CSV artifacts exist. That record seals the
+latest complete result and artifact hashes plus cache counts, refresh metrics,
+watermarks, and report path. The TUI reads this record instead of the failed
+scheduler registry. A deliberately failed invocation emitted
+`FAILED_ANALYSIS`, returned exit 2, and left the prior latest-complete file
+byte-identical.
+
+Three consecutive production manual modes passed on final code and exclusive
+cutoff `2026-08-13`:
+
+- an interrupted fresh cache resumed to 156,346 mappings and 20,254 decisions,
+  completed in 40.05 seconds at 817,956 KiB peak RSS, and left zero pending;
+- an immediate warm cycle completed in 7.07 seconds, with the cache refresh
+  taking 0.0255 seconds and explicitly reporting zero rows, mappings,
+  decisions, and replay calls;
+- after the live research watermark advanced by 400 raw snapshots, the
+  incremental cycle completed in 7.10 seconds and 0.0310 cache seconds. All
+  new rows were explicit `SKIP` rows, so advancing the watermark with zero
+  mappings/replays was correct. D2's earlier 9,216-row/1,175-decision update
+  remains the relevant-row incremental proof.
+
+The cold/resume and warm reports shared content hash
+`772c44b7ae452b35ead8d2ce43580e23ec6e379c765f480de3bd23c6ae011df0`;
+the new watermark correctly changed the third hash to
+`ada23ec7a131194be1d905aff254e924b5dd37771fa1d1794585613a64162d3c`.
+Latest status validated `HEALTHY` with zero pending decisions. Research and
+tape remained active; the failed service remained inactive and disabled. Its
+source unit is archived under `deploy/systemd/compatibility/`, legacy CLIs are
+labeled compatibility-only, and no replacement scheduler is enabled.
+
 ### D6: Phase 4 Handoff
 
 This remains a later gate, not part of the simplification build. Package an
@@ -550,17 +584,17 @@ Reuse:
 - candidate definition hashes and activation boundaries;
 - append-only run/candidate evidence where it directly supports attribution.
 
-Compatibility-only until cutover:
+Archived compatibility surfaces after cutover:
 
 - `scripts/phase3d_continuous_discovery.py`;
 - `scripts/phase3d_continuous_evaluation.py`;
 - `scripts/phase3d_apply_transitions.py`;
 - `scripts/run_phase3d_scheduler.py`;
-- `deploy/systemd/roboweather-phase3d-discovery.service`;
+- `deploy/systemd/compatibility/roboweather-phase3d-discovery.service`;
 - champion/challenger/probation transition logic and TUI controls.
 
-Do not delete these during D1-D4. After D5 acceptance, remove or archive only
-code proven unused by the single command and its evidence model.
+Do not restore these to operator routing. Remove reusable internals only in a
+separate cleanup after their lack of consumers is proven.
 
 ## Kill And Pivot Rules
 
@@ -588,16 +622,22 @@ code proven unused by the single command and its evidence model.
 - [x] Historical backfill and warm/incremental performance gates pass.
 - [x] Historical grid consumes cached decisions only.
 - [x] Correlated representatives are frozen before holdout access.
-- [ ] One command writes one complete human-readable report.
+- [x] One command writes one complete human-readable report.
 - [x] Existing candidates are evaluated only after activation.
 - [x] Completed-none and failed-analysis states are distinct.
 - [x] Weather, venue, markout, and actual-fill provenance remain distinct.
 - [x] Old multi-command workflow is removed from operator guidance.
-- [ ] Three consecutive production manual acceptance cycles pass.
-- [ ] Any optional scheduler invokes the exact accepted command.
-- [ ] Phase 4 receives only an explicitly approved exact candidate version.
+- [x] Three consecutive production manual acceptance cycles pass.
+- [x] No optional scheduler is installed or active; any future scheduler must invoke the exact accepted command.
+- [x] Phase 4 remains blocked to an explicitly approved exact candidate version.
 
 ## Decision Log
+
+- 2026-08-12: Accepted D5 after the sole command passed interrupted cold/resume,
+  explicit warm no-op, and natural new-watermark production cycles. Added an
+  atomic latest-complete report/cache status consumed by the TUI, proved a
+  failed run cannot replace it, archived the old service unit, and left all
+  scheduling disabled. D6/Phase 4 authority remains separate and blocked.
 
 - 2026-08-12: Accepted D4 after immutable synthetic candidates proved exact
   post-activation selection, registered execution-cap lookup, aligned/shared-

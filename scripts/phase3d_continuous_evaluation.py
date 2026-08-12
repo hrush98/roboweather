@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Append one idempotent C4 scorecard watermark for every active candidate."""
+"""Compatibility-only C4 evaluator; operators use run_discovery.py."""
 
 from __future__ import annotations
 

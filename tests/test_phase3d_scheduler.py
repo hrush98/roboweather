@@ -132,11 +132,17 @@ def test_c6_scheduler_process_lock_is_exclusive(tmp_path: Path) -> None:
                 pass
 
 
-def test_c6_service_is_durable_bounded_and_systemd_owned() -> None:
-    text = (
+def test_c6_service_is_archived_outside_active_systemd_units() -> None:
+    active_path = (
         Path(__file__).resolve().parents[1]
         / "deploy/systemd/roboweather-phase3d-discovery.service"
+    )
+    text = (
+        Path(__file__).resolve().parents[1]
+        / "deploy/systemd/compatibility/roboweather-phase3d-discovery.service"
     ).read_text(encoding="utf-8")
+    assert not active_path.exists()
+    assert "Compatibility archive only" in text
     assert "scripts/run_phase3d_scheduler.py" in text
     assert "Restart=on-failure" in text
     assert "MemoryMax=4G" in text

@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Run deterministic cache-backed Phase 3D discovery.
-
-The command is under D3-D5 implementation.  It is not the accepted operator
-surface until exact existing-candidate evaluation and three manual production
-cycles also pass.
-"""
+"""Run the accepted deterministic cache-backed Phase 3D operator workflow."""
 
 from __future__ import annotations
 

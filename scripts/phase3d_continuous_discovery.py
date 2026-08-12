@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one idempotent Phase 3D recurring discovery cycle."""
+"""Compatibility-only C3 discovery CLI; operators use run_discovery.py."""
 
 from __future__ import annotations
 

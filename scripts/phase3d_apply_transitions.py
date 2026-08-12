@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply one deterministic, research-only Phase 3D C5 role review."""
+"""Compatibility-only C5 transition CLI; operators use run_discovery.py."""
 
 from __future__ import annotations
 
