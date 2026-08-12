@@ -40,6 +40,7 @@ def _start_args(**overrides: object) -> argparse.Namespace:
         "question": "Can another agent resume this work without re-deriving context?",
         "next_action": "Run the lifecycle test.",
         "closure_output": "tests/test_agent_loop.py",
+        "pillar": "execution",
         "priority": "normal",
         "owner": "test-agent",
         "status": "ACTIVE",
@@ -68,7 +69,9 @@ def test_thread_lifecycle_preserves_handoff_and_closed_history(tmp_path: Path) -
     path = start_thread(root, _start_args())
     assert path.name.startswith("T0001-")
     assert discover_threads(root)[0].status == "ACTIVE"
-    assert "T0001-verify-handoff.md" in (root / "board" / "INDEX.md").read_text(encoding="utf-8")
+    index = (root / "board" / "INDEX.md").read_text(encoding="utf-8")
+    assert "T0001-verify-handoff.md" in index
+    assert "| Execution | ACTIVE |" in index
 
     park_thread(
         root,
@@ -101,6 +104,28 @@ def test_thread_lifecycle_preserves_handoff_and_closed_history(tmp_path: Path) -
     assert not path.exists()
     assert "The bounded lifecycle is mechanically resumable" in (root / "board" / "INDEX.md").read_text(encoding="utf-8")
     assert json.loads((root / "agent_loop" / "facts.json").read_text(encoding="utf-8"))["board"]["open"] == 0
+    assert check(root) == []
+
+
+def test_check_requires_pillar_on_open_threads_but_allows_legacy_closed_history(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    refresh(root)
+
+    path = start_thread(root, _start_args())
+    path.write_text(path.read_text(encoding="utf-8").replace("pillar: execution\n", ""), encoding="utf-8")
+    assert any("open thread is missing pillar" in error for error in check(root))
+
+    text = path.read_text(encoding="utf-8").replace("status: ACTIVE", "status: CLOSED")
+    text = text.replace("facts_fingerprint:", "closed: 2026-08-11\nfacts_fingerprint:")
+    text = text.replace("## Current Answer", "## Outcome")
+    text = text.replace("## Next Action\n\nRun the lifecycle test.\n\n", "")
+    text = text.replace("## Closure Output", "## Durable Output")
+    legacy = root / "board" / "closed" / "2026" / path.name
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(text, encoding="utf-8")
+    path.unlink()
+
+    refresh(root)
     assert check(root) == []
 
 

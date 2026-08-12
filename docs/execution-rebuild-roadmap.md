@@ -2,11 +2,20 @@
 
 This is the living roadmap for turning RoboWeather research signals into measurable, fill-conditioned trading evidence. Update this document when phase status, sequencing, or exit gates change. Detailed economic ideas belong in `docs/hypotheses/`; active feature design belongs in `docs/implementation/`.
 
-Last updated: 2026-08-11
+Last updated: 2026-08-12
 
 ## Objective
 
 Establish whether an exact weather signal can be traded through an exact execution tactic at useful size with positive net, settlement-aligned PnL across the observable market lifecycle.
+
+The roadmap is governed by four independently developable evidence pillars:
+
+```text
+net trading edge = information advantage + settlement advantage
+                 + execution advantage - costs and adverse selection
+```
+
+Technical phases remain the dependency map; pillar ownership is the proof map. Every bounded thread declares its primary pillar, while Phase 4 remains a cross-pillar gate for one exact signal, settlement mapping, execution rule, and size.
 
 ```text
 market listing + causal forecast state
@@ -29,7 +38,7 @@ The Phase 3 market-tape recorder has retained policy-independent data since July
 
 Phase 3D has completed D0-D5 for the versioned causal checkpoint execution contract. The production cache passed cold, direct-replay, crash-resume, warm, relevant-increment, and resource gates; the cache-only grid passed chronological folds, pre-holdout family collapse, four-state reporting, and deterministic output; and exact candidate evaluation is immutable, activation-bounded, aligned/cap-aware, and promotion-fail-closed. `scripts/run_discovery.py` is now the sole operator command. Its final production acceptance passed interrupted cold/resume in 40.05 seconds, an explicit zero-replay warm cycle in 7.07 seconds, and a natural new-watermark cycle in 7.10 seconds. The TUI reads an atomically published latest-complete report/cache record, and a deliberately failed run left that record byte-identical. Research and tape remain active; the old service remains inactive/disabled and its source is archived outside active systemd units. No replacement scheduler is enabled. Production contains no registered candidate versions and no strategy passed the latest holdout, so the separate D6/Phase 4 gate remains blocked on exact venue, markout, economics, concentration, size, and human-approval evidence.
 
-A full-market-lifecycle forecast/data program is approved as a parallel research build. It extends collection to first listing and builds one continuously updating pricing and inventory engine with separately validated D-1, early-day, intraday, and late information states. It does not change the current critical path: the bounded late Price Sheet V2a pilot remains first, with earlier lifecycle regions progressively enabled after their forecast, tape, inventory, and execution gates pass. Funded trading remains paused.
+A full-market-lifecycle forecast/data program is approved as a parallel research build. It extends collection to first listing and builds one continuously updating pricing and inventory engine with separately validated D-1, early-day, intraday, and late information states. With the execution substrate accepted and the wide causal holdout producing zero survivors, the next research capacity goes to F0 settlement truth and F0B information-edge evaluation. Price Sheet V2 remains the later costs/adverse-selection integration path for any accepted signal. Funded trading remains paused.
 
 Canonical records:
 
@@ -59,7 +68,7 @@ Canonical records:
 
 ## Price Sheet V2 Workstreams
 
-1. V2a outcome pricing is the immediate critical path:
+1. V2a outcome pricing is the costs/adverse-selection integration path after settlement and information evidence produces an eligible signal:
    - freeze the initial late HRRR signal definitions (complete);
    - build causal fit and evaluation datasets (complete, including current remote DB smoke);
    - run expanding-window calibration with a decision-time market reference (complete; fitted baselines did not beat market);

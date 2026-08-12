@@ -1,8 +1,24 @@
 # Project Overview
 
-RoboWeather is a research-first weather prediction-market system. The current priority is determining whether promising forecast signals can be converted into positive fill-conditioned PnL through causal market-data collection, conservative pricing, and controlled execution evidence.
+RoboWeather is a research-first weather prediction-market system organized around four sources of net trading edge: information advantage, settlement advantage, execution advantage, and costs/adverse selection. Existing plans remain in their current locations; hypotheses and bounded board threads declare which pillar they advance.
 
-Last reviewed: 2026-08-11
+Last reviewed: 2026-08-12
+
+## Edge Pillars
+
+```text
+net trading edge = information advantage + settlement advantage
+                 + execution advantage - costs and adverse selection
+```
+
+| Pillar | Canonical work |
+| --- | --- |
+| Information | Forecast-edge data program, causal strategy discovery, probability calibration, and market-relative skill. |
+| Settlement | Venue-resolution provenance, source/sensor reconciliation, contract mapping, and settlement-compatible high-so-far. |
+| Execution | Shared market tape, causal decision replay, quote timing, fills, cancellations, inventory, and markouts. |
+| Costs and adverse selection | Price reserves, fees, spread/slippage, toxicity, capacity, concentration, and net useful-size economics. |
+
+These are independent development verticals but a joint promotion contract. Infrastructure completion is not proof of advantage, and no single pillar authorizes funded trading by itself.
 
 ## Documentation Map
 
@@ -11,6 +27,7 @@ Use these documents as the canonical entry points:
 | Question | Canonical document |
 | --- | --- |
 | What direction and authority has the human approved? | `agent_loop/STATE.md` |
+| Which edge pillar does current work advance? | Generated `board/INDEX.md`, then the selected pillar-tagged thread |
 | What do the repository and runtime report now? | Generated `agent_loop/facts.json` |
 | What bounded work is active, parked, or waiting? | Generated `board/INDEX.md`, then the selected thread |
 | What concepts, failures, and design intuition can I revisit? | Generated `learning/INDEX.md`, then the selected learning card |

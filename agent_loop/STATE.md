@@ -1,21 +1,37 @@
 # Agent Loop State
 
-Last reviewed: 2026-08-11
-Human approval: initial coordination layer and corrected deterministic-discovery direction approved on 2026-08-11; later strategic changes require human approval.
+Last reviewed: 2026-08-12
+Human approval: initial coordination layer and corrected deterministic-discovery direction approved on 2026-08-11; four-pillar edge governance approved on 2026-08-12; later strategic changes require human approval.
 
 ## Current Verdict
 
-RoboWeather remains an execution-first research system with funded trading paused. The shared market tape is a valid research substrate, but the current Phase 3D multi-command scheduler is operationally unhealthy and is no longer the operator-facing discovery path. Promotion still requires an exact candidate version with venue-authoritative settlement, valid markouts, causal tape coverage, conservative positive economics, concentration controls, and controlled useful-size evidence.
+RoboWeather is a four-pillar net-edge research system with funded trading paused. The shared market tape and deterministic discovery path are valid research substrates, but no pillar has yet produced sufficiently robust forward profitability. Promotion still requires an exact candidate version with venue-authoritative settlement, valid markouts, causal tape coverage, conservative positive economics, concentration controls, and controlled useful-size evidence.
 
 The authoritative financial and systems assessment remains `docs/current-trading-system-audit.md`. This file is a compact orientation layer, not a replacement for that audit.
 
+## Four-Pillar Edge Governance
+
+```text
+net trading edge = information advantage + settlement advantage
+                 + execution advantage - costs and adverse selection
+```
+
+| Pillar | Proof target | Current direction |
+| --- | --- | --- |
+| Information | A causal outcome estimate or deterministic signal that beats the contemporaneous executable market on untouched data. | Treat the zero-survivor broad causal holdout as negative evidence, repair target/evaluation truth, then test genuinely distinct forecast information. |
+| Settlement | More accurate contract-resolution mapping or faster settlement-compatible truth than the market. | Reconcile venue, Weather Underground, CLI, IEM, and high-frequency ASOS before trusting labels or high-so-far rules. |
+| Execution | Better conversion of a valid fair into filled PnL through timing, price, quoting, cancellation, and inventory behavior. | Preserve causal tape/replay and require actual markout/fill evidence; working plumbing is not yet a proven advantage. |
+| Costs and adverse selection | Positive net economics after fees, spread, slippage, toxicity, capacity, and concentration. | Keep reserves explicit and prove fill-conditioned useful-size economics before promotion. |
+
+The pillars may progress independently, but funded promotion is an integrated gate: strength in one pillar cannot silently compensate for missing evidence in another. Every new board thread declares one primary pillar. `cross-pillar` is reserved for integration or governance and creates no additional source of edge. Existing plans remain where they are.
+
 ## Critical Path
 
-1. Keep policy-neutral snapshot, tape, and outcome collection healthy.
-2. Build and validate the incremental executable-decision cache at production scale.
-3. Deliver one deterministic command that runs historical discovery, untouched holdout, and exact post-activation candidate evaluation into one report.
-4. Add scheduling only after cold/resume, warm no-op, and new-data manual cycles pass; do not revive hard-coded portfolios or treat failed analysis as no nomination.
-5. Package a Phase 4 request only after the D6 gates in `docs/implementation/tape-strategy-discovery.md` pass.
+1. Keep policy-neutral snapshot, tape, outcome, and settlement evidence collection healthy.
+2. Preserve the completed bounded deterministic discovery and immutable-candidate path. Its wide untouched holdout produced zero survivors; do not keep widening the grammar without a new causal mechanism.
+3. Shift new research capacity toward settlement truth and honest information-edge evaluation through the F0/F0B queue in `docs/implementation/forecast-edge-data-program.md`.
+4. Integrate any surviving signal through separately versioned pricing, execution, cost, adverse-selection, concentration, and useful-size gates.
+5. Package a Phase 4 request only after all four pillars pass for one exact candidate and the D6 gates in `docs/implementation/tape-strategy-discovery.md` pass.
 
 ## Approved Parallel Work
 

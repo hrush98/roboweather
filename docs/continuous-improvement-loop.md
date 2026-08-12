@@ -4,7 +4,7 @@ This document defines the closed-loop process for improving RoboWeather trading 
 
 The goal is recursive improvement: every meaningful live or research lesson should either become a better hypothesis, a better replay, a better gate, or a better operating rule.
 
-Last updated: 2026-08-11
+Last updated: 2026-08-12
 
 ## Storage Model
 
@@ -29,6 +29,26 @@ Do not put every hypothesis directly into the live trading journal. The journal 
 Do not create a new one-off narrative audit for every review. Update the living audit and preserve detailed tables in a report or script. When an approved hypothesis becomes a build, keep its economic rationale in the hypothesis and move its engineering plan to `docs/implementation/`.
 
 The coordination layer is temporal, not another source of research conclusions. `STATE.md` orients the agent, generated facts report machine truth, and board threads preserve unfinished work. Learning cards preserve what the human wants to understand and revisit. Settled financial or architectural conclusions still belong in the canonical documents above.
+
+## Four-Pillar Edge Governance
+
+All substantive work must advance and measure at least one component of:
+
+```text
+net trading edge = information advantage + settlement advantage
+                 + execution advantage - costs and adverse selection
+```
+
+| Primary pillar | Question it must answer | Existing canonical routes |
+| --- | --- | --- |
+| Information | Do we know something about the outcome or price response that the executable market does not already price correctly? | `docs/implementation/forecast-edge-data-program.md`; `docs/implementation/tape-strategy-discovery.md` |
+| Settlement | Do we map the exact contract-resolution source and rules more accurately or sooner than the market? | Forecast-edge F0 truth audit; settlement provenance and resolver evidence in the living audit |
+| Execution | Can we convert a valid fair into fills with better timing, pricing, cancellation, or inventory behavior? | `docs/implementation/phase-3-market-tape-replay.md`; `docs/implementation/full-market-lifecycle-trading.md` |
+| Costs and adverse selection | Is the result still positive after fees, spread, slippage, toxicity, capacity, concentration, and uncertainty reserves? | `docs/implementation/price-sheet-v2.md`; Phase 4 promotion gates |
+
+Every new board thread declares one primary pillar. A hypothesis record declares its primary pillar and may name supporting pillars. Use `cross-pillar` only for an end-to-end integration gate or governance change whose output genuinely changes multiple pillars; it is not a fifth pillar and must not hide an unbounded question. Close a thread with a pillar-scoped answer. Do not claim that working infrastructure proves an advantage.
+
+The pillars can develop independently. Promotion cannot: the exact signal, settlement mapping, execution rule, and size must clear the combined net-economic gate on the same causal evidence contract.
 
 ## Improvement Loop
 
@@ -234,17 +254,15 @@ Use this mapping:
 
 ## Current Improvement Backlog
 
-| EV lever | Item | Status |
+| Primary pillar | Item | Status |
 | --- | --- | --- |
-| System governance | Living audit and execution roadmap | Implemented in `docs/current-trading-system-audit.md` and `docs/execution-rebuild-roadmap.md`. |
-| Policy selection | Cap-aware portfolio replay gate | Implemented in `scripts/portfolio_promotion_report.py`. |
-| Forecast edge | Freeze late HRRR-rich tuned dynamic and HRRR-v2 dynamic definitions | Forward shadow hypotheses only; six-date evidence is not promotion evidence. |
-| Calibration | [Price Sheet V2a/V2b](implementation/price-sheet-v2.md) | V2a is the current implementation priority; V2b consumes validated tape windows. |
-| Execution data | [Shared weather market tape](hypotheses/2026-07-16-shared-weather-market-tape.md) | Collector reported running; acceptance/replay evidence continues under `docs/implementation/phase-3-market-tape-replay.md`. |
-| Execution truth | Correct fill, queue, cancellation, gap, and markout labels | Required in Phase 3 before using shadow outcomes as financial evidence. |
-| Funded validation | Plumbing canary, then `$50/$100` capacity tests | Blocked on Phase 3 and revised price-sheet gates. |
-| Portfolio risk | Market-date/regime concentration controls | Needed before normal sizing. |
-| Retrospective automation | `scripts/trading_retrospective_report.py` | Implemented for manual Sunday/Monday weekly review. |
+| Cross-pillar governance | Living audit and execution roadmap | Implemented in `docs/current-trading-system-audit.md` and `docs/execution-rebuild-roadmap.md`. |
+| Information | Cap-aware policy selection and causal discovery | Implemented as research gates; no robust exact candidate has passed. |
+| Information | Forecast-edge F0B and distinct-source program | Ready behind target/evaluation truth; existing fairs remain overconfident. |
+| Settlement | Forecast-edge F0 venue/source/sensor truth audit | Ready and prioritized before trusting training or resolution labels. |
+| Execution | Shared market tape, exact replay, fill/queue/cancellation/markout truth | Tape substrate accepted; fill-conditioned execution advantage remains unproven. |
+| Costs and adverse selection | [Price Sheet V2a/V2b](implementation/price-sheet-v2.md), useful-size capacity, and concentration | Research-only; combined net economics have not passed. |
+| Cross-pillar governance | `scripts/trading_retrospective_report.py` | Implemented for manual Sunday/Monday weekly review. |
 
 ## Closing A Hypothesis
 

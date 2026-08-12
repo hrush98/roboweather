@@ -30,6 +30,12 @@ Examples:
 
 Proposed | Research | Canary | Live | Rejected | Superseded | Closed
 
+## Edge Pillar
+
+- Primary: Information | Settlement | Execution | Costs and adverse selection
+- Supporting: None | one or more other pillars
+- Net-edge term expected to change:
+
 ## Hypothesis
 
 State the expected EV mechanism in one or two sentences.

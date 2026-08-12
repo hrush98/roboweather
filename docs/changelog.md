@@ -4,6 +4,14 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-12
 
+- Adopted four-pillar net-edge governance without reorganizing the
+  documentation tree. New work must identify information, settlement,
+  execution, or costs/adverse-selection as its primary proof target; generated
+  board views expose that ownership, while `cross-pillar` is reserved for
+  integration and governance. Updated the project state, audit, roadmap,
+  overview, improvement loop, hypothesis template, thread tooling, and workflow
+  skills. Funded authority did not change.
+
 - Fixed the Phase 3D emerged-strategy path that production's zero-survivor run
   had not exercised. Historical wildcard strategy-bucket, minimum-edge, and
   maximum-spread predicates now freeze losslessly into immutable candidates;
@@ -11,6 +19,14 @@ Keep this file up to date for notable data, model, and trading changes.
   atomically registers the completed run and bounded research-only candidates
   only after report artifacts succeed. Added end-to-end coverage for identity
   reuse, exact post-activation evaluation, and rollback without partial rows.
+
+- Added a just-in-time execution queue to the forecast-edge implementation
+  plan. A future session told to continue that named plan now resumes its
+  linked open thread or starts exactly one first-eligible slice, while blocked
+  and gated work remains documented rather than pre-opened on the board. Added
+  baseline/evaluation repair before new-source comparison and explicit evidence
+  gates for local water-temperature and RONI research. No pricing, funded, or
+  execution authority changed.
 
 - Completed Phase 3D D5 operator cutover. `scripts/run_discovery.py` is the
   sole discovery command and atomically publishes the latest complete report,

@@ -6,7 +6,7 @@ description: Park or wait a RoboWeather board thread with a concise current answ
 # Park Thread
 
 1. Do not park a vague status report. Record the best current answer and its uncertainty.
-2. Cite exact files, commands, commits, database watermarks, or observed failures as repeatable evidence.
+2. Cite exact files, commands, commits, database watermarks, or observed failures as repeatable evidence for the thread's declared edge pillar. Do not imply progress in another pillar without its own evidence.
 3. Choose `PARKED` when work can resume immediately or `WAITING` when an external condition must change.
 4. Provide exactly one next action that another agent can execute without reconstructing the session.
 5. Run:

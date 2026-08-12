@@ -1,23 +1,30 @@
 {
   "board": {
     "active": 0,
-    "closed": 7,
+    "closed": 13,
     "open": 0,
     "parked": 0,
+    "pillars": {
+      "costs-adverse-selection": 0,
+      "cross-pillar": 0,
+      "execution": 0,
+      "information": 0,
+      "settlement": 0
+    },
     "waiting": 0
   },
   "documents": {
     "audit": {
       "available": true,
       "path": "docs/current-trading-system-audit.md",
-      "review_date": "2026-08-11",
-      "word_count": 4505
+      "review_date": "2026-08-12",
+      "word_count": 4935
     },
     "improvement_loop": {
       "available": true,
       "path": "docs/continuous-improvement-loop.md",
-      "review_date": "2026-08-11",
-      "word_count": 2187
+      "review_date": "2026-08-12",
+      "word_count": 2414
     },
     "live_journal": {
       "available": true,
@@ -27,28 +34,28 @@
     "project_overview": {
       "available": true,
       "path": "docs/project-overview.md",
-      "review_date": "2026-08-11",
-      "word_count": 1125
+      "review_date": "2026-08-12",
+      "word_count": 1272
     },
     "roadmap": {
       "available": true,
       "path": "docs/execution-rebuild-roadmap.md",
-      "review_date": "2026-08-11",
-      "word_count": 2164
+      "review_date": "2026-08-12",
+      "word_count": 2245
     },
     "state": {
       "available": true,
       "path": "agent_loop/STATE.md",
-      "review_date": "2026-08-11",
-      "word_count": 652
+      "review_date": "2026-08-12",
+      "word_count": 900
     }
   },
-  "facts_fingerprint": "f3fe67e3e8c265b798d6253b555d0b34fac368c95678d282e9329c2f0649da27",
-  "generated_at": "2026-08-12T00:27:24Z",
+  "facts_fingerprint": "3430c93838d11a009f135d7b714ae2d8125296077d8043ef58abbb21d22d6327",
+  "generated_at": "2026-08-12T03:22:11Z",
   "learning": {
-    "captured": 3,
+    "captured": 7,
     "integrated": 0,
-    "open": 4,
+    "open": 8,
     "overdue": 0,
     "revisit": 1,
     "superseded": 0
@@ -60,7 +67,7 @@
     },
     "head": {
       "available": true,
-      "value": "69b026d18a6c2d83ea8ab2f12011aad8ffd391b9"
+      "value": "34e087722d55de8cc5d2a15726820e1fc11d4518"
     },
     "root": "/home/hmrush/Desktop/personal/roboweather"
   },

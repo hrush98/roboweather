@@ -4,11 +4,11 @@ This is the living financial and systems audit for RoboWeather. Update this docu
 
 Generated or ad hoc analysis may live under `reports/`, but durable conclusions, open risks, and decisions belong here. The current implementation sequence belongs in `docs/execution-rebuild-roadmap.md`; funded operating state belongs in `docs/live-trading-journal.md`.
 
-Last reviewed: 2026-08-11
+Last reviewed: 2026-08-12
 
 ## Current Verdict
 
-RoboWeather is an execution-first research system with funded trading paused. The immediate objective is to determine whether promising weather signals can be converted into positive fill-conditioned PnL at useful size. A parallel forecast-edge and full-market-lifecycle research track is now approved because the fresh configured portfolio failed before execution, broad recent model fairs were overconfident, and waiting until late intraday may forfeit earlier liquidity and price-discovery opportunities.
+RoboWeather is a four-pillar net-edge research system with funded trading paused. The project develops information, settlement, execution, and costs/adverse-selection evidence as distinct verticals, then requires them to pass together for one exact signal, rule, and size. The immediate research emphasis is settlement truth and information edge while accepted tape, replay, pricing, and cost-measurement substrates continue collecting evidence. A parallel full-market-lifecycle track remains approved because the fresh configured portfolio failed before execution, broad recent model fairs were overconfident, and waiting until late intraday may forfeit earlier liquidity and price-discovery opportunities.
 
 The shared weather market tape contains retained data from July 23 onward and supports exact quote-ready taker-book replay. Bounded validation run `tape-validation-20260730T183750Z-69556cbf` completed its 72-hour limit with 224.6 million events, 1,273 complete discovery refreshes, zero reconstruction errors, queue high-water 1/10,000, about 234 MiB peak recorder RSS, and projected raw growth of about 12.0 GB/day. Eligible tokens were `VALID` for about 96.7% of their observed lifetimes. The remaining gaps and late initial discovery are accepted as research-infrastructure limitations rather than a strategy-discovery blocker. Exact decision replay still rejects any signal whose pre-signal-through-execution window crosses a gap, so missing tape is never silently bridged. The likely missing application heartbeat, reconnect-path rediscovery delay, and incomplete per-event discovery reporting remain non-critical technical debt; another lifecycle run is not required before strategy discovery proceeds. The tape can remove policy-specific collection bias, but it does not prove exact passive fills, settlement-aligned PnL, capacity, or funded readiness.
 
@@ -19,6 +19,22 @@ Policy-neutral causal strategy discovery remains a required Phase 3D gate. The i
 The corrected Phase 3D path has now passed D0-D5 for a versioned delayed-checkpoint taker counterfactual. The cache passed production cold, 200/200 direct-replay, crash-resume, warm, relevant-increment, and resource gates. The bounded grid runs only from cached decisions, freezes correlated families before holdout access, and distinguishes every complete/incomplete/failed state. Exact candidate evaluation preserves registry identity and activation, uses registered execution caps, applies aligned/shared-cap comparisons, and keeps weather diagnostics distinct from unavailable venue/markout/order evidence. A same-day audit found that the production zero-survivor result had hidden a missing emerged-strategy bridge: historical wildcard-bucket, edge, and spread predicates could not be frozen losslessly and the command never wrote candidates. That bridge now seals an exact future-activated identity in the report and atomically appends the completed run and surviving candidates only after report success; end-to-end tests prove exact post-activation evaluation and all-or-nothing failure. `scripts/run_discovery.py` remains the sole operator command. Its final production acceptance passed interrupted cold/resume in 40.05 seconds at about 799 MiB RSS, a 7.07-second explicit zero-work warm cycle, and a 7.10-second natural new-watermark cycle. It atomically publishes latest-complete report/cache status to the TUI; a failed invocation left the prior record byte-identical. Production has zero registered versions and the latest historical holdout still reports no emerged strategy, so no candidate passed. The old scheduler remains inactive/disabled, its unit is archived, and no replacement scheduler is enabled.
 
 Causal coverage, gap rejection, immutable candidate definitions, chronological validation, weather-versus-venue provenance, markout requirements, and separate Phase 4 approval remain unchanged. Current venue-resolution and fill-conditioned markout evidence is still insufficient, so no result can pass to Phase 4.
+
+## Four-Pillar Edge Scorecard
+
+```text
+net trading edge = information advantage + settlement advantage
+                 + execution advantage - costs and adverse selection
+```
+
+| Pillar | Current assessment | Next proof |
+| --- | --- | --- |
+| Information | Unproven. Current fairs are overconfident versus outcomes and the contemporaneous market; the maximally broad finite causal search produced zero survivors on its untouched August 7-11 holdout. | Treat further grammar widening as unjustified without a new mechanism, repair the baseline/evaluation contract, and accept new forecast sources only for identical-row market-relative skill on untouched dates. |
+| Settlement | Unresolved. Research labels use IEM maxima while active contracts reference Weather Underground and venue settlement can change at a one-degree boundary. | Execute the F0 truth audit and freeze venue-authoritative provenance or a tested versioned mapping. |
+| Execution | The causal tape, decision cache, and replay substrate work; an execution advantage is not proven. | Show non-toxic markouts and positive actual or conservative fill-conditioned economics for one exact quote/cancel/inventory rule. |
+| Costs and adverse selection | Partially measurable but not cleared. Price reserves and depth diagnostics exist; useful-size fills, toxicity, capacity, and concentration remain open. | Demonstrate positive net EV after all explicit costs and reserves at the intended size. |
+
+Pillar status is evidence status, not implementation status. Completion of a collector, model, replay, or order path does not by itself improve this scorecard.
 
 Current confidence by layer:
 
@@ -157,6 +173,12 @@ Small funded orders may validate plumbing and replay fidelity, but they confer n
 Update the body of this document when the current assessment changes. Append one short entry below describing the evidence that caused the change; keep detailed generated tables in reproducible reports or scripts.
 
 ## Audit Log
+
+- 2026-08-12: Adopted four-pillar net-edge governance across information,
+  settlement, execution, and costs/adverse selection. Existing plans remain in
+  place, new work is pillar-tagged, and promotion remains a combined gate. This
+  changes project prioritization and attribution, not funded authority or the
+  underlying evidence verdict.
 
 - 2026-08-12: Corrected the high-severity emerged-path gap found by the D0-D5
   audit. D3 wildcard-bucket, edge, and spread predicates now map losslessly to

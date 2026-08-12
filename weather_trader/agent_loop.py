@@ -26,6 +26,20 @@ ALL_STATUSES = OPEN_STATUSES | {"CLOSED"}
 MAX_OPEN_THREADS = 7
 MAX_ACTIVE_THREADS = 3
 STATE_WORD_LIMIT = 1500
+EDGE_PILLARS = (
+    "information",
+    "settlement",
+    "execution",
+    "costs-adverse-selection",
+    "cross-pillar",
+)
+EDGE_PILLAR_LABELS = {
+    "information": "Information",
+    "settlement": "Settlement",
+    "execution": "Execution",
+    "costs-adverse-selection": "Costs & adverse selection",
+    "cross-pillar": "Cross-pillar",
+}
 REQUIRED_SECTIONS = (
     "Question",
     "Current Answer",
@@ -159,11 +173,24 @@ def parse_thread(path: Path) -> ThreadRecord:
         raise AgentLoopError(f"{path}: missing metadata: {', '.join(missing)}")
     if metadata["status"] not in ALL_STATUSES:
         raise AgentLoopError(f"{path}: invalid status {metadata['status']}")
+    if "pillar" in metadata and metadata["pillar"] not in EDGE_PILLARS:
+        raise AgentLoopError(f"{path}: invalid pillar {metadata['pillar']}")
     return ThreadRecord(path=path, metadata=metadata, body=body)
 
 
 def render_thread(metadata: dict[str, str], body: str) -> str:
-    ordered = ("id", "title", "status", "priority", "owner", "opened", "last_touched", "facts_fingerprint", "closed")
+    ordered = (
+        "id",
+        "title",
+        "status",
+        "pillar",
+        "priority",
+        "owner",
+        "opened",
+        "last_touched",
+        "facts_fingerprint",
+        "closed",
+    )
     lines = ["---"]
     for key in ordered:
         if key in metadata:
@@ -238,6 +265,10 @@ def collect_facts(root: Path, now: datetime | None = None) -> dict[str, object]:
         warnings.append(str(exc))
     counts = {status.lower(): sum(record.status == status for record in records) for status in ALL_STATUSES}
     counts["open"] = sum(record.status in OPEN_STATUSES for record in records)
+    counts["pillars"] = {
+        pillar: sum(record.status in OPEN_STATUSES and record.metadata.get("pillar") == pillar for record in records)
+        for pillar in EDGE_PILLARS
+    }
 
     runtime_root = Path("/home/maxrush/.local/state/roboweather")
     research_db = runtime_root / "research_2026-05-08_multimodel.sqlite"
@@ -316,8 +347,8 @@ def render_index(records: Iterable[ThreadRecord], generated_at: str) -> str:
         "",
         "## Open Threads",
         "",
-        "| ID | Status | Priority | Question | Next action | Last touched |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| ID | Pillar | Status | Priority | Question | Next action | Last touched |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     if open_records:
         for record in open_records:
@@ -325,23 +356,47 @@ def render_index(records: Iterable[ThreadRecord], generated_at: str) -> str:
             question = sections.get("Question", "").replace("\n", " ")
             next_action = sections.get("Next Action", "").replace("\n", " ")
             rel = Path(record.path.name)
+            pillar = EDGE_PILLAR_LABELS.get(record.metadata.get("pillar", ""), "Legacy/unassigned")
             lines.append(
-                f"| [{record.thread_id}]({rel.as_posix()}) | {record.status} | {record.metadata['priority']} | "
+                f"| [{record.thread_id}]({rel.as_posix()}) | {pillar} | {record.status} | {record.metadata['priority']} | "
                 f"{question} | {next_action} | {record.metadata['last_touched']} |"
             )
     else:
-        lines.append("| — | — | — | No open threads. | — | — |")
-    lines.extend(("", "## Recently Closed", "", "| ID | Result | Durable output | Closed |", "| --- | --- | --- | --- |"))
+        lines.append("| — | — | — | — | No open threads. | — | — |")
+    lines.extend(
+        (
+            "",
+            "## Recently Closed",
+            "",
+            "| ID | Pillar | Result | Durable output | Closed |",
+            "| --- | --- | --- | --- | --- |",
+        )
+    )
     if closed_records:
         for record in closed_records[:20]:
             sections = section_map(record.body)
             outcome = sections.get("Outcome", "").replace("\n", " ")
             durable = sections.get("Durable Output", "").replace("\n", " ")
             rel = Path("closed") / record.metadata["closed"][:4] / record.path.name
-            lines.append(f"| [{record.thread_id}]({rel.as_posix()}) | {outcome} | {durable} | {record.metadata['closed']} |")
+            pillar = EDGE_PILLAR_LABELS.get(record.metadata.get("pillar", ""), "Legacy/unassigned")
+            lines.append(
+                f"| [{record.thread_id}]({rel.as_posix()}) | {pillar} | {outcome} | {durable} | "
+                f"{record.metadata['closed']} |"
+            )
     else:
-        lines.append("| — | — | — | — |")
-    lines.extend(("", "## Rules", "", f"- Maximum {MAX_OPEN_THREADS} open threads and {MAX_ACTIVE_THREADS} active threads.", "- One question and exactly one next action per thread.", "- Use the lifecycle skills or `scripts/agent_loop.py`; never hand-edit this index.", ""))
+        lines.append("| — | — | — | — | — |")
+    lines.extend(
+        (
+            "",
+            "## Rules",
+            "",
+            f"- Maximum {MAX_OPEN_THREADS} open threads and {MAX_ACTIVE_THREADS} active threads.",
+            "- One question, one primary edge pillar, and exactly one next action per thread.",
+            "- `cross-pillar` is reserved for integration gates and project governance; it is not a fifth source of edge.",
+            "- Use the lifecycle skills or `scripts/agent_loop.py`; never hand-edit this index.",
+            "",
+        )
+    )
     return "\n".join(lines)
 
 
@@ -387,6 +442,7 @@ def start_thread(root: Path, args: argparse.Namespace) -> Path:
         "id": thread_id,
         "title": args.title.strip(),
         "status": args.status,
+        "pillar": args.pillar,
         "priority": args.priority,
         "owner": args.owner,
         "opened": today(),
@@ -480,6 +536,7 @@ def resume_thread(root: Path, args: argparse.Namespace) -> str:
     return "\n".join(
         (
             f"Thread: {record.thread_id} — {record.metadata['title']}",
+            f"Pillar: {EDGE_PILLAR_LABELS.get(record.metadata.get('pillar', ''), 'Legacy/unassigned')}",
             f"Facts since park: {changed}",
             f"Question: {sections['Question']}",
             f"Current answer: {sections['Current Answer']}",
@@ -578,6 +635,8 @@ def check(root: Path) -> list[str]:
         for section in required:
             if not sections.get(section, "").strip():
                 errors.append(f"{record.path}: missing or empty section {section}")
+        if record.status in OPEN_STATUSES and not record.metadata.get("pillar"):
+            errors.append(f"{record.path}: open thread is missing pillar")
         question = re.sub(r"\s+", " ", sections.get("Question", "").strip().lower())
         if record.status in OPEN_STATUSES and question:
             if question in questions:
@@ -603,6 +662,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--question", required=True)
     start.add_argument("--next-action", required=True)
     start.add_argument("--closure-output", required=True)
+    start.add_argument("--pillar", choices=EDGE_PILLARS, required=True)
     start.add_argument("--priority", choices=("critical", "high", "normal", "low"), default="normal")
     start.add_argument("--owner", default="unassigned")
     start.add_argument("--status", choices=("ACTIVE", "PARKED", "WAITING"), default="ACTIVE")

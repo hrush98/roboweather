@@ -5,7 +5,7 @@ description: Close a RoboWeather board thread after its question is answered, na
 
 # Close Thread
 
-1. Verify that the thread's single question has a defensible answer.
+1. Verify that the thread's single question has a defensible, pillar-scoped answer. State what was or was not proved for that pillar without treating infrastructure completion as edge.
 2. Produce or update the named closure output before closing. A valid output may be code and tests, a canonical document update, a dated reference, or an explicit no-change verdict.
 3. Ask whether the work revealed a transferable concept, failure mechanism, experience, or design intuition. If so, use `$capture-learning` and link this thread.
 4. Update `docs/current-trading-system-audit.md`, the roadmap, live journal, and changelog only when their documented triggers apply.

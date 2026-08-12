@@ -2,7 +2,7 @@
 
 Status: Approved for research implementation; not approved for production pricing or funded trading
 
-Last updated: 2026-07-17
+Last updated: 2026-08-12
 
 ## Feature Goal
 
@@ -388,13 +388,111 @@ A candidate forecast version may be proposed to Price Sheet V2 only when:
 
 Passing this gate authorizes pricing research only. It does not authorize live funding, sizing, or execution changes.
 
+## Explicit Execution Queue
+
+This queue is the durable backlog for the forecast-edge program. It preserves
+future work without creating board threads before the work begins. The board
+owns volatile execution state; this table owns slice order, dependencies,
+launch questions, and closure outputs.
+
+Queue states have these meanings:
+
+- `READY`: dependencies are settled and a continuation session may start the
+  slice.
+- `IN_PROGRESS`: one open board thread owns the slice.
+- `BLOCKED`: a named predecessor or required artifact is unresolved.
+- `GATED`: do not start until the row's evidence condition is met.
+- `COMPLETE`: the closure output passed the slice gate.
+- `REJECTED`: the question was answered defensibly but the proposed source or
+  model failed its gate. Rejection is a valid completed investigation.
+- `SUPERSEDED`: a later contract replaced this slice before or after execution.
+
+| ID | Pillar | State | Depends on | Thread-launch question | Named closure output | Thread |
+| --- | --- | --- | --- | --- | --- | --- |
+| F0 | Settlement | READY | — | Do IEM, Weather Underground, CLI, high-frequency ASOS, and venue settlement agree sufficiently to define the US high-temperature training target and exact high-so-far? | Reproducible truth-audit command/report, station mismatch table, and canonical target/backfill decision. | — |
+| F0B | Information | READY | — | What is the smallest genuinely distinct current forecast baseline, and can it be scored without outcome-conditioned ladders or correlated-row inflation? | Prediction-correlation/pruning report and frozen fixed-support, weather-date-aware evaluation contract. | — |
+| F1 | Information | BLOCKED | F0 settled | Can WeatherNext, NBM, HRRR/RRFS, and observation vintages be collected and replayed from their actual causal availability times? | Source-vintage contracts, separate runtime catalog/cache, bounded collectors, tests, and coverage report. | — |
+| F2 | Information | BLOCKED | F0, F0B, F1 settled | Does WeatherNext 2 or NBM add held-out probability skill beyond the minimal HRRR-rich baseline and contemporaneous market on identical rows? | WeatherNext/NBM identical-coverage and market-relative benchmark with a source acceptance or rejection verdict. | — |
+| F3 | Information | BLOCKED | F0 and F0B settled | Does a peak-passed plus conditional-additional-heating distribution outperform the frozen absolute/bucket baseline? | Coherent remaining-heating model, chronological ablation report, and acceptance or rejection verdict. | — |
+| F4 | Information | BLOCKED | F3 settled | Do frozen high-frequency upwind station residuals add information beyond target-station observations and model point features? | MADIS/ASOS spatial residual implementation and controlled ablation. | — |
+| F5 | Information | BLOCKED | F3 settled | Does causally observed cloud/radiation surprise add broad or predeclared cloud-regime skill? | GOES heating-surprise implementation and controlled ablation. | — |
+| F5A | Information | GATED | F4 or other frozen evidence identifies a coastal residual mechanism | Does local sea, bay, or lake temperature improve the affected coastal or lake-regime forecast after core sources are known? | Local-water-temperature causal dataset and predeclared regime ablation. | — |
+| F5B | Information | GATED | Long-history causal corpus spans multiple ENSO events and F0B evaluation is available | Does vintage-correct RONI improve seasonal D-1 calibration after forecast-model information is known? | RONI/ENSO incremental calibration ablation or explicit no-change verdict. | — |
+| F6 | Cross-pillar | BLOCKED | At least one forecast version from F2-F5 is accepted | Does one frozen forecast version pass Price Sheet V2 selected, quoted-price, market-relative, and tape-backed research gates at one lifecycle horizon? | Versioned Price Sheet V2 candidate report and pricing-research acceptance or rejection verdict. | — |
+
+`Settled` means the predecessor thread closed with `COMPLETE`, `REJECTED`, or
+an explicit no-change answer that resolves the dependency. It does not mean a
+source passed. A downstream row that requires an accepted artifact remains
+blocked when its predecessor was rejected; F6 is the explicit example.
+
+## Threading And Continuation Rules
+
+The operator may start a new session with a request such as:
+
+```text
+Continue executing docs/implementation/forecast-edge-data-program.md.
+```
+
+The agent must then apply this selection algorithm:
+
+1. Complete the repository's fixed orientation read through
+   `board/INDEX.md`.
+2. Search open board threads for a canonical-plan reference to this file and
+   an `F*` queue ID.
+3. If a linked `ACTIVE` thread exists, resume the earliest queue row with an
+   actionable next action. Do not create another thread for the same slice.
+4. Otherwise, resume a linked `PARKED` or `WAITING` thread only when its exact
+   recorded unblock condition is now satisfied.
+5. If no linked thread is resumable, inspect this queue from top to bottom and
+   select the first `READY` row whose dependencies are demonstrably settled.
+6. Start exactly one board thread with `$start-thread`, using the queue row's
+   pillar as its `--pillar` value. Its question and closure output must preserve
+   the queue row's meaning while narrowing the immediate work. Add these lines
+   to the new thread's evidence section:
+
+   ```text
+   - Canonical plan: docs/implementation/forecast-edge-data-program.md
+   - Queue slice: F#
+   ```
+
+7. In the same change, mark the selected row `IN_PROGRESS` and link its
+   `T####`. Do not open threads for later rows.
+8. Before handoff, close or park the thread through the repository skill. On
+   closure, update the row to `COMPLETE`, `REJECTED`, or `SUPERSEDED`, link the
+   closed thread, update the checklist and decision log when applicable, and
+   expose newly eligible rows as `READY`. On parking, leave the row
+   `IN_PROGRESS` and retain the open thread link.
+9. If no row is eligible, report the earliest unmet dependency. Do not widen a
+   gate, silently skip a row, or manufacture a task merely to keep working.
+
+One ordinary continuation request advances one slice. Parallel execution
+requires an explicit request or a clearly independent active thread, and must
+still respect the board's global active-thread cap. Queue position grants no
+production-pricing, funded-trading, sizing, or execution authority.
+
 ## Proposed Implementation Slices
+
+The detailed slices below are the architecture and acceptance contracts behind
+the queue. The queue ID is the stable handoff identifier; implementation names
+may evolve inside a slice without changing its question.
 
 ### Slice 0: Truth Audit
 
 - Build read-only outcome comparison and mismatch report.
 - Decide canonical target and high-so-far semantics.
 - Add tests for timezone, rolling maximum, rounding, and bucket mapping.
+
+### Slice 0B: Baseline And Evaluation Repair
+
+- Measure prediction correlation and disagreement across current model names
+  on identical causal rows; collapse behaviorally duplicate families.
+- Retain a minimal observation-only control, HRRR control, and any demonstrably
+  distinct distributional control rather than treating estimator count as
+  independent evidence.
+- Replace outcome-conditioned synthetic ladder evaluation with fixed integer
+  support or actual causally observed market ladders.
+- Freeze chronological, weather-date-clustered full-distribution metrics and a
+  contemporaneous normalized market baseline before testing new sources.
 
 ### Slice 1: Forecast Source Catalog
 
@@ -424,6 +522,28 @@ Passing this gate authorizes pricing research only. It does not authorize live f
 
 - Add causal cloud/radiation extraction.
 - Validate cloud-sensitive regimes and broad fallback.
+
+### Slice 5A: Local Water-Temperature Regimes
+
+- Start only after a frozen residual analysis identifies a coastal, bay, or
+  lake-air interaction worth testing.
+- Use causally available local water temperature, anomaly, trend, air-water
+  difference, and onshore-flow interactions rather than a high-dimensional
+  global ocean field.
+- Reject the source if its gain disappears outside the predeclared station and
+  season regime or after the core forecast sources are known.
+
+### Slice 5B: ENSO/RONI Regime Calibration
+
+- Treat RONI as a slow seasonal background covariate, not a direct intraday
+  signal.
+- Preserve publication vintages and revisions; do not use final historical
+  index values before they would have been available.
+- Start only with a long-history corpus spanning multiple ENSO events, then
+  test season, region, and horizon interactions after the main forecast stack
+  is known.
+- Reject the feature if apparent skill is explained by trend, a single event,
+  or correlated weather dates.
 
 ### Slice 6: Price Sheet Candidate
 
@@ -467,6 +587,8 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
 - [ ] Settlement/sensor truth audit implemented and run.
 - [ ] US station target-source mismatches quantified.
 - [ ] Canonical target/high-so-far semantics decided.
+- [ ] Current model families correlated and behaviorally duplicate controls collapsed.
+- [ ] Fixed-support, weather-date-aware baseline evaluation contract frozen.
 - [ ] Source-vintage contract implemented.
 - [ ] Separate runtime catalog/cache selected and tested.
 - [ ] Forecast collection begins by first supported market listing.
@@ -487,3 +609,5 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
 - 2026-07-17: Positioned WeatherNext and NBM as day-before probabilistic priors, with short-range models and observations carrying more weight as the lifecycle advances.
 - 2026-07-17: Kept the late Price Sheet V2a pilot as the immediate pricing critical path and required earlier horizons to enter one at a time.
 - 2026-07-30: Positioned hierarchical Bayesian trees as residual challengers rather than the initial core model. Preferred a structured hierarchical distributional ensemble with coherent remaining-heating probabilities, simple partial pooling first, and separate market-aware pricing and execution gates.
+- 2026-08-12: Added the explicit just-in-time execution queue and deterministic continuation rules. Future sessions resume a plan-linked thread or open only the first eligible slice; deferred work remains in the plan rather than being pre-created on the board.
+- 2026-08-12: Added baseline/evaluation repair before new-source comparison, gated local water-temperature research on a demonstrated residual mechanism, and deferred vintage-correct RONI evaluation until a long-history multi-event corpus exists.
