@@ -71,6 +71,8 @@ class CachedAnalysisRow:
     model_id: str
     market_family: str
     selected_side: str
+    strategy_bucket: str
+    high_conviction: bool
     observation_delay_bucket: str
     local_hhmm: str
     best_bid: float | None
@@ -144,6 +146,7 @@ def load_cached_analysis_rows(
     *,
     contract_hash: str,
     config: HistoricalDiscoveryConfig,
+    require_high_conviction: bool = True,
 ) -> tuple[list[CachedAnalysisRow], dict[str, Any]]:
     cache.row_factory = sqlite3.Row
     pending = int(cache.execute(
@@ -159,6 +162,7 @@ def load_cached_analysis_rows(
         """select m.mapping_id,m.source_snapshot_id,m.decision_id,
                   d.quote_ready_timestamp_utc,d.execution_timestamp_utc,
                   m.station,m.market_date,m.model_id,m.market_family,m.selected_side,
+                  m.strategy_bucket,m.high_conviction,
                   m.observation_delay_bucket,m.local_decision_hhmm,m.raw_model_fair,
                   d.best_bid,d.best_ask,d.spread,d.execution_summaries_json,
                   d.result_hash decision_result_hash,e.result_hash outcome_result_hash,
@@ -169,13 +173,14 @@ def load_cached_analysis_rows(
              and e.enrichment_kind='RESEARCH_OUTCOME'
              and e.enrichment_version=? and e.status='AVAILABLE'
            where m.contract_hash=? and m.market_date>=? and m.market_date<?
-             and m.high_conviction=1 and d.status='SUCCESS'
+             and (?=0 or m.high_conviction=1) and d.status='SUCCESS'
            order by m.market_date,d.quote_ready_timestamp_utc,m.source_snapshot_id,m.mapping_id""",
         (
             config.outcome_enrichment_version,
             contract_hash,
             config.source_start_date,
             config.cutoff_exclusive,
+            int(require_high_conviction),
         ),
     ).fetchall()
     output: list[CachedAnalysisRow] = []
@@ -203,6 +208,8 @@ def load_cached_analysis_rows(
             model_id=str(source["model_id"]),
             market_family=str(source["market_family"]),
             selected_side=str(source["selected_side"]),
+            strategy_bucket=str(source["strategy_bucket"]),
+            high_conviction=bool(source["high_conviction"]),
             observation_delay_bucket=str(source["observation_delay_bucket"]),
             local_hhmm=str(source["local_decision_hhmm"]),
             best_bid=float(source["best_bid"]) if source["best_bid"] is not None else None,
@@ -744,7 +751,26 @@ def _markdown_report(result: dict[str, Any]) -> str:
         "",
         "## Existing candidates",
         "",
-        "D4 exact post-activation evaluation is not yet integrated in this D3 report.",
+    ))
+    candidates = result.get("existing_candidates", [])
+    if candidates:
+        lines.extend((
+            "| Candidate | Activation | Pre-activation excluded | Post-activation matches | Weather trades/RR | Promotion |",
+            "|---|---|---:|---:|---:|---|",
+        ))
+        for item in candidates:
+            diagnostic = item["weather_outcome_diagnostic"]
+            lines.append(
+                f"| {item['candidate_version_id']} | {item['activation_timestamp_utc']} | "
+                f"{item['matching_rows_before_activation_excluded']} | "
+                f"{item['matching_rows_at_or_after_activation']} | "
+                f"{diagnostic['trades']} / {diagnostic['rr']} | {item['promotion_disposition']} |"
+            )
+    else:
+        lines.append("No immutable existing candidate versions were present at the sealed registry state.")
+    lines.extend((
+        "",
+        "Venue settlement, valid markouts, and actual-order evidence remain unavailable in the current cache, so weather diagnostics cannot pass promotion.",
         "",
         "## Authority",
         "",

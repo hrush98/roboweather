@@ -31,6 +31,13 @@ from weather_trader.discovery.decision_cache import (
     DecisionCacheContract,
     ExecutableDecisionCache,
 )
+from weather_trader.discovery.forward_analysis import (
+    ForwardEvaluationConfig,
+    attach_forward_evaluation,
+    evaluate_existing_candidates,
+    load_existing_candidate_versions,
+)
+from weather_trader.discovery.registry import DiscoveryRegistry
 from weather_trader.pricing.contracts import stable_hash
 
 
@@ -56,6 +63,11 @@ def main() -> int:
         "--cache",
         type=Path,
         default=DEFAULT_STATE / "discovery/decision_cache.sqlite",
+    )
+    parser.add_argument(
+        "--registry",
+        type=Path,
+        default=DEFAULT_STATE / "discovery/catalog.sqlite",
     )
     parser.add_argument("--holdout-dates", type=int, default=5)
     parser.add_argument("--fold-count", type=int, default=3)
@@ -108,6 +120,22 @@ def main() -> int:
                     contract_hash=contract.contract_hash,
                     config=config,
                 )
+                forward_rows, _ = load_cached_analysis_rows(
+                    cache.connection,
+                    contract_hash=contract.contract_hash,
+                    config=config,
+                    require_high_conviction=False,
+                )
+                with DiscoveryRegistry(args.registry, read_only=True) as registry:
+                    candidates = load_existing_candidate_versions(registry.connection)
+                candidate_seal_hash = stable_hash([
+                    {
+                        "candidate_version_id": item.candidate_version_id,
+                        "definition_hash": item.definition_hash,
+                        "activation_timestamp_utc": item.activation_timestamp_utc,
+                    }
+                    for item in candidates
+                ])
                 result = run_historical_discovery(
                     rows,
                     config=config,
@@ -117,8 +145,19 @@ def main() -> int:
                         "decision_contract_hash": contract.contract_hash,
                         "sealed_research_watermark": research_watermark,
                         "sealed_outcome_watermark": outcome_watermark,
+                        "existing_candidate_seal_hash": candidate_seal_hash,
                         "code_hash": _code_hash(),
                     },
+                )
+                result = attach_forward_evaluation(
+                    result,
+                    evaluate_existing_candidates(
+                        forward_rows,
+                        candidates,
+                        config=ForwardEvaluationConfig(
+                            accepted_execution_version=contract.execution_version,
+                        ),
+                    ),
                 )
         write_discovery_report(result, args.out)
         print(json.dumps({
@@ -197,6 +236,8 @@ def _code_hash() -> str:
         Path(__file__),
         REPO_ROOT / "weather_trader/discovery/cache_analysis.py",
         REPO_ROOT / "weather_trader/discovery/decision_cache.py",
+        REPO_ROOT / "weather_trader/discovery/forward_analysis.py",
+        REPO_ROOT / "weather_trader/discovery/registry.py",
         REPO_ROOT / "weather_trader/tape/replay.py",
     ):
         digest.update(str(path.relative_to(REPO_ROOT)).encode())
