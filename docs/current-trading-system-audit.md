@@ -66,6 +66,7 @@ Durable conclusions from that review:
 - Slice 3 priced the same rows with an 80th-percentile prior-date overprediction reserve, a `0.02` minimum uncertainty reserve, `0.05` profit reserve, and `0.01` known-cost reserve. HRRR-rich market-aware was negative (`-1.000 R/R`, one eligible quote); pooled was `+0.081` across only two dates and depended on extreme raw fairs. HRRR-v2 was theoretically positive for pooled (`+1.315 R/R`, six eligible market dates) and market-aware (`+0.224`, five dates), including positive non-extreme diagnostics. These are maximum-quote, weather-outcome economics with no fill assumption; neither calibrator was selected and no untouched forward window was declared, so both signals remain research-only.
 - Static ask depth was useful for triage but did not establish actual or passive fillability.
 - A deduplicated snapshot diagnostic since June 1 found mean displayed `$50` ask-sweep fillable notional of about `$46.94` at station-local 07, `$39.61` at 12, and `$27.84` at 17; corresponding full-`$50` rates were `26.7%`, `16.4%`, and `1.1%`. This supports earlier collection but is not actual volume or fill evidence, and current snapshots do not cover D-1 adequately.
+- F0B proved that historical grouped model metrics were scored on synthetic ladders centered on the realized high and are invalid for promotion comparison. The replacement `forecast_fixed_support_weather_date_v1` audit scored 18 artifacts on 4,364 identical 2025 station/date rows over 364 weather dates, found four byte-identical alias pairs plus a prediction-identical CatBoost pair, and froze three control roles (observation-only MVP, HRRR-rich MVP, and a distinct HRRR-rich NGBoost distribution). This is an evaluation repair, not positive information-edge evidence; market-relative scoring still lacks causal complete ladders on the same historical rows.
 - The METAR+HRRR tuned-dynamic artifact was behaviorally identical to its HRRR-rich counterpart in the fresh window and must not be counted as independent confirmation.
 - The current US training/resolution path defines the daily high as the maximum IEM `tmpf` report while active markets identify Weather Underground station history as their resolution source. Source equivalence is plausible but unproven near one-degree bucket boundaries.
 
@@ -173,6 +174,8 @@ Small funded orders may validate plumbing and replay fidelity, but they confer n
 Update the body of this document when the current assessment changes. Append one short entry below describing the evidence that caused the change; keep detailed generated tables in reproducible reports or scripts.
 
 ## Audit Log
+
+- 2026-08-12: Completed F0B forecast baseline/evaluation repair. Retired outcome-centered synthetic-ladder scores, froze fixed-support weather-date-clustered full-distribution evaluation, collapsed model-count inflation to three controls, and left the market-relative gate explicitly unavailable. The information pillar and funded status remain unproven/paused.
 
 - 2026-08-12: Adopted four-pillar net-edge governance across information,
   settlement, execution, and costs/adverse selection. Existing plans remain in

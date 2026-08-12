@@ -1,7 +1,7 @@
 {
   "board": {
     "active": 0,
-    "closed": 13,
+    "closed": 14,
     "open": 0,
     "parked": 0,
     "pillars": {
@@ -18,7 +18,7 @@
       "available": true,
       "path": "docs/current-trading-system-audit.md",
       "review_date": "2026-08-12",
-      "word_count": 4935
+      "word_count": 5059
     },
     "improvement_loop": {
       "available": true,
@@ -50,12 +50,12 @@
       "word_count": 900
     }
   },
-  "facts_fingerprint": "3430c93838d11a009f135d7b714ae2d8125296077d8043ef58abbb21d22d6327",
-  "generated_at": "2026-08-12T03:22:11Z",
+  "facts_fingerprint": "a2bd2a2949c3c392671b6eecb118d568599d5f257cf1e6cd24d6cf35e4e9bb50",
+  "generated_at": "2026-08-12T03:51:31Z",
   "learning": {
-    "captured": 7,
+    "captured": 8,
     "integrated": 0,
-    "open": 8,
+    "open": 9,
     "overdue": 0,
     "revisit": 1,
     "superseded": 0
@@ -67,34 +67,43 @@
     },
     "head": {
       "available": true,
-      "value": "34e087722d55de8cc5d2a15726820e1fc11d4518"
+      "value": "c3c7cd4c43c0f2035dee0efe4499e6111bffe167"
     },
-    "root": "/home/hmrush/Desktop/personal/roboweather"
+    "root": "/home/maxrush/General/roboweather"
   },
   "runtime": {
     "discovery_registry": {
-      "available": false,
-      "path": "/home/maxrush/.local/state/roboweather/discovery/catalog.sqlite"
+      "available": true,
+      "candidate_version_count": 0,
+      "completed_run_count": 0,
+      "modified_at": "2026-08-11T21:04:30Z",
+      "path": "/home/maxrush/.local/state/roboweather/discovery/catalog.sqlite",
+      "size_bytes": 184320
     },
     "research_database": {
-      "available": false,
-      "path": "/home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite"
+      "available": true,
+      "latest_resolved_market_date": "2026-08-11",
+      "latest_snapshot_timestamp": "2026-08-12T00:21:01.772067+00:00",
+      "modified_at": "2026-08-12T03:49:53Z",
+      "path": "/home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite",
+      "size_bytes": 66225954816,
+      "snapshot_count": 1772116
     },
     "services": {
       "roboweather-market-tape.service": {
         "available": true,
-        "returncode": 1,
-        "value": "Failed to connect to bus: Operation not permitted (consider using --machine=<user>@.host --user to connect to bus of other user)"
+        "returncode": 0,
+        "value": "active"
       },
       "roboweather-phase3d-discovery.service": {
         "available": true,
-        "returncode": 1,
-        "value": "Failed to connect to bus: Operation not permitted (consider using --machine=<user>@.host --user to connect to bus of other user)"
+        "returncode": 3,
+        "value": "inactive"
       },
       "roboweather-research.service": {
         "available": true,
-        "returncode": 1,
-        "value": "Failed to connect to bus: Operation not permitted (consider using --machine=<user>@.host --user to connect to bus of other user)"
+        "returncode": 0,
+        "value": "active"
       }
     }
   },

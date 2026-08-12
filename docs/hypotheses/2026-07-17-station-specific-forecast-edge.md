@@ -54,6 +54,8 @@ Public data are not assumed to be alpha merely because they are added. The hypot
 - The July 15 research review found the fresh configured portfolio negative and broad recent fairs overconfident. Better prediction and calibration are economically relevant even if execution mechanics improve.
 - WeatherNext 2 offers a 64-member 0.25-degree, six-hourly ensemble with historical forecasts from 2022. NBM publishes calibrated probabilistic maximum-temperature guidance. Neither is currently established as incrementally useful in RoboWeather.
 
+- F0B rejected the existing outcome-centered synthetic-ladder metrics and froze `forecast_fixed_support_weather_date_v1`. On 4,364 identical 2025 station/date rows, 18 PM-active artifact names contained four byte-identical HRRR/METAR-HRRR alias pairs plus one prediction-identical CatBoost pair. The outcome-blind minimal controls are the observation-only MVP, HRRR-rich MVP, and behaviorally distinct HRRR-rich NGBoost distribution. This repairs evaluation and model-count inflation; it does not yet establish market-relative information because causal complete historical ladders are unavailable in this corpus.
+
 ## Risks And Failure Modes
 
 - WeatherNext, NBM, HRRR, and market participants may share enough underlying information that another forecast source adds no independent skill.
@@ -92,3 +94,4 @@ Review after the settlement-source audit, after the first WeatherNext/NBM identi
 - 2026-07-17: Created the forecast-edge hypothesis from the data-source strategy review. Prioritized target fidelity, exact high-so-far, multi-model probabilistic guidance, spatial residuals, and observed radiation surprise; explicitly deprioritized power load and pedestrian proxies.
 - 2026-07-17: Split the proposed build and acceptance sequence into `docs/implementation/forecast-edge-data-program.md`; no production or funded-trading change was authorized.
 - 2026-07-17: Approved research implementation and extended the forecast process from first listing/D-1 through settlement. Each lifecycle horizon still requires separate causal calibration and trading evidence.
+- 2026-08-12: Completed F0B baseline/evaluation repair. Froze outcome-independent support, one snapshot per station/date/horizon, weather-date clustered full-distribution scoring, actual-complete-ladder-only market comparison, and three minimal control roles. No forecast passed the market gate and no pricing or funded authority changed.

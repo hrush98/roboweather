@@ -4,6 +4,8 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-12
 
+- Completed forecast-edge Slice F0B. Added `scripts/forecast_edge_report.py` and a versioned fixed-support evaluator with weather-date clustered uncertainty, complete observed-ladder normalization, identical-coverage prediction diagnostics, and outcome-blind duplicate pruning. Audited 18 current PM-active artifacts on 4,364 station/date rows, retired outcome-centered synthetic-ladder metrics, and froze observation-only MVP, HRRR-rich MVP, and HRRR-rich NGBoost as the three minimal controls. Market-relative information and funded authority remain unproven.
+
 - Adopted four-pillar net-edge governance without reorganizing the
   documentation tree. New work must identify information, settlement,
   execution, or costs/adverse-selection as its primary proof target; generated

@@ -410,7 +410,7 @@ Queue states have these meanings:
 | ID | Pillar | State | Depends on | Thread-launch question | Named closure output | Thread |
 | --- | --- | --- | --- | --- | --- | --- |
 | F0 | Settlement | READY | — | Do IEM, Weather Underground, CLI, high-frequency ASOS, and venue settlement agree sufficiently to define the US high-temperature training target and exact high-so-far? | Reproducible truth-audit command/report, station mismatch table, and canonical target/backfill decision. | — |
-| F0B | Information | READY | — | What is the smallest genuinely distinct current forecast baseline, and can it be scored without outcome-conditioned ladders or correlated-row inflation? | Prediction-correlation/pruning report and frozen fixed-support, weather-date-aware evaluation contract. | — |
+| F0B | Information | COMPLETE | — | What is the smallest genuinely distinct current forecast baseline, and can it be scored without outcome-conditioned ladders or correlated-row inflation? | Prediction-correlation/pruning report and frozen fixed-support, weather-date-aware evaluation contract. | [T0014](../../board/closed/2026/T0014-freeze-minimal-forecast-baseline.md) |
 | F1 | Information | BLOCKED | F0 settled | Can WeatherNext, NBM, HRRR/RRFS, and observation vintages be collected and replayed from their actual causal availability times? | Source-vintage contracts, separate runtime catalog/cache, bounded collectors, tests, and coverage report. | — |
 | F2 | Information | BLOCKED | F0, F0B, F1 settled | Does WeatherNext 2 or NBM add held-out probability skill beyond the minimal HRRR-rich baseline and contemporaneous market on identical rows? | WeatherNext/NBM identical-coverage and market-relative benchmark with a source acceptance or rejection verdict. | — |
 | F3 | Information | BLOCKED | F0 and F0B settled | Does a peak-passed plus conditional-additional-heating distribution outperform the frozen absolute/bucket baseline? | Coherent remaining-heating model, chronological ablation report, and acceptance or rejection verdict. | — |
@@ -493,6 +493,30 @@ may evolve inside a slice without changing its question.
   support or actual causally observed market ladders.
 - Freeze chronological, weather-date-clustered full-distribution metrics and a
   contemporaneous normalized market baseline before testing new sources.
+
+
+F0B accepted contract and current baseline:
+
+- `forecast_fixed_support_weather_date_v1`, fingerprint
+  `40963e8fb40b481498c112e59be5495168a66dcaa26bb7f189dbc539479f1172`,
+  freezes Fahrenheit support at `-20..130`, selects the latest causal snapshot
+  at or before 14:00 station-local time, scores one forecast per station/date,
+  averages station rows within weather date, and bootstraps whole weather
+  dates rather than threshold rows.
+- The minimal current controls are
+  `mvp_pm_active_us12_obs_2022_2025`,
+  `mvp_hrrr_rich_pm_active_us12_obs_2022_2025`, and the behaviorally distinct
+  `ngboost_normal_hrrr_rich_pm_active_us12_obs_2022_2025`. Other estimators
+  over those same information sets remain diagnostics, not independent
+  evidence.
+- Existing grouped metrics from synthetic ladders centered on
+  `final_high_tmpf` are invalid for promotion comparisons and are retired.
+  New weather-only comparisons use the fixed support. Market-relative scoring
+  must use an actually observed, causally timestamped, complete normalized
+  ladder on identical rows and fails closed when that ladder is unavailable.
+- Reproduce the current 18-artifact audit with
+  `scripts/forecast_edge_report.py`; generated detail remains uncommitted under
+  `reports/forecast-edge/f0b-current/`.
 
 ### Slice 1: Forecast Source Catalog
 
@@ -587,8 +611,8 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
 - [ ] Settlement/sensor truth audit implemented and run.
 - [ ] US station target-source mismatches quantified.
 - [ ] Canonical target/high-so-far semantics decided.
-- [ ] Current model families correlated and behaviorally duplicate controls collapsed.
-- [ ] Fixed-support, weather-date-aware baseline evaluation contract frozen.
+- [x] Current model families correlated and behaviorally duplicate controls collapsed.
+- [x] Fixed-support, weather-date-aware baseline evaluation contract frozen.
 - [ ] Source-vintage contract implemented.
 - [ ] Separate runtime catalog/cache selected and tested.
 - [ ] Forecast collection begins by first supported market listing.
@@ -611,3 +635,4 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
 - 2026-07-30: Positioned hierarchical Bayesian trees as residual challengers rather than the initial core model. Preferred a structured hierarchical distributional ensemble with coherent remaining-heating probabilities, simple partial pooling first, and separate market-aware pricing and execution gates.
 - 2026-08-12: Added the explicit just-in-time execution queue and deterministic continuation rules. Future sessions resume a plan-linked thread or open only the first eligible slice; deferred work remains in the plan rather than being pre-created on the board.
 - 2026-08-12: Added baseline/evaluation repair before new-source comparison, gated local water-temperature research on a demonstrated residual mechanism, and deferred vintage-correct RONI evaluation until a long-history multi-event corpus exists.
+- 2026-08-12: Completed F0B. Retired outcome-centered synthetic-ladder validation, froze full-distribution scoring on fixed support with weather-date uncertainty, audited 18 current artifacts on 4,364 identical station/date rows, and reduced the baseline to three information-set controls. This is an evaluation repair, not evidence of market-relative information edge.
