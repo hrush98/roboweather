@@ -4,6 +4,17 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-12
 
+- Completed forecast-edge Slice F0. Added `scripts/forecast_truth_audit.py`
+  and `us_high_temperature_truth_v1` source-separated settlement primitives,
+  including civil-versus-standard-day boundaries, rounded-display intervals,
+  venue-bucket mapping, fail-closed source errors, and station mismatch output.
+  The 230-row June 1-23 audit found the IEM routine/special report maximum in
+  all 220 resolved venue buckets; CLI conflicted on 56/176 comparable rows,
+  NCEI one-minute ASOS on 115/196, and localized Weather Underground on 21/220.
+  Venue bucket is authoritative, IEM report maximum is the versioned numeric
+  proxy/report-stream high-so-far, and provenance/venue backfill is required.
+  No forecast edge, pricing promotion, or funded authority changed.
+
 - Completed forecast-edge Slice F0B. Added `scripts/forecast_edge_report.py` and a versioned fixed-support evaluator with weather-date clustered uncertainty, complete observed-ladder normalization, identical-coverage prediction diagnostics, and outcome-blind duplicate pruning. Audited 18 current PM-active artifacts on 4,364 station/date rows, retired outcome-centered synthetic-ladder metrics, and froze observation-only MVP, HRRR-rich MVP, and HRRR-rich NGBoost as the three minimal controls. Market-relative information and funded authority remain unproven.
 
 - Adopted four-pillar net-edge governance without reorganizing the

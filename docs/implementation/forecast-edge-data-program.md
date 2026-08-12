@@ -136,6 +136,29 @@ Determine what temperature each US high-temperature market actually settles from
 - Material one-degree and bucket-changing mismatches are quantified.
 - The audit determines whether existing training/outcome rows require backfill or only provenance clarification.
 
+F0 accepted contract and current evidence:
+
+- `us_high_temperature_truth_v1` keeps venue settlement, Weather Underground,
+  NWS CLI, routine/special METAR, and NCEI one-minute ASOS values separate and
+  records source URL, capture time, day semantics, exactness, and failures.
+- `scripts/forecast_truth_audit.py` audited 230 station-dates across all 10 US
+  high-temperature stations from 2026-06-01 through 2026-06-23. Polymarket
+  exposed one fully resolved winning bucket for 220 rows; all 10 June 18 chains
+  remained unresolved and were excluded rather than inferred.
+- The civil-local-day IEM routine/special METAR maximum classified into the
+  venue-winning bucket on all 220/220 comparable rows. NWS CLI conflicted on
+  56/176 and NCEI one-minute ASOS on 115/196. Weather Underground was rendered
+  in rounded Celsius on this host; interval-aware comparison still conflicted
+  on 21/220 and therefore cannot be treated as an immutable exact-F archive.
+- Venue-winning bucket is the authoritative settlement label. The accepted
+  numeric training proxy is the separately versioned IEM routine/special
+  report maximum, not physical/CLI daily high. Existing matched-cohort numeric
+  labels do not require relabeling, but provenance and venue-bucket backfill do.
+- Live high-so-far means the causal maximum of available IEM routine/special
+  reports with availability and revision flags. It is exact for that report
+  stream, not the latent ASOS rolling-five-minute physical maximum. Missing
+  source or venue evidence fails closed with no silent substitution.
+
 ## Workstream 1: Public Probabilistic Baselines
 
 ### WeatherNext 2
@@ -409,11 +432,11 @@ Queue states have these meanings:
 
 | ID | Pillar | State | Depends on | Thread-launch question | Named closure output | Thread |
 | --- | --- | --- | --- | --- | --- | --- |
-| F0 | Settlement | READY | — | Do IEM, Weather Underground, CLI, high-frequency ASOS, and venue settlement agree sufficiently to define the US high-temperature training target and exact high-so-far? | Reproducible truth-audit command/report, station mismatch table, and canonical target/backfill decision. | — |
+| F0 | Settlement | COMPLETE | — | Do IEM, Weather Underground, CLI, high-frequency ASOS, and venue settlement agree sufficiently to define the US high-temperature training target and exact high-so-far? | Reproducible truth-audit command/report, station mismatch table, and canonical target/backfill decision. | [T0015](../../board/closed/2026/T0015-audit-high-temperature-settlement-truth.md) |
 | F0B | Information | COMPLETE | — | What is the smallest genuinely distinct current forecast baseline, and can it be scored without outcome-conditioned ladders or correlated-row inflation? | Prediction-correlation/pruning report and frozen fixed-support, weather-date-aware evaluation contract. | [T0014](../../board/closed/2026/T0014-freeze-minimal-forecast-baseline.md) |
-| F1 | Information | BLOCKED | F0 settled | Can WeatherNext, NBM, HRRR/RRFS, and observation vintages be collected and replayed from their actual causal availability times? | Source-vintage contracts, separate runtime catalog/cache, bounded collectors, tests, and coverage report. | — |
+| F1 | Information | READY | F0 settled | Can WeatherNext, NBM, HRRR/RRFS, and observation vintages be collected and replayed from their actual causal availability times? | Source-vintage contracts, separate runtime catalog/cache, bounded collectors, tests, and coverage report. | — |
 | F2 | Information | BLOCKED | F0, F0B, F1 settled | Does WeatherNext 2 or NBM add held-out probability skill beyond the minimal HRRR-rich baseline and contemporaneous market on identical rows? | WeatherNext/NBM identical-coverage and market-relative benchmark with a source acceptance or rejection verdict. | — |
-| F3 | Information | BLOCKED | F0 and F0B settled | Does a peak-passed plus conditional-additional-heating distribution outperform the frozen absolute/bucket baseline? | Coherent remaining-heating model, chronological ablation report, and acceptance or rejection verdict. | — |
+| F3 | Information | READY | F0 and F0B settled | Does a peak-passed plus conditional-additional-heating distribution outperform the frozen absolute/bucket baseline? | Coherent remaining-heating model, chronological ablation report, and acceptance or rejection verdict. | — |
 | F4 | Information | BLOCKED | F3 settled | Do frozen high-frequency upwind station residuals add information beyond target-station observations and model point features? | MADIS/ASOS spatial residual implementation and controlled ablation. | — |
 | F5 | Information | BLOCKED | F3 settled | Does causally observed cloud/radiation surprise add broad or predeclared cloud-regime skill? | GOES heating-surprise implementation and controlled ablation. | — |
 | F5A | Information | GATED | F4 or other frozen evidence identifies a coastal residual mechanism | Does local sea, bay, or lake temperature improve the affected coastal or lake-regime forecast after core sources are known? | Local-water-temperature causal dataset and predeclared regime ablation. | — |
@@ -608,9 +631,9 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
 
 ## Initial Checklist
 
-- [ ] Settlement/sensor truth audit implemented and run.
-- [ ] US station target-source mismatches quantified.
-- [ ] Canonical target/high-so-far semantics decided.
+- [x] Settlement/sensor truth audit implemented and run.
+- [x] US station target-source mismatches quantified.
+- [x] Canonical target/high-so-far semantics decided.
 - [x] Current model families correlated and behaviorally duplicate controls collapsed.
 - [x] Fixed-support, weather-date-aware baseline evaluation contract frozen.
 - [ ] Source-vintage contract implemented.
@@ -636,3 +659,4 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
 - 2026-08-12: Added the explicit just-in-time execution queue and deterministic continuation rules. Future sessions resume a plan-linked thread or open only the first eligible slice; deferred work remains in the plan rather than being pre-created on the board.
 - 2026-08-12: Added baseline/evaluation repair before new-source comparison, gated local water-temperature research on a demonstrated residual mechanism, and deferred vintage-correct RONI evaluation until a long-history multi-event corpus exists.
 - 2026-08-12: Completed F0B. Retired outcome-centered synthetic-ladder validation, froze full-distribution scoring on fixed support with weather-date uncertainty, audited 18 current artifacts on 4,364 identical station/date rows, and reduced the baseline to three information-set controls. This is an evaluation repair, not evidence of market-relative information edge.
+- 2026-08-12: Completed F0. Across 220 venue-resolved station-dates, the existing IEM routine/special METAR maximum matched every winning bucket while CLI, one-minute ASOS, and interval-aware rendered Weather Underground did not. Froze venue bucket as authoritative, IEM report maximum as numeric proxy/high-so-far semantics, fail-closed source handling, and provenance-plus-venue backfill without matched-cohort numeric relabeling. No information-edge or funded authority changed.
