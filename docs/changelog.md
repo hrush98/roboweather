@@ -4,6 +4,8 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-13
 
+- Started forward-causal F5 GOES heating-surprise collection. Added a versioned NOAA GOES-18/19 ABI-L2-DSRF v02r00 contract, bounded public-S3 discovery, first-successful-observation replay clocks, content-addressed raw retention, DQF-filtered 3x3 station decoding, a frozen solar-normalized market-relative logit challenger, an opt-in five-minute user timer, and focused tests. Historical archive clocks remain provenance only, so this establishes collection substrate and an evidence clock rather than cloud/radiation skill or trading edge.
+
 - Completed corrected exact-cutoff revalidation and forecast-edge Slice F6.
   The forward F3 loader now reuses the contract-owned timezone-aware selector
   and has a database regression test; both historical and forward diagnostics

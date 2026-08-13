@@ -510,7 +510,7 @@ Queue states have these meanings:
 | F3GL | Information | BLOCKED | F0GL, F3UL, and F3S settled | Does global localization add skill to the low-temperature model beyond US-low and public baselines? | Global-low localized distribution, transfer ablation, and verdict. | — |
 | F6GL | Cross-pillar | BLOCKED | F3GL or later global-low forecast accepted | Does one frozen global-low version pass the complete F6 contract? | Global-low Price Sheet V2, edge-half-life, tape, and verdict report. | — |
 | F4X | Information | BLOCKED | F4, F3S, and relevant cohort model settled | Do frozen spatial residual features transfer or require cohort/station-specific refits outside US high temperature? | Four-cohort spatial transfer matrix and accepted/rejected scoped versions. | — |
-| F5 | Information | READY | F3 settled | Does causally observed cloud/radiation surprise add broad or predeclared cloud-regime skill for US high temperature? | GOES heating-surprise implementation and controlled ablation. | — |
+| F5 | Information | IN_PROGRESS | F3 settled | Does causally observed cloud/radiation surprise add broad or predeclared cloud-regime skill for US high temperature? | GOES heating-surprise implementation and controlled ablation. | [T0023](../../board/T0023-test-causal-goes-heating-surprise.md) |
 | F5X | Information | BLOCKED | F5 and relevant cohort model settled | Does observed cloud/radiation surprise transfer to other eligible high/low cohorts under identical-row ablation? | Cohort-specific GOES transfer report and scoped versions. | — |
 | F5A | Information | GATED | F4 or other frozen evidence identifies a coastal residual mechanism | Does local sea, bay, or lake temperature improve the affected coastal or lake-regime forecast after core sources are known? | Local-water-temperature causal dataset and predeclared regime ablation. | — |
 | F5B | Information | GATED | Long-history causal corpus spans multiple ENSO events and F0B evaluation is available | Does vintage-correct RONI improve seasonal D-1 calibration after forecast-model information is known? | RONI/ENSO incremental calibration ablation or explicit no-change verdict. | — |
@@ -747,8 +747,11 @@ F4 settled contract and evidence:
 
 ### Slice 5: GOES Heating Surprise
 
-- Add causal cloud/radiation extraction.
-- Validate cloud-sensitive regimes and broad fallback.
+- Freeze NOAA GOES-18/19 ABI-L2-DSRF v02r00 as the observed-radiation source. Use GOES-18 west of -105 degrees and GOES-19 otherwise; sample a DQF-good 3x3 station neighborhood. Embedded creation time and S3 Last-Modified are provenance only: replay visibility begins at first successful local observation.
+- At the exact 14:00-local F3 horizon, derive trailing observed-radiation state without using files first observed after the decision. Condition the challenger on the frozen HRRR-rich forecast and contemporaneous selected-token market probability.
+- Freeze broad and cloud-sensitive regimes, surprise thresholds, and abstention levels before outcomes. Report exact selected-token calibration, market-relative log loss, station/regime slices, and an abstention curve.
+- Earlier decision horizons require separately frozen forecast versions and evidence clocks. If the information gate passes, open a separate cross-pillar executable-ask and t0/+30s/+2m/+5m/+15m edge-decay gate before any trading claim.
+- The frozen statistical contract is `goes_dsr_market_relative_logit_v1`: a regularized selected-token logit conditioned on F3, the normalized contemporaneous market distribution, and clear/mixed/cloudy regime controls; the challenger adds radiation surprise plus only its predeclared regime interactions. Calibration requires 20 resolved weather dates, then the fitted artifact and a future activation boundary must be persisted before any date can count as untouched. Abstention diagnostics use predicted same-side ask edges of 0.00, 0.05, 0.10, and 0.15.
 
 ### Slice 5A: Local Water-Temperature Regimes
 
@@ -895,6 +898,8 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
   now reuses the exact timezone-aware cutoff and has a database regression
   test. Corrected F3 still beat conditioned HRRR-rich but failed holdout and
   recent market-relative log-loss gates, so F3 is rejected.
+- 2026-08-13: Started F5 under T0023. Froze NOAA GOES-18/19 ABI-L2-DSRF v02r00, first-successful-local-observation availability, the -105-degree satellite split, DQF-good 3x3 station sampling, solar-normalized observed-minus-HRRR surprise, clear/mixed/cloudy regimes, 0.10/0.20 surprise thresholds, and `goes_dsr_market_relative_logit_v1`. The five-minute timer is collecting forward evidence. At least 20 resolved calibration dates are required before freezing the fit and its future untouched activation boundary; no cloud/radiation skill is established yet.
+
 - 2026-08-13: Completed and rejected F6. The frozen baseline selection yielded
   18 post-activation rows across 14 dates; F3 was worse than the same-side
   market ask in Brier and log loss, no calibrator had been frozen before

@@ -1,14 +1,14 @@
 {
   "board": {
-    "active": 0,
+    "active": 1,
     "closed": 22,
-    "open": 0,
+    "open": 1,
     "parked": 0,
     "pillars": {
       "costs-adverse-selection": 0,
       "cross-pillar": 0,
       "execution": 0,
-      "information": 0,
+      "information": 1,
       "settlement": 0
     },
     "waiting": 0
@@ -50,8 +50,8 @@
       "word_count": 1039
     }
   },
-  "facts_fingerprint": "e6dcfc710deef6cfe739b63efe2b7d0f2a57833806cf86f26c387b9838860183",
-  "generated_at": "2026-08-13T19:58:46Z",
+  "facts_fingerprint": "42a9b5a1f27f38d8bf7cd94e1e676a6d42a758e59d5b797388697bcbe99921bf",
+  "generated_at": "2026-08-13T19:59:27Z",
   "learning": {
     "captured": 16,
     "integrated": 0,
@@ -67,7 +67,7 @@
     },
     "head": {
       "available": true,
-      "value": "cda3965767907d932af55d2af35428621fb6f242"
+      "value": "2d6bc2344971f8ce380ce8e857fee9791d958f5a"
     },
     "root": "/home/maxrush/General/roboweather"
   },

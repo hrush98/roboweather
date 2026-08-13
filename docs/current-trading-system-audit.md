@@ -29,7 +29,7 @@ net trading edge = information advantage + settlement advantage
 
 | Pillar | Current assessment | Next proof |
 | --- | --- | --- |
-| Information | No current version establishes market-relative edge. Corrected exact-cutoff F3 improves weather-only scores versus HRRR-rich but worsens holdout and recent market-relative log loss; corrected F4 and F6 are also rejected. | Run F5 cloud/radiation surprise next; evaluate WeatherNext only when approved ingestion-time history exists; require a new accepted forecast version before reopening F6. |
+| Information | No current version establishes market-relative edge. Corrected exact-cutoff F3 improves weather-only scores versus HRRR-rich but worsens holdout and recent market-relative log loss; corrected F4 and F6 are also rejected. | Continue the active forward-causal F5 cloud/radiation evidence clock; evaluate WeatherNext only when approved ingestion-time history exists; require a new accepted forecast version before reopening F6. |
 | Settlement | Baseline mapping established, not an edge. F0 found the IEM routine/special report maximum in the venue-winning bucket on 220/220 comparable June station-dates; alternative physical/display sources materially disagreed. | Backfill venue bucket and versioned source provenance, preserve fail-closed unresolved rows, and validate the mapping out of cohort before any integrated promotion. |
 | Execution | The causal tape, decision cache, and replay substrate work; an execution advantage is not proven. | Show non-toxic markouts and positive actual or conservative fill-conditioned economics for one exact quote/cancel/inventory rule. |
 | Costs and adverse selection | Partially measurable but not cleared. Price reserves and depth diagnostics exist; useful-size fills, toxicity, capacity, and concentration remain open. | Demonstrate positive net EV after all explicit costs and reserves at the intended size. |
@@ -41,7 +41,7 @@ Current confidence by layer:
 | Layer | Assessment | Decision |
 | --- | --- | --- |
 | Research collection | Broad snapshot collection is useful and operational. The previous memory-growth blocker is resolved, and collection now runs under a restartable 4 GiB-bounded user service rather than TUI child ownership. | Continue collection and investigate any service restart or memory-limit event. |
-| Forecast and settlement truth | F0 reconciled the current IEM report maximum to 220/220 venue-winning buckets; the shared selector now enforces the exact cutoff on historical and forward paths; F1 added causal source vintages; and F2/F3/F4/F6 are rejected. WeatherNext remains unscored. | Backfill provenance/venue labels, run F5 cloud/radiation surprise, and add WeatherNext only after approved access supplies provider ingestion timestamps. |
+| Forecast and settlement truth | F0 reconciled the current IEM report maximum to 220/220 venue-winning buckets; the shared selector now enforces the exact cutoff on historical and forward paths; F1 added causal source vintages; and F2/F3/F4/F6 are rejected. WeatherNext remains unscored. | Backfill provenance/venue labels, continue the active F5 forward evidence clock and predeclared ablation, and add WeatherNext only after approved access supplies provider ingestion timestamps. |
 | Full-market-lifecycle edge | Morning snapshots show more displayed depth than late afternoon, but current data do not establish D-1 traded volume, passive fills, round-trip capacity, or an early calibrated forecast. | Collect from first listing and test separate D-1/early arms against the frozen late control. |
 | Current configured portfolio | Failed the fresh July 9-14 cap-aware replay. | Do not restart it. |
 | New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
@@ -129,7 +129,7 @@ The July 30-August 2 extension materially weakened that initial result. The froz
 7. Implement `docs/implementation/price-sheet-v2.md`: V2a walk-forward outcome pricing now, then V2b execution reductions/skips on valid tape windows.
 8. Implement `docs/implementation/tape-strategy-discovery.md`: preserve the broad causal materializer, add an append-only candidate registry, run recurring constrained discovery from resolved-data watermarks, and continuously compare post-activation champion/challenger cohorts.
 9. Evaluate passive price-making and a separately tagged stable-taker control from the same tape and economic price ceiling.
-10. Preserve corrected F3/F4/F6 as rejected controls; run F5's GOES radiation/cloud surprise next; reopen F6 only for a newly accepted, predeclared forecast version; revisit WeatherNext only with approved causal history.
+10. Preserve corrected F3/F4/F6 as rejected controls; continue F5 GOES radiation/cloud forward collection and freeze its calibrator only after 20 resolved dates; reopen F6 only for a newly accepted, predeclared forecast version; revisit WeatherNext only with approved causal history.
 11. Keep weather-only probability, settlement mapping, market-aware calibration, and execution adjustment separately versioned. No new forecast source enters funded pricing until it demonstrates causal incremental skill.
 12. Extend research and collection to the full market lifecycle. Treat D-1 open, D-1 revision, D0 early, intraday, and late as separate horizons; add them one at a time behind forecast, tape, quote, inventory, exit, and portfolio gates.
 13. For V2a, freeze one calibrator and untouched forward start before additional outcomes are inspected. Do not use the July 16-29 candidate comparison as its own promotion window.
@@ -179,6 +179,7 @@ Small funded orders may validate plumbing and replay fidelity, but they confer n
 Update the body of this document when the current assessment changes. Append one short entry below describing the evidence that caused the change; keep detailed generated tables in reproducible reports or scripts.
 
 ## Audit Log
+- 2026-08-13: Started T0023 F5 forward-causal GOES evidence. The new ABI-L2-DSRF v02r00 collector records NOAA files only from first successful local observation, samples DQF-good station neighborhoods, and feeds a frozen market-relative selected-token challenger contract. Eight initial artifacts produced zero eligible resolved dates, so this is collection substrate and an evidence clock, not information edge. Funded authority is unchanged.
 
 - 2026-08-13: T0021 found and corrected a second exact-cutoff leak in the F3
   forward database path. Corrected F3 fails holdout and recent market-relative

@@ -152,6 +152,16 @@
 - Causal replay uses WeatherNext provider ingestion time and first successful
   local observation for NOAA/IEM artifacts. Preserve HTTP `Last-Modified` as
   provenance only; never use it to backdate replay visibility.
+- F5 GOES collection uses `scripts/collect_goes_dsr.py` and the separate
+  `roboweather-goes-dsr.timer`. It retains NOAA GOES-18/19 ABI-L2-DSRF
+  NetCDF4 under the forecast-source runtime tree, selects GOES-18 west of
+  -105 degrees and GOES-19 otherwise, and records replay visibility only at
+  first successful local observation. Embedded GOES creation clocks and S3
+  `LastModified` remain provenance, never retrospective causal availability.
+  Install the service and timer sources under `~/.config/systemd/user/`, run
+  `systemctl --user daemon-reload`, then enable with
+  `systemctl --user enable --now roboweather-goes-dsr.timer`; inspect with
+  `systemctl --user status roboweather-goes-dsr.timer roboweather-goes-dsr.service --no-pager`.
 
 ## F4 spatial residual workflow
 
