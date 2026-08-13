@@ -4,6 +4,8 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-13
 
+- Hardened the F5 forward-evidence lifecycle before outcomes exist. `goes_dsr_market_relative_logit_v2` now has an immutable earliest-20-date calibrator artifact, calibration-row replay hash, strictly future activation enforcement, a second 20-date untouched gate, weather-date-clustered comparisons against the no-surprise baseline/F3/market, fixed exact-token calibration limits, station/regime and signed-threshold diagnostics, and a displayed-ask abstention curve. The real cohort still has zero resolved dates, so no information or execution edge is claimed.
+
 - Started forward-causal F5 GOES heating-surprise collection. Added a versioned NOAA GOES-18/19 ABI-L2-DSRF v02r00 contract, bounded public-S3 discovery, first-successful-observation replay clocks, content-addressed raw retention, DQF-filtered 3x3 station decoding, a frozen solar-normalized market-relative logit challenger, an opt-in five-minute user timer, and focused tests. Historical archive clocks remain provenance only, so this establishes collection substrate and an evidence clock rather than cloud/radiation skill or trading edge.
 
 - Completed corrected exact-cutoff revalidation and forecast-edge Slice F6.

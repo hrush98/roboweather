@@ -179,7 +179,7 @@ Small funded orders may validate plumbing and replay fidelity, but they confer n
 Update the body of this document when the current assessment changes. Append one short entry below describing the evidence that caused the change; keep detailed generated tables in reproducible reports or scripts.
 
 ## Audit Log
-- 2026-08-13: Started T0023 F5 forward-causal GOES evidence. The new ABI-L2-DSRF v02r00 collector records NOAA files only from first successful local observation, samples DQF-good station neighborhoods, and feeds a frozen market-relative selected-token challenger contract. Eight initial artifacts produced zero eligible resolved dates, so this is collection substrate and an evidence clock, not information edge. Funded authority is unchanged.
+- 2026-08-13: T0023 now has the complete fail-closed F5 evidence lifecycle. ABI-L2-DSRF remains causal only from first local observation; `goes_dsr_market_relative_logit_v2` freezes exactly the earliest 20 calibration dates plus a row hash and strictly future activation, then withholds scoring until 20 untouched dates exist. The generated report covers exact-token calibration, date-clustered comparisons, station/regime/signed-threshold slices, and displayed-ask abstention while reserving tape-valid edge decay for a separate gate. Eleven artifacts and zero eligible resolved dates establish no information edge; funded authority is unchanged.
 
 - 2026-08-13: T0021 found and corrected a second exact-cutoff leak in the F3
   forward database path. Corrected F3 fails holdout and recent market-relative
