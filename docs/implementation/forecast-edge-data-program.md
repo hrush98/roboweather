@@ -6,7 +6,41 @@ Last updated: 2026-08-13
 
 ## Feature Goal
 
-Build a causal, versioned forecast-research layer that estimates a coherent probability distribution for the resolution-source-reported daily high at a specific station from day-before/first-listing conditions through settlement.
+Build a causal, versioned forecast-research layer that estimates a coherent probability distribution for the resolution-source-reported daily high or low at a specific station from day-before/first-listing conditions through settlement.
+
+## Information Thesis And Cohort Boundary
+
+RoboWeather is not attempting to replace public numerical weather prediction
+globally. It tests whether specialized interpretation of causally available
+public weather information produces a better probability estimate for one
+settlement-specific station contract at one exact decision time, and whether
+that advantage remains after contemporaneous executable market prices are
+considered.
+
+Treat these as four separate evidence cohorts:
+
+| Cohort ID | Market family | Geography | Current evidence |
+| --- | --- | --- | --- |
+| `US_HIGH` | `HIGH_TEMP` | United States | F0 settlement mapping and F3 remaining-heating forecast accepted for research; F4 is in progress. |
+| `GLOBAL_HIGH` | `HIGH_TEMP` | Non-US | Collection exists; settlement, units/day semantics, localization, and probability skill are unvalidated. |
+| `US_LOW` | `LOW_TEMP` | United States | Collection exists; settlement truth and remaining-cooling model are unvalidated. |
+| `GLOBAL_LOW` | `LOW_TEMP` | Non-US | Collection exists; settlement, units/day semantics, localization, and remaining-cooling model are unvalidated. |
+
+Acceptance in one cohort never transfers automatically to another. A model may
+share source transforms or a hierarchical backbone, but each cohort retains a
+separate settlement mapping, support/unit transform, horizon contract,
+calibration head, holdout, version, and evidence clock. High and low markets
+must use distinct physical state decompositions:
+
+```text
+daily high: peak-passed hurdle + conditional additional heating
+daily low:  trough-passed hurdle + conditional additional cooling
+```
+
+The default modeling strategy is partial pooling, not four unrelated models
+and not one universal model. Share only effects whose cross-cohort transfer
+beats cohort-only controls on untouched data; otherwise retain cohort- or
+station-specific heads.
 
 The economic rationale and falsification criteria live in `docs/hypotheses/2026-07-17-station-specific-forecast-edge.md`. The full source review is preserved in `reports/forecast-edge-data-source-strategy-2026-07-17.md`. The full-lifecycle consumer and horizon contract live in `docs/implementation/full-market-lifecycle-trading.md`. Execution phase sequencing remains in `docs/execution-rebuild-roadmap.md`; this approved research work does not change the current Price Sheet V2a critical path.
 
@@ -29,17 +63,17 @@ Weather Underground / CLI / ASOS comparison ------------+--> truth and settlemen
                                                          |
 WeatherNext / NBM / HRRR source vintages ----------------+--> multi-model prior
                                                          |
-high-frequency target-station ASOS ----------------------+--> exact high-so-far
+high-frequency target-station observations ---------------+--> exact high/low-so-far
                                                          |
 MADIS neighbor observations + model-at-neighbor ---------+--> spatial residual update
                                                          |
 GOES cloud/radiation observations + HRRR expectation ----+--> heating-surprise update
                                                          |
                                                          v
-                                    coherent latent final-high distribution
+                                    coherent latent final-high/low distribution
                                                          |
                                                          v
-                                  resolution-source reported-high distribution
+                                  resolution-source reported-high/low distribution
                                                          |
                               +--------------------------+------------------+
                               |                                             |
@@ -90,6 +124,8 @@ Never overwrite one source with another under a generic `final_high_tmpf` label.
 
 Every scored forecast must produce one normalized distribution over an integer temperature support, plus:
 
+- cohort ID, market family, geography class, station identity, and frozen
+  station-scope version;
 - forecast version and training cutoff;
 - decision timestamp and horizon/local-time bucket;
 - immutable predecessor distribution and revision magnitude;
@@ -102,6 +138,11 @@ Every scored forecast must produce one normalized distribution over an integer t
 - missing-source and fallback flags.
 
 Bucket probabilities must be derived from this distribution rather than trained independently without an ordering/coherence constraint.
+
+Venue units and displayed bucket syntax remain part of settlement mapping.
+Models may use a canonical internal scale, but conversion, rounding, endpoint
+inclusion, local-day definition, and daylight-saving behavior must be
+versioned and tested before probabilities are mapped to tokens.
 
 ## Storage And Collection Design
 
@@ -397,6 +438,24 @@ Do not allow market price into the weather-only forecast used to claim meteorolo
 - Report identical-coverage ablations; never compare models on different easy/hard subsets without a coverage decomposition.
 - Freeze source transforms, station maps, horizons, and regimes before held-out evaluation.
 
+### Station Specialization
+
+- Every probability row is station-specific, but station effects should be
+  estimated with hierarchical partial pooling across predeclared climate and
+  settlement groups.
+- Freeze a station-scope registry before viewing holdout outcomes. Allowed
+  scopes begin with whole cohort and named meteorological/settlement groups.
+  An individual-station head becomes eligible only after a declared minimum of
+  independent resolved dates and must beat its pooled parent on a later
+  untouched window.
+- Exact calendar dates are identities for causal joins, chronological splits,
+  deduplication, and caps. They are never discovery predicates. Season or
+  regime features require an ex ante definition.
+- Report cohort-wide skill, station dispersion, leave-one-station-out transfer,
+  maximum station contribution, and shrinkage toward the parent.
+- A station-specific improvement may authorize only that frozen station scope;
+  it cannot be presented as cohort-wide confirmation.
+
 ### Acceptance
 
 A candidate forecast version may be proposed to Price Sheet V2 only when:
@@ -436,12 +495,25 @@ Queue states have these meanings:
 | F0B | Information | COMPLETE | — | What is the smallest genuinely distinct current forecast baseline, and can it be scored without outcome-conditioned ladders or correlated-row inflation? | Prediction-correlation/pruning report and frozen fixed-support, weather-date-aware evaluation contract. | [T0014](../../board/closed/2026/T0014-freeze-minimal-forecast-baseline.md) |
 | F1 | Information | COMPLETE | F0 settled | Can WeatherNext, NBM, HRRR/RRFS, and observation vintages be collected and replayed from their actual causal availability times? | Source-vintage contracts, separate runtime catalog/cache, bounded collectors, tests, and coverage report. | [T0016](../../board/closed/2026/T0016-build-causal-forecast-source-catalog.md) |
 | F2 | Information | REJECTED | F0, F0B, F1 settled | Does WeatherNext 2 or NBM add held-out probability skill beyond the minimal HRRR-rich baseline and contemporaneous market on identical rows? | WeatherNext/NBM identical-coverage and market-relative benchmark with a source acceptance or rejection verdict. | [T0017](../../board/closed/2026/T0017-benchmark-nbm-and-weathernext-forecast-skill.md) |
-| F3 | Information | COMPLETE | F0 and F0B settled | Does a peak-passed plus conditional-additional-heating distribution outperform the frozen absolute/bucket baseline? | Coherent remaining-heating model, chronological ablation report, and acceptance or rejection verdict. | [T0018](../../board/closed/2026/T0018-build-remaining-heating-distribution.md) |
-| F4 | Information | READY | F3 settled | Do frozen high-frequency upwind station residuals add information beyond target-station observations and model point features? | MADIS/ASOS spatial residual implementation and controlled ablation. | — |
-| F5 | Information | READY | F3 settled | Does causally observed cloud/radiation surprise add broad or predeclared cloud-regime skill? | GOES heating-surprise implementation and controlled ablation. | — |
+| F3 | Information | COMPLETE | F0 and F0B settled | Does a peak-passed plus conditional-additional-heating distribution outperform the frozen absolute/bucket baseline for US high temperature? | Coherent remaining-heating model, chronological ablation report, and acceptance or rejection verdict. | [T0018](../../board/closed/2026/T0018-build-remaining-heating-distribution.md) |
+| F4 | Information | IN_PROGRESS | F3 settled | Do frozen high-frequency upwind station residuals add information beyond target-station observations and model point features for the US-high control? | MADIS/ASOS spatial residual implementation and controlled ablation. | [T0019](../../board/T0019-implement-frozen-spatial-residual-nowcast.md) |
+| F6 | Cross-pillar | READY | F3 accepted | Does frozen US-high F3 pass Price Sheet V2 selected, quoted-price, market-relative, edge-half-life, and tape-backed research gates at one lifecycle horizon? | US-high Price Sheet V2 report with executable edge-decay curve and acceptance or rejection verdict. | — |
+| FC0 | Cross-pillar | READY | F0 settled | What immutable cohort, station, unit, local-day, and eligibility registry defines US/global high/low research without transferring evidence between them? | Four-cohort registry and dependency matrix with explicit unsupported stations and source gaps. | — |
+| F0GH | Settlement | BLOCKED | FC0 settled | What source and mapping define venue-authoritative outcomes and causal high-so-far for each eligible non-US high-temperature station? | Global-high settlement/source audit and versioned station mappings. | — |
+| F0UL | Settlement | BLOCKED | FC0 settled | What source and mapping define venue-authoritative outcomes and causal low-so-far for each eligible US low-temperature station? | US-low settlement/source audit and versioned station mappings. | — |
+| F0GL | Settlement | BLOCKED | FC0 settled | What source and mapping define venue-authoritative outcomes and causal low-so-far for each eligible non-US low-temperature station? | Global-low settlement/source audit and versioned station mappings. | — |
+| F3S | Information | BLOCKED | FC0, F0GH, F0UL, and F0GL settled | Do predeclared hierarchical station and climate-region effects improve probability skill without arbitrary station or date filtering? | Frozen station-scope registry, partial-pooling model, eligibility thresholds, and controlled ablation. | — |
+| F3GH | Information | BLOCKED | F0GH and F3S settled | Does a localized global-high model improve public and market baselines under its own causal cohort contract? | Global-high coherent distribution, chronological ablation, and verdict. | — |
+| F6GH | Cross-pillar | BLOCKED | F3GH or later global-high forecast accepted | Does one frozen global-high version pass the complete F6 contract? | Global-high Price Sheet V2, edge-half-life, tape, and verdict report. | — |
+| F3UL | Information | BLOCKED | F0UL and F3S settled | Does a trough-passed plus conditional-additional-cooling model improve US-low public and market baselines? | US-low coherent remaining-cooling distribution, chronological ablation, and verdict. | — |
+| F6UL | Cross-pillar | BLOCKED | F3UL or later US-low forecast accepted | Does one frozen US-low version pass the complete F6 contract? | US-low Price Sheet V2, edge-half-life, tape, and verdict report. | — |
+| F3GL | Information | BLOCKED | F0GL, F3UL, and F3S settled | Does global localization add skill to the low-temperature model beyond US-low and public baselines? | Global-low localized distribution, transfer ablation, and verdict. | — |
+| F6GL | Cross-pillar | BLOCKED | F3GL or later global-low forecast accepted | Does one frozen global-low version pass the complete F6 contract? | Global-low Price Sheet V2, edge-half-life, tape, and verdict report. | — |
+| F4X | Information | BLOCKED | F4, F3S, and relevant cohort model settled | Do frozen spatial residual features transfer or require cohort/station-specific refits outside US high temperature? | Four-cohort spatial transfer matrix and accepted/rejected scoped versions. | — |
+| F5 | Information | READY | F3 settled | Does causally observed cloud/radiation surprise add broad or predeclared cloud-regime skill for US high temperature? | GOES heating-surprise implementation and controlled ablation. | — |
+| F5X | Information | BLOCKED | F5 and relevant cohort model settled | Does observed cloud/radiation surprise transfer to other eligible high/low cohorts under identical-row ablation? | Cohort-specific GOES transfer report and scoped versions. | — |
 | F5A | Information | GATED | F4 or other frozen evidence identifies a coastal residual mechanism | Does local sea, bay, or lake temperature improve the affected coastal or lake-regime forecast after core sources are known? | Local-water-temperature causal dataset and predeclared regime ablation. | — |
 | F5B | Information | GATED | Long-history causal corpus spans multiple ENSO events and F0B evaluation is available | Does vintage-correct RONI improve seasonal D-1 calibration after forecast-model information is known? | RONI/ENSO incremental calibration ablation or explicit no-change verdict. | — |
-| F6 | Cross-pillar | READY | At least one forecast version from F2-F5 is accepted | Does one frozen forecast version pass Price Sheet V2 selected, quoted-price, market-relative, and tape-backed research gates at one lifecycle horizon? | Versioned Price Sheet V2 candidate report and pricing-research acceptance or rejection verdict. | — |
 
 `Settled` means the predecessor thread closed with `COMPLETE`, `REJECTED`, or
 an explicit no-change answer that resolves the dependency. It does not mean a
@@ -633,11 +705,34 @@ F3 accepted contract and evidence:
   `scripts/forecast_remaining_heating_report.py`; outputs live under
   `reports/forecast-edge/f3-current/`.
 
+### Slice 3S: Hierarchical Station Specialization
+
+- Freeze cohort membership, climate/settlement parent groups, station eligibility,
+  and minimum independent-date thresholds before holdout scoring.
+- Fit pooled, group, and eligible station heads with explicit shrinkage.
+- Compare each child against its pooled parent and report leave-one-station-out
+  transfer; never search arbitrary station combinations or exact dates.
+
+### Slices 3GH, 3UL, And 3GL: Cohort Models
+
+- Global high temperature starts from the accepted remaining-heating structure
+  but receives its own localization, units/day mapping, calibration, and
+  evidence clock.
+- US low temperature uses a separately versioned trough-passed hurdle and
+  conditional remaining-cooling distribution.
+- Global low temperature tests transfer from the US-low structure only after
+  global settlement/local-day mapping passes.
+- Compare shared-backbone, cohort-head, and cohort-only controls. Keep separate
+  models wherever partial pooling fails untouched transfer tests.
+
 ### Slice 4: Spatial Nowcast
 
+- Keep the active F4 experiment frozen to the US-high control.
 - Freeze neighbor network and dynamic upwind aggregation.
 - Collect/model neighbor residuals.
 - Run controlled ablation.
+- Use F4X later to test transfer or cohort-specific refits; F4 success alone
+  does not authorize global or low-temperature use.
 
 ### Slice 5: GOES Heating Surprise
 
@@ -666,11 +761,23 @@ F3 accepted contract and evidence:
 - Reject the feature if apparent skill is explained by trend, a single event,
   or correlated weather dates.
 
-### Slice 6: Price Sheet Candidate
+### Slice 6: Price Sheet Candidate And Edge Half-Life
 
-- Freeze one accepted forecast version.
+- Freeze one accepted forecast version and cohort.
 - Join it to Price Sheet V2a at one frozen lifecycle horizon without changing signal selection.
 - Re-run selected, quoted-price, and market-relative gates before any execution experiment.
+- Set `t0` to the first causal quote-ready time after the frozen forecast
+  update and processing latency. Hold that forecast fixed while sampling
+  executable market prices at `t0`, `+30s`, `+2m`, `+5m`, and
+  `+15m`; separately report later forecast revisions.
+- Define side-aligned net edge as conservative forecast probability minus
+  executable VWAP/price and all declared costs/reserves. Report the first time
+  edge falls below half its initial value, becomes nonpositive, or is
+  right-censored by missing, gapped, or unfillable tape.
+- Classify an edge that disappears before the first realistic execution
+  checkpoint as unusable latency evidence, not information edge. Require
+  useful-size availability and later settlement/markout evidence for any
+  trading claim.
 
 ## Proposed Module Boundaries
 
@@ -720,8 +827,12 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
 - [x] Additional-heating distribution validated.
 - [ ] MADIS/upwind residual ablation completed.
 - [ ] GOES cloud/radiation ablation completed.
-- [x] One forecast version passes pricing-research acceptance.
-- [ ] Price Sheet V2 integration reviewed separately.
+- [x] One US-high forecast version passes pricing-research acceptance.
+- [ ] Four-cohort registry and three remaining settlement mappings frozen.
+- [ ] Hierarchical station specialization passes controlled ablation.
+- [ ] US-low remaining-cooling distribution evaluated.
+- [ ] Global-high and global-low localized distributions evaluated.
+- [ ] Price Sheet V2 integration and executable edge half-life reviewed separately.
 
 ## Decision Log
 
@@ -754,3 +865,10 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
   recent 14-date slice. Market-relative point estimates also improved, but
   their intervals cross zero; acceptance authorizes F6 pricing research only,
   not funded trading.
+- 2026-08-13: Expanded the execution queue to four explicit evidence cohorts.
+  Preserved active F4 as US-high only; added FC0 and cohort settlement/model
+  dependencies, hierarchical station specialization, distinct remaining
+  cooling for lows, gated F4/F5 transfer slices, cohort-specific F6 gates, and
+  executable edge-half-life measurement. The accepted discovery v1 grammar
+  remains unchanged; a station-scope v2 requires FC0/F3S. No funded authority
+  changed.

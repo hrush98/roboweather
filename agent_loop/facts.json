@@ -1,14 +1,14 @@
 {
   "board": {
-    "active": 0,
-    "closed": 18,
-    "open": 0,
+    "active": 1,
+    "closed": 19,
+    "open": 1,
     "parked": 0,
     "pillars": {
       "costs-adverse-selection": 0,
       "cross-pillar": 0,
       "execution": 0,
-      "information": 0,
+      "information": 1,
       "settlement": 0
     },
     "waiting": 0
@@ -18,13 +18,13 @@
       "available": true,
       "path": "docs/current-trading-system-audit.md",
       "review_date": "2026-08-13",
-      "word_count": 5546
+      "word_count": 5599
     },
     "improvement_loop": {
       "available": true,
       "path": "docs/continuous-improvement-loop.md",
       "review_date": "2026-08-12",
-      "word_count": 2414
+      "word_count": 2474
     },
     "live_journal": {
       "available": true,
@@ -34,28 +34,28 @@
     "project_overview": {
       "available": true,
       "path": "docs/project-overview.md",
-      "review_date": "2026-08-12",
-      "word_count": 1272
+      "review_date": "2026-08-13",
+      "word_count": 1364
     },
     "roadmap": {
       "available": true,
       "path": "docs/execution-rebuild-roadmap.md",
       "review_date": "2026-08-13",
-      "word_count": 2262
+      "word_count": 2415
     },
     "state": {
       "available": true,
       "path": "agent_loop/STATE.md",
-      "review_date": "2026-08-12",
-      "word_count": 900
+      "review_date": "2026-08-13",
+      "word_count": 1039
     }
   },
-  "facts_fingerprint": "bb5fae7316d60ae35f6e86c0289dd8450f730fae6b7508895500b5ae39c054b4",
-  "generated_at": "2026-08-13T18:09:50Z",
+  "facts_fingerprint": "a4a994b6f8e59850941d7ee81ee271a806f9b978933099ce7b1395dabf6df3f4",
+  "generated_at": "2026-08-13T18:45:03Z",
   "learning": {
-    "captured": 12,
+    "captured": 13,
     "integrated": 0,
-    "open": 13,
+    "open": 14,
     "overdue": 0,
     "revisit": 1,
     "superseded": 0
@@ -67,7 +67,7 @@
     },
     "head": {
       "available": true,
-      "value": "a95d82bbb7c3f8e025cb9fccbd1266f03a72d756"
+      "value": "26f96c5414af1a01f09ad4b1ef625479f4debcc5"
     },
     "root": "/home/maxrush/General/roboweather"
   },
@@ -83,11 +83,11 @@
     "research_database": {
       "available": true,
       "latest_resolved_market_date": "2026-08-12",
-      "latest_snapshot_timestamp": "2026-08-13T18:09:22.534965+00:00",
-      "modified_at": "2026-08-13T18:09:19Z",
+      "latest_snapshot_timestamp": "2026-08-13T18:45:02.809183+00:00",
+      "modified_at": "2026-08-13T18:45:00Z",
       "path": "/home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite",
-      "size_bytes": 67796652032,
-      "snapshot_count": 1809612
+      "size_bytes": 67832799232,
+      "snapshot_count": 1810688
     },
     "services": {
       "roboweather-market-tape.service": {
@@ -110,7 +110,6 @@
   "schema_version": 1,
   "warnings": [
     "live_journal has no machine-readable Last reviewed/Last updated date",
-    "project_overview review date 2026-08-12 predates audit review 2026-08-13",
     "improvement_loop review date 2026-08-12 predates audit review 2026-08-13"
   ]
 }

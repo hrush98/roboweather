@@ -1,11 +1,11 @@
 # Agent Loop State
 
-Last reviewed: 2026-08-12
-Human approval: initial coordination layer and corrected deterministic-discovery direction approved on 2026-08-11; four-pillar edge governance approved on 2026-08-12; later strategic changes require human approval.
+Last reviewed: 2026-08-13
+Human approval: initial coordination layer and corrected deterministic-discovery direction approved on 2026-08-11; four-pillar edge governance approved on 2026-08-12; the four-cohort, station-specific information thesis and edge-half-life direction approved on 2026-08-13; later strategic changes require human approval.
 
 ## Current Verdict
 
-RoboWeather is a four-pillar net-edge research system with funded trading paused. The shared market tape and deterministic discovery path are valid research substrates, but no pillar has yet produced sufficiently robust forward profitability. Promotion still requires an exact candidate version with venue-authoritative settlement, valid markouts, causal tape coverage, conservative positive economics, concentration controls, and controlled useful-size evidence.
+RoboWeather is a four-pillar net-edge research system with funded trading paused. F3 established research-level forecast advantage for one exact US high-temperature decision contract, not tradable edge. The working information thesis is specialized causal estimation of one station's settlement-bucket probabilities at one exact decision time, not globally outperforming public numerical weather prediction. Promotion still requires an exact candidate version with venue-authoritative settlement, market-relative edge that persists to an executable checkpoint, valid markouts, causal tape coverage, conservative positive economics, concentration controls, and controlled useful-size evidence.
 
 The authoritative financial and systems assessment remains `docs/current-trading-system-audit.md`. This file is a compact orientation layer, not a replacement for that audit.
 
@@ -18,7 +18,7 @@ net trading edge = information advantage + settlement advantage
 
 | Pillar | Proof target | Current direction |
 | --- | --- | --- |
-| Information | A causal outcome estimate or deterministic signal that beats the contemporaneous executable market on untouched data. | Treat the zero-survivor broad causal holdout as negative evidence, repair target/evaluation truth, then test genuinely distinct forecast information. |
+| Information | A causal, settlement-specific station probability that improves on public baselines and retains useful information beyond the contemporaneous executable market on untouched data. | Preserve the accepted US-high F3 control; validate US high, global high, US low, and global low as separate cohorts; use hierarchical station specialization and measure information freshness without confusing it with microsecond latency. |
 | Settlement | More accurate contract-resolution mapping or faster settlement-compatible truth than the market. | Reconcile venue, Weather Underground, CLI, IEM, and high-frequency ASOS before trusting labels or high-so-far rules. |
 | Execution | Better conversion of a valid fair into filled PnL through timing, price, quoting, cancellation, and inventory behavior. | Preserve causal tape/replay and require actual markout/fill evidence; working plumbing is not yet a proven advantage. |
 | Costs and adverse selection | Positive net economics after fees, spread, slippage, toxicity, capacity, and concentration. | Keep reserves explicit and prove fill-conditioned useful-size economics before promotion. |
@@ -29,13 +29,15 @@ The pillars may progress independently, but funded promotion is an integrated ga
 
 1. Keep policy-neutral snapshot, tape, outcome, and settlement evidence collection healthy.
 2. Preserve the completed bounded deterministic discovery and immutable-candidate path. Its wide untouched holdout produced zero survivors; do not keep widening the grammar without a new causal mechanism.
-3. Shift new research capacity toward settlement truth and honest information-edge evaluation through the F0/F0B queue in `docs/implementation/forecast-edge-data-program.md`.
-4. Integrate any surviving signal through separately versioned pricing, execution, cost, adverse-selection, concentration, and useful-size gates.
-5. Package a Phase 4 request only after all four pillars pass for one exact candidate and the D6 gates in `docs/implementation/tape-strategy-discovery.md` pass.
+3. Finish the active US-high F4 ablation without retroactively widening its cohort, then test the accepted F3 version through F6 market-relative and edge-half-life gates.
+4. Expand through explicit US-high, global-high, US-low, and global-low cohort contracts. Each cohort needs its own settlement truth, source coverage, high/low state model, calibration, and evidence clock; sharing is allowed only through frozen hierarchical partial pooling that passes transfer ablation.
+5. Integrate any surviving signal through separately versioned pricing, execution, cost, adverse-selection, concentration, and useful-size gates.
+6. Package a Phase 4 request only after all four pillars pass for one exact candidate and the D6 gates in `docs/implementation/tape-strategy-discovery.md` pass.
 
 ## Approved Parallel Work
 
-- Forecast-edge research may continue under `docs/implementation/forecast-edge-data-program.md` without changing funded authority or bypassing the execution critical path.
+- Forecast-edge research may continue under `docs/implementation/forecast-edge-data-program.md` across four explicit cohorts without changing funded authority or bypassing the execution critical path.
+- Station specialization belongs first in hierarchical forecast localization and calibration. Discovery may later use a frozen station-scope registry, but never arbitrary station subsets or exact calendar-date predicates selected after outcomes.
 - Full-market-lifecycle collection and horizon research may continue under `docs/implementation/full-market-lifecycle-trading.md`.
 - Price Sheet V2 work remains research-only until its causal calibration and untouched-forward gates pass.
 

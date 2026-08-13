@@ -6,7 +6,10 @@ Last updated: 2026-08-13
 
 ## Objective
 
-Establish whether an exact weather signal can be traded through an exact execution tactic at useful size with positive net, settlement-aligned PnL across the observable market lifecycle.
+Establish whether a causal settlement-bucket probability for one station,
+cohort, and exact decision time can be traded through an exact execution tactic
+at useful size with positive net, settlement-aligned PnL across the observable
+market lifecycle.
 
 The roadmap is governed by four independently developable evidence pillars:
 
@@ -16,6 +19,12 @@ net trading edge = information advantage + settlement advantage
 ```
 
 Technical phases remain the dependency map; pillar ownership is the proof map. Every bounded thread declares its primary pillar, while Phase 4 remains a cross-pillar gate for one exact signal, settlement mapping, execution rule, and size.
+
+The information program has four explicit evidence cohorts: `US_HIGH`,
+`GLOBAL_HIGH`, `US_LOW`, and `GLOBAL_LOW`. Evidence does not transfer
+automatically across geography or high/low dynamics. The default is
+hierarchical partial pooling with cohort/station heads, not a universal model
+and not unrestricted per-station curve fitting.
 
 ```text
 market listing + causal forecast state
@@ -38,7 +47,7 @@ The Phase 3 market-tape recorder has retained policy-independent data since July
 
 Phase 3D has completed D0-D5 for the versioned causal checkpoint execution contract. The production cache passed cold, direct-replay, crash-resume, warm, relevant-increment, and resource gates; the cache-only grid passed chronological folds, pre-holdout family collapse, four-state reporting, and deterministic output; and exact candidate evaluation is immutable, activation-bounded, aligned/cap-aware, and promotion-fail-closed. `scripts/run_discovery.py` is now the sole operator command. Its final production acceptance passed interrupted cold/resume in 40.05 seconds, an explicit zero-replay warm cycle in 7.07 seconds, and a natural new-watermark cycle in 7.10 seconds. The TUI reads an atomically published latest-complete report/cache record, and a deliberately failed run left that record byte-identical. Research and tape remain active; the old service remains inactive/disabled and its source is archived outside active systemd units. No replacement scheduler is enabled. Production contains no registered candidate versions and no strategy passed the latest holdout, so the separate D6/Phase 4 gate remains blocked on exact venue, markout, economics, concentration, size, and human-approval evidence.
 
-A full-market-lifecycle forecast/data program is approved as a parallel research build. It extends collection to first listing and builds one continuously updating pricing and inventory engine with separately validated D-1, early-day, intraday, and late information states. F0/F0B/F1 are complete, F2 rejected the exact NBM archive transform, and F3 accepted one exact-cutoff remaining-heating/HRRR ensemble for Price Sheet V2 research. F4 spatial residuals are next; F6 is now eligible to test the frozen F3 version through quoted-price and tape-backed gates. Funded trading remains paused.
+A full-market-lifecycle forecast/data program is approved as a parallel research build. It extends collection to first listing and builds one continuously updating pricing and inventory engine with separately validated D-1, early-day, intraday, and late information states. F0/F0B/F1 are complete, F2 rejected the exact NBM archive transform, and F3 accepted one exact-cutoff US-high remaining-heating/HRRR ensemble for Price Sheet V2 research. F4 is actively testing US-high spatial residuals. F6 can test frozen US-high F3 through quoted-price, executable edge-half-life, and tape-backed gates; FC0 and the cohort-specific settlement/model slices govern later global-high, US-low, and global-low expansion. Funded trading remains paused.
 
 Canonical records:
 
@@ -62,7 +71,7 @@ Canonical records:
 | 2. Shadow quote construction | Generate auditable quote intents and cancellation metadata. | Plumbing prototype complete | Deterministic intent construction tests pass. No profitability claim. |
 | 3. Shared market tape and replay | Collect pre-signal active-universe market events and replay quote tactics causally. | Research substrate accepted at about 96.7% valid coverage with gap-affected decisions rejected; recorder hardening deferred. Slice 4 real join and passive/markout Slices 5-6 remain open. | Tape validity, deterministic book replay, conservative fill bounds, and forward shadow reporting pass. |
 | 3D. Deterministic strategy discovery | Cache each executable tape decision once, search a bounded historical grid, test frozen representatives and existing candidates honestly, and issue one report. | D0-D5 accepted for the first-post-ready-checkpoint taker contract. `scripts/run_discovery.py` is the sole operator command; latest complete status is visible in the TUI; no scheduler is enabled. Production has no registered candidate versions. | Complete. Preserve the one-command contract and keep D6/Phase 4 authority separate. |
-| F. Full-lifecycle forecast/data foundation | Observe weather and market state from first listing and price horizon-specific distributions. | F0/F0B/F1 complete; F2's exact NBM transform rejected; F3 remaining-heating ensemble accepted for pricing research; F4 and F6 ready; no production consumer | Venue-aligned truth, causal D-1 sources, first-listing tape, horizon calibration, and inventory-aware replay pass. |
+| F. Full-lifecycle forecast/data foundation | Observe weather and market state from first listing and price horizon-specific distributions. | US-high F3 accepted for pricing research and F4 active; F6 and four-cohort FC0 ready; global-high, US-low, and global-low truth/models remain gated; no production consumer | Each cohort has venue-aligned truth, causal sources, coherent high/low distributions, hierarchical station validation, horizon calibration, and its own F6 evidence. |
 | 4. Funded validation | Validate replay fidelity and useful-size fill-conditioned PnL with controlled real orders. | Blocked on an explicitly approved Phase 3D candidate version with validated V2a + V2b pricing/execution | Plumbing canary passes, then `$50` and `$100` size-specific evidence passes. |
 | 5. Learned quote policy and sizing | Select quote/skip/size from calibrated signal and microstructure state. | Future | Sufficient clean Phase 3/4 data and stable out-of-sample improvement. |
 
@@ -74,7 +83,11 @@ Canonical records:
    - run expanding-window calibration with a decision-time market reference (complete; fitted baselines did not beat market);
    - produce a conservative outcome fair and maximum economic quote price (complete);
    - freeze one calibrator and untouched forward start before inspecting that window;
-   - require positive out-of-fold theoretical quoted-price EV before shadow promotion.
+   - measure side-aligned net edge at quote-ready, +30s, +2m, +5m, and +15m
+     using executable tape and a fixed forecast, while reporting later forecast
+     revisions separately;
+   - require positive out-of-fold theoretical quoted-price EV and useful-size
+     edge persistence before shadow promotion.
 2. V2b execution overlay starts on valid Phase 3 windows:
    - materialize decision-time book, queue, flow, latency, and coverage features for both the broad policy-neutral discovery view and frozen V2 views;
    - reduce V2a price/size or skip based on toxicity and capacity;
@@ -85,8 +98,11 @@ The detailed contracts, module boundaries, slices, tests, and acceptance gates a
 
 ## Deterministic Strategy Discovery
 
-Strategy generation is downstream of measurement. Do not hard-code a named MVP,
-model family, side, station exception, or clock variant as the final strategy.
+Strategy generation is downstream of measurement. The accepted v1 grid does
+not search individual stations or exact temperature buckets; station currently
+enters deduplication and concentration diagnostics. Do not hard-code a named
+MVP, model family, side, station exception, exact calendar date, or clock
+variant as the final strategy.
 Exact candidate versions remain immutable so later evidence cannot be attributed
 to a rule changed after the fact, but lifecycle machinery is not a prerequisite
 for obtaining the analytical answer.
@@ -142,13 +158,14 @@ they are not intended to create unrelated permanent clock-window strategies.
 The expansion follows these gates:
 
 1. Observe current and future-dated weather markets from first listing and measure actual lifecycle liquidity and price discovery.
-2. Build causally timestamped, station-specific D-1 distributions from WeatherNext/NBM and eligible short-range sources.
-3. Extend the continuous Price Sheet V2 consumer one validated lifecycle region at a time, using horizon-sensitive or explicitly pooled calibration and uncertainty/inventory reserves.
-4. Replay quote activation, scheduled-release cancellation/repricing, filled inventory, exit, and hold-to-settlement behavior.
-5. Feed eligible lifecycle rows into recurring Phase 3D runs, register bounded
+2. Build causally timestamped, station-specific D-1 distributions from WeatherNext/NBM and eligible short-range sources for the four separately versioned cohorts.
+3. Use frozen hierarchical station/climate groups and cohort-specific high-versus-low state models; allow individual-station heads only after minimum independent-date and untouched-parent-comparison gates.
+4. Extend the continuous Price Sheet V2 consumer one validated lifecycle region at a time, using horizon-sensitive or explicitly pooled calibration and uncertainty/inventory reserves.
+5. Replay quote activation, scheduled-release cancellation/repricing, filled inventory, exit, and hold-to-settlement behavior.
+6. Feed eligible lifecycle rows into recurring Phase 3D runs, register bounded
    candidate versions, and compare their post-activation evidence with the late
    control under shared portfolio caps.
-6. Request controlled funded validation only for the exact immutable horizon,
+7. Request controlled funded validation only for the exact immutable horizon,
    tactic, inventory cap, exit rule, and size that pass.
 
 The complete implementation contract is `docs/implementation/full-market-lifecycle-trading.md`.

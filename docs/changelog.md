@@ -4,6 +4,13 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-13
 
+- Approved the four-cohort information thesis and dependency-safe expansion
+  plan. US high, global high, US low, and global low now have separate
+  settlement, model, calibration, and F6 evidence clocks; active F4 remains
+  frozen to US high. Added hierarchical station scopes, remaining cooling for
+  lows, a gated station-aware discovery grammar, and executable edge-half-life
+  requirements. No funded authority changed.
+
 - Completed forecast-edge Slice F3 and accepted
   `remaining_heating_hurdle_multinomial_exact_cutoff_v3` for Price Sheet V2
   research. Corrected the legacy hour-bucket evaluation leak, added exact

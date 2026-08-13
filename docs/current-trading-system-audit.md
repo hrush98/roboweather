@@ -178,6 +178,14 @@ Update the body of this document when the current assessment changes. Append one
 
 ## Audit Log
 
+- 2026-08-13: Approved the four-cohort information thesis. US high, global
+  high, US low, and global low now retain separate settlement, forecast,
+  calibration, and F6 evidence clocks; hierarchical station scopes replace
+  arbitrary station/date filtering, and F6 must measure executable net-edge
+  decay through 15 minutes. Active F4 remains US-high only and funded authority
+  is unchanged.
+
+
 - 2026-08-13: Accepted F3 for Price Sheet V2 research. Exact local cutoff
   selection removed 4,338 post-cutoff rows from the legacy selection, and the
   coherent hurdle/multinomial remaining-heating model improved corrected

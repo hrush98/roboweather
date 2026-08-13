@@ -169,6 +169,9 @@ Known failure modes that should be checked during review:
 | Adverse live fill selection | Run the whole-chain truth report and reject or pause sleeves where filled-subset replay materially underperforms unfilled selected replay. |
 | Station allow-list leakage | Add tests around policy specs and live strategy plans. |
 | Market-family leakage | Assert `HIGH_TEMP` vs `LOW_TEMP` filters in tests and replay specs. |
+| Cohort evidence transfer | Keep `US_HIGH`, `GLOBAL_HIGH`, `US_LOW`, and `GLOBAL_LOW` settlement, model, calibration, and holdout versions separate. |
+| Retrospective station or date selection | Use a frozen hierarchical station-scope registry; exact dates are identities/split boundaries only. |
+| Ephemeral edge called information advantage | Measure quote-ready-to-15m executable net-edge decay and classify pre-execution disappearance as unusable latency evidence. |
 | Polymarket settlement differs from weather-outcome scoring | Track live settlement separately from research weather outcomes. |
 | Partial fills overstated as complete | Execution tests and live ledger review. |
 | Tick-size or order-version execution failures | Quantization tests and order-attempt rejection summaries. |

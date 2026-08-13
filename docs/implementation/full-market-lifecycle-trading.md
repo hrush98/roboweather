@@ -2,11 +2,11 @@
 
 Status: Approved for research implementation; not approved for production pricing or funded trading
 
-Last updated: 2026-07-30
+Last updated: 2026-08-13
 
 ## Feature Goal
 
-Build one causal, continuously operating research and execution framework that observes each supported weather market from first listing through settlement, updates station-high distributions as information changes, and evaluates complete quote and inventory lifecycles at useful size.
+Build one causal, continuously operating research and execution framework that observes each supported weather market from first listing through settlement, updates station high-or-low distributions as information changes, and evaluates complete quote and inventory lifecycles at useful size.
 
 This plan coordinates five existing programs:
 
@@ -18,6 +18,8 @@ This plan coordinates five existing programs:
 - phase sequencing: `docs/execution-rebuild-roadmap.md`.
 
 The economic claim and falsification live in `docs/hypotheses/2026-07-17-full-market-lifecycle-trading.md`. The strategy rationale is preserved in `reports/full-market-lifecycle-trading-strategy-2026-07-17.md`.
+
+The runtime may observe all supported markets, but forecast and promotion evidence is partitioned into `US_HIGH`, `GLOBAL_HIGH`, `US_LOW`, and `GLOBAL_LOW`. Every immutable record carries cohort, station, market family, settlement-mapping version, and station-scope version. One cohort passing never authorizes another.
 
 ## Non-Goals
 
@@ -100,7 +102,8 @@ Every signal, price sheet, quote, position decision, and evaluation row must car
 
 Required fields include:
 
-- venue event, market, token, station, and market date;
+- venue event, market, token, station, market date, and four-cohort ID;
+- market family, geography class, venue units/bucket syntax, and settlement-mapping version;
 - listing/discovery time, accepting-orders time, close time, and settlement time;
 - local station timezone and lifecycle horizon transitions;
 - token subscription generations and valid/invalid tape intervals;
@@ -181,8 +184,10 @@ Required fields include:
 - Collect causally timestamped WeatherNext, NBM, HRRR/RRFS, observation, and outcome-source data.
 - Produce a D-1 baseline from actual forecast vintages, not the current lightweight next-day scaffold.
 - Localize ensemble members to the station and learn resolution-source mapping.
+- Use peak-passed/remaining-heating models for highs and separately versioned trough-passed/remaining-cooling models for lows.
+- Fit frozen hierarchical cohort, climate-region, and eligible station effects; require child heads to beat their pooled parent on untouched data.
 - Emit coherent distributions for every eligible horizon and retain revision lineage.
-- Calibrate separately by horizon where sample size supports it, with pooled shrinkage otherwise.
+- Calibrate separately by cohort and horizon where sample size supports it, with explicit pooled shrinkage otherwise.
 - Preserve continuous forecast-lead and information-freshness features so pooled models can learn across horizon boundaries without treating all lifecycle states as interchangeable.
 - Benchmark climatology, deterministic conversion, individual sources, and combined models.
 
@@ -204,6 +209,8 @@ Required fields include:
 - Keep the initial late Price Sheet V2a pilot unchanged as the control.
 - Add earlier horizons one at a time after their forecast gate passes.
 - Record the public/market baseline available at the exact decision time.
+- For every F6 candidate, retain the quote-ready forecast while sampling executable market prices at +30 seconds, +2 minutes, +5 minutes, and +15 minutes; report later forecast revisions separately.
+- Report net-edge half-life, time to nonpositive edge, available size, and right-censoring from gaps or unavailable books.
 
 ### Exit Gate
 

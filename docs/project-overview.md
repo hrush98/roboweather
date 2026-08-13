@@ -2,7 +2,7 @@
 
 RoboWeather is a research-first weather prediction-market system organized around four sources of net trading edge: information advantage, settlement advantage, execution advantage, and costs/adverse selection. Existing plans remain in their current locations; hypotheses and bounded board threads declare which pillar they advance.
 
-Last reviewed: 2026-08-12
+Last reviewed: 2026-08-13
 
 ## Edge Pillars
 
@@ -19,6 +19,8 @@ net trading edge = information advantage + settlement advantage
 | Costs and adverse selection | Price reserves, fees, spread/slippage, toxicity, capacity, concentration, and net useful-size economics. |
 
 These are independent development verticals but a joint promotion contract. Infrastructure completion is not proof of advantage, and no single pillar authorizes funded trading by itself.
+
+The working information thesis is narrower than general weather prediction: estimate one station-specific, settlement-mapped bucket distribution at one exact decision time, then prove that its conservative advantage over an executable market persists long enough to trade. US high, global high, US low, and global low are separate evidence cohorts. Hierarchical station effects may share strength, but acceptance, calibration, and promotion remain cohort- and version-specific.
 
 ## Documentation Map
 
@@ -43,7 +45,7 @@ Use the fixed agent read order in `AGENTS.md`. Update living documents in place.
 
 ## Current Mode
 
-Funded trading is paused. The Phase 3 shared market tape is the execution-evidence substrate. The prior Phase 3D C3-C6 operator workflow failed production runtime and is retired; the accepted replacement is the incremental executable-decision cache plus the sole deterministic `scripts/run_discovery.py` report command. Phase 4 remains blocked on venue-authoritative settlement, valid markouts, and an exact candidate that passes the complete conservative/base evidence gate. Forecast-edge and full-market-lifecycle work may continue as approved parallel research. Current machine status belongs in `agent_loop/facts.json`; the current financial verdict remains in `docs/current-trading-system-audit.md`.
+Funded trading is paused. The Phase 3 shared market tape is the execution-evidence substrate. The prior Phase 3D C3-C6 operator workflow failed production runtime and is retired; the accepted replacement is the incremental executable-decision cache plus the sole deterministic `scripts/run_discovery.py` report command. Phase 4 remains blocked on venue-authoritative settlement, valid markouts, and an exact candidate that passes the complete conservative/base evidence gate. Forecast-edge and full-market-lifecycle work may continue as approved parallel research across the four explicit cohorts. The accepted discovery v1 grid is market-family-specific but not station-specific; future station scopes require the frozen FC0/F3S registry rather than retrospective station filters. Current machine status belongs in `agent_loop/facts.json`; the current financial verdict remains in `docs/current-trading-system-audit.md`.
 
 The research loop:
 

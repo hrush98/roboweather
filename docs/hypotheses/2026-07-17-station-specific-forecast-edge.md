@@ -8,7 +8,14 @@ The full strategic analysis is preserved in `reports/forecast-edge-data-source-s
 
 ## Hypothesis
 
-RoboWeather can improve weather-only and settlement-aligned bucket probabilities by combining exact resolution-compatible high-so-far, localized multi-model ensemble guidance, spatially advected observation residuals, and observed cloud/radiation surprise. The resulting coherent temperature distribution should add information beyond the existing station-observation and deterministic HRRR point summaries.
+RoboWeather can improve the settlement-bucket probability for one station,
+market family, and exact decision timestamp by specializing causally available
+public weather information to the venue's reporting process. For highs this
+combines resolution-compatible high-so-far and remaining heating; for lows it
+uses low-so-far and remaining cooling. Localized multi-model guidance,
+hierarchically pooled station effects, spatially advected observation
+residuals, and observed cloud/radiation surprise may add information beyond
+public baselines and the contemporaneous market.
 
 ## Expected Mechanism
 
@@ -24,10 +31,24 @@ The proposed edge comes from information the current stack does not represent we
 
 Public data are not assumed to be alpha merely because they are added. The hypothesis requires incremental skill after the existing HRRR-rich baseline and contemporaneous market probability are known.
 
+The intended advantage may combine predictive information and operational
+freshness, but it is not a microsecond-latency thesis. A discrepancy must
+survive to a realistic executable checkpoint and retain useful-size net edge.
+F6 therefore measures the forecast-to-market edge-decay curve rather than
+crediting a price visible only before the system could act.
+
 ## Scope
 
-- Market family: `HIGH_TEMP` first
-- Stations/regimes: current US airport stations, with inland/coastal and cloud/front regimes reported separately
+- Evidence cohorts: `US_HIGH`, `GLOBAL_HIGH`, `US_LOW`, and
+  `GLOBAL_LOW`; evidence and versions never transfer silently between them.
+- Initial accepted control: `US_HIGH` only. Global and low-temperature
+  cohorts remain collected but unvalidated until their settlement and model
+  gates close.
+- Stations/regimes: station-specific probabilities with hierarchical pooling
+  across frozen climate/settlement groups. Individual-station promotion
+  requires sufficient independent dates and an untouched comparison against
+  its pooled parent; arbitrary station subsets and exact-date rules are out of
+  scope.
 - Side: full integer outcome distribution supporting both `BUY_YES` and `BUY_NO`
 - Entry band: not a signal-selection constraint during forecast evaluation
 - Local window: D-1 open, D-1 revision, D0 pre-dawn, morning, midday, late, and peak-passed horizons; the current late window remains the initial pricing/execution control
@@ -42,6 +63,10 @@ Public data are not assumed to be alpha merely because they are added. The hypot
 - Market gate: the weather-only distribution adds log-score or Brier skill after contemporaneous normalized market probabilities are known; market-aware shrinkage remains a separate pricing step.
 - Recent-window requirement: positive incremental skill in both a held-out recent window and all loaded out-of-sample history, with regime failures shown rather than averaged away.
 - Minimum resolved sample: evaluate by independent weather date and regional event, not threshold-row count. Research may proceed earlier, but live dependency requires repeated performance across at least 60 resolved weather dates and more than one material regime/season slice.
+- Freshness requirement: measure side-aligned forecast-to-executable-market
+  edge at quote-ready time and frozen later checkpoints; distinguish market
+  absorption from later forecast revisions, and right-censor missing or
+  unfillable tape rather than treating it as zero edge.
 - Fillability/depth requirement: not required to establish weather-signal skill, but the complete signal + price + quote rule still must pass current execution promotion gates before funded use.
 - Live canary requirement: none until Price Sheet V2 consumes a frozen forecast version and the exact integrated trading contract passes shadow and canary gates.
 
@@ -102,3 +127,5 @@ Review after the settlement-source audit, after the first WeatherNext/NBM identi
 - 2026-08-12: Completed F1 causal source-vintage collection and replay. The separate catalog preserves raw revisions and all availability clocks, bounded NOAA/IEM collectors begin after supported market listing, WeatherNext requires provider ingestion metadata, and RRFS fails closed while unfrozen. Host probes validate NBM/HRRR/IEM plumbing only; F2 must still prove identical-row market-relative skill.
 - 2026-08-13: Rejected `nbm_v5_archive_cycle_plus_2h_v1` for F2 after its identical-row D0 holdout failed joint log-loss/RPS and market-relative gates. WeatherNext remains unavailable rather than rejected. A future localized NBM or WeatherNext version must start a new evidence clock; no pricing or funded authority changed.
 - 2026-08-13: Accepted F3 for Price Sheet V2 research after superseding the leaky hour-bucket selector with exact local as-of evaluation and replacing zero-mass independent ordinal curves with a coherent multinomial positive-heating component. The frozen weather ensemble improved corrected historical, untouched forward, and recent probability scores versus HRRR-rich; market-relative point estimates also improved but remain statistically uncertain. F6 pricing/tape gates and funded authority remain unchanged.
+
+- 2026-08-13: Expanded the approved thesis to four separately versioned cohorts and froze hierarchical station specialization as the default. F3/F4 remain US-high evidence; global-high and both low-temperature cohorts require their own settlement and forecast gates. F6 must measure executable edge half-life so transient pre-action prices are not credited as information edge. No funded authority changed.

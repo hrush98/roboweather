@@ -66,7 +66,7 @@ No Phase 3D output authorizes funded trading.
 - A champion/challenger state machine as a prerequisite for running analysis.
 - Reconstructing passive fills or private order truth from public tape.
 - An expanding grammar, arbitrary station exceptions, or retrospective date
-  filters.
+  filters. Exact dates remain identities and split boundaries, never rule predicates.
 - Replacing raw snapshot, tape, outcome, or settlement collection.
 - Deleting the existing C2-C6 code before the replacement passes acceptance.
 
@@ -244,6 +244,23 @@ manifest must contain their fingerprints and all effective values.
 
 ## Search And Evaluation Contract
 
+The accepted `phase3d_simple_rules_v1` grammar searches model, market family,
+side, observation-delay bucket, local window, entry band, minimum edge, and
+maximum spread. It does not search station, country, region, exact temperature
+bucket, or exact calendar date. Station is currently a deduplication and
+concentration dimension.
+
+A future `phase3d_cohort_station_scope_v2` may be implemented only after FC0
+and F3S freeze cohort and station-scope registries. Its station predicate must
+be one registered whole-cohort, meteorological/settlement group, or
+independently eligible station; arbitrary station combinations remain
+forbidden. Adding this field creates a new grammar, candidate identity,
+correlation family, and evidence clock.
+
+Forecast-to-market edge half-life belongs to F6/Price Sheet V2 integration.
+Discovery may consume the resulting frozen freshness class later, but must not
+retrospectively search arbitrary decay checkpoints.
+
 ### Historical discovery
 
 - Search only a small versioned grammar.
@@ -314,6 +331,7 @@ Retain the useful subset of the append-only registry:
 
 - immutable run manifest and outcome;
 - family identity and correlation group;
+- cohort ID and, for a future v2 rule, frozen station-scope version;
 - exact candidate definition hash;
 - source run and activation timestamp;
 - append-only forward score snapshots or report references;
