@@ -32,6 +32,13 @@ HRRR_FEATURES = (
     "hrrr_shortwave_remaining_max", "hrrr_current_temp_minus_current_temp",
 )
 DEFAULT_FEATURES = OBSERVATION_FEATURES + HRRR_FEATURES
+FORWARD_COMPATIBLE_FEATURES = (
+    "hour_local",
+    "day_of_year_sin",
+    "day_of_year_cos",
+    "current_temp",
+    "max_temp_so_far",
+) + HRRR_FEATURES
 
 
 @dataclass(frozen=True)
@@ -43,16 +50,63 @@ class RemainingHeatingContract:
     regularization_c: float = 0.5
     min_class_rows: int = 20
     random_state: int = 20260813
+    conditional_method: str = "independent_ordinal"
+
+
+def forward_compatible_contract() -> RemainingHeatingContract:
+    """Freeze v2 to fields persisted in both historical and forward cohorts."""
+
+    return RemainingHeatingContract(
+        version="remaining_heating_hurdle_ordinal_forward_compatible_v2",
+        numeric_features=FORWARD_COMPATIBLE_FEATURES,
+    )
+
+
+def exact_cutoff_multinomial_contract() -> RemainingHeatingContract:
+    """Freeze v3 after correcting cutoff leakage and zero conditional mass."""
+
+    return RemainingHeatingContract(
+        version="remaining_heating_hurdle_multinomial_exact_cutoff_v3",
+        numeric_features=FORWARD_COMPATIBLE_FEATURES,
+        conditional_method="multinomial",
+    )
+
+
+def enforce_high_so_far_lower_bound(
+    probabilities: np.ndarray,
+    high_so_far: Sequence[float],
+    support: FixedSupport,
+) -> np.ndarray:
+    """Condition distributions on the already-observed integer high."""
+
+    matrix = normalize_probability_matrix(probabilities).copy()
+    high = np.rint(np.asarray(high_so_far, dtype=float)).astype(int)
+    if len(matrix) != len(high):
+        raise ValueError("probabilities and high-so-far rows do not align")
+    outside = (high < support.minimum) | (high > support.maximum)
+    if outside.any():
+        raise ValueError("integer high-so-far falls outside frozen support")
+    for index, value in enumerate(high):
+        boundary = value - support.minimum
+        matrix[index, :boundary] = 0.0
+        total = matrix[index].sum()
+        if total <= 0:
+            matrix[index, boundary] = 1.0
+        else:
+            matrix[index] /= total
+    return matrix
 
 
 class RemainingHeatingModel:
-    """Coherent hurdle/ordinal distribution for the final integer daily high."""
+    """Coherent hurdle distribution for the final integer daily high."""
 
     def __init__(self, contract: RemainingHeatingContract | None = None) -> None:
         self.contract = contract or RemainingHeatingContract()
         self.preprocessor: ColumnTransformer | None = None
         self.peak_model: LogisticRegression | float | None = None
         self.threshold_models: dict[int, LogisticRegression | float] = {}
+        self.conditional_model: LogisticRegression | int | None = None
+        self.conditional_classes = np.array([], dtype=int)
         self.maximum_train_additional = 0
         self.training_summary: dict[str, Any] = {}
 
@@ -75,9 +129,28 @@ class RemainingHeatingModel:
         positive_values = additional[positive]
         self.maximum_train_additional = int(positive_values.max()) if positive.any() else 0
         self.threshold_models = {}
-        for threshold in range(2, self.maximum_train_additional + 1):
-            self.threshold_models[threshold] = self._fit_binary(
-                transformed[positive], (positive_values >= threshold).astype(int)
+        self.conditional_model = None
+        self.conditional_classes = np.unique(positive_values)
+        if not positive.any():
+            pass
+        elif self.contract.conditional_method == "multinomial":
+            if len(self.conditional_classes) == 1:
+                self.conditional_model = int(self.conditional_classes[0])
+            else:
+                self.conditional_model = LogisticRegression(
+                    C=self.contract.regularization_c,
+                    max_iter=2000,
+                    random_state=self.contract.random_state,
+                )
+                self.conditional_model.fit(transformed[positive], positive_values)
+        elif self.contract.conditional_method == "independent_ordinal":
+            for threshold in range(2, self.maximum_train_additional + 1):
+                self.threshold_models[threshold] = self._fit_binary(
+                    transformed[positive], (positive_values >= threshold).astype(int)
+                )
+        else:
+            raise ValueError(
+                f"unsupported conditional method: {self.contract.conditional_method}"
             )
         self.training_summary = {
             "rows": int(len(frame)),
@@ -86,7 +159,10 @@ class RemainingHeatingModel:
             "peak_passed_rows": int(peak_passed.sum()),
             "positive_heating_rows": int(positive.sum()),
             "maximum_train_additional_f": self.maximum_train_additional,
-            "feature_columns": list(self.contract.categorical_features + self.contract.numeric_features),
+            "conditional_method": self.contract.conditional_method,
+            "feature_columns": list(
+                self.contract.categorical_features + self.contract.numeric_features
+            ),
         }
         return self
 
@@ -103,21 +179,38 @@ class RemainingHeatingModel:
             matrix[np.arange(len(frame)), high_integer - self.contract.support.minimum] = 1.0
             return matrix
 
-        survival = np.ones((len(frame), self.maximum_train_additional + 1), dtype=float)
-        for threshold in range(2, self.maximum_train_additional + 1):
-            survival[:, threshold - 1] = self._predict_binary(
-                self.threshold_models[threshold], transformed
+        if self.contract.conditional_method == "multinomial":
+            if isinstance(self.conditional_model, int):
+                conditional_mass = np.ones((len(frame), 1), dtype=float)
+                deltas = np.array([self.conditional_model], dtype=int)
+            elif isinstance(self.conditional_model, LogisticRegression):
+                conditional_mass = self.conditional_model.predict_proba(transformed)
+                deltas = np.asarray(self.conditional_model.classes_, dtype=int)
+            else:
+                raise ValueError("multinomial conditional model has not been fitted")
+        else:
+            survival = np.ones(
+                (len(frame), self.maximum_train_additional + 1), dtype=float
             )
-        survival[:, :-1] = np.minimum.accumulate(survival[:, :-1], axis=1)
-        survival[:, -1] = 0.0
-        conditional_mass = np.clip(survival[:, :-1] - survival[:, 1:], 0.0, 1.0)
+            for threshold in range(2, self.maximum_train_additional + 1):
+                survival[:, threshold - 1] = self._predict_binary(
+                    self.threshold_models[threshold], transformed
+                )
+            survival[:, :-1] = np.minimum.accumulate(survival[:, :-1], axis=1)
+            survival[:, -1] = 0.0
+            conditional_mass = np.clip(
+                survival[:, :-1] - survival[:, 1:], 0.0, 1.0
+            )
+            deltas = np.arange(1, self.maximum_train_additional + 1)
 
         for row_index, high in enumerate(high_integer):
-            matrix[row_index, high - self.contract.support.minimum] += peak_probability[row_index]
+            high_index = high - self.contract.support.minimum
+            matrix[row_index, high_index] += peak_probability[row_index]
             positive_probability = 1.0 - peak_probability[row_index]
-            for delta, probability in enumerate(conditional_mass[row_index], start=1):
-                final_value = min(high + delta, self.contract.support.maximum)
-                matrix[row_index, final_value - self.contract.support.minimum] += positive_probability * probability
+            for delta, probability in zip(deltas, conditional_mass[row_index]):
+                final_value = min(high + int(delta), self.contract.support.maximum)
+                final_index = final_value - self.contract.support.minimum
+                matrix[row_index, final_index] += positive_probability * probability
         return normalize_probability_matrix(matrix)
 
     def _prepare(self, snapshots: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]:

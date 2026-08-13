@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -6,6 +8,8 @@ from weather_trader.forecasting.evaluation import FixedSupport
 from weather_trader.forecasting.remaining_heating import (
     RemainingHeatingContract,
     RemainingHeatingModel,
+    enforce_high_so_far_lower_bound,
+    exact_cutoff_multinomial_contract,
 )
 
 
@@ -73,3 +77,42 @@ def test_unseen_station_uses_pooled_features() -> None:
     row = _snapshots().iloc[[0]].copy()
     row["station"] = "KNEW"
     assert np.isfinite(model.predict_proba(row)).all()
+
+def test_multinomial_conditional_assigns_mass_to_each_learned_delta() -> None:
+    contract = replace(
+        exact_cutoff_multinomial_contract(),
+        support=FixedSupport(65, 90),
+        min_class_rows=2,
+    )
+    frame = _snapshots()
+    model = RemainingHeatingModel(contract).fit(frame)
+    matrix = model.predict_proba(frame.iloc[:8])
+    high = frame.iloc[:8]["max_temp_so_far"].astype(int).to_numpy()
+    for row_index, delta in enumerate(
+        frame.iloc[:8]["final_high_tmpf"].astype(int).to_numpy() - high
+    ):
+        target_index = high[row_index] + delta - contract.support.minimum
+        assert matrix[row_index, target_index] > 0.0
+
+
+def test_multinomial_contract_handles_all_peak_passed_training_rows() -> None:
+    contract = replace(
+        exact_cutoff_multinomial_contract(),
+        support=FixedSupport(65, 90),
+        min_class_rows=2,
+    )
+    frame = _snapshots()
+    frame["final_high_tmpf"] = frame["max_temp_so_far"]
+    matrix = RemainingHeatingModel(contract).fit(frame).predict_proba(frame.iloc[:3])
+
+    assert matrix.sum(axis=1).tolist() == pytest.approx([1.0, 1.0, 1.0])
+
+def test_high_so_far_projection_is_normalized_and_coherent() -> None:
+    support = FixedSupport(69, 71)
+    projected = enforce_high_so_far_lower_bound(
+        np.array([[0.2, 0.5, 0.3], [1.0, 0.0, 0.0]]),
+        [70, 70],
+        support,
+    )
+    assert projected[0].tolist() == pytest.approx([0.0, 0.625, 0.375])
+    assert projected[1].tolist() == pytest.approx([0.0, 1.0, 0.0])

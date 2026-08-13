@@ -21,6 +21,7 @@ def test_snapshot_selection_is_independent_of_synthetic_threshold_rows() -> None
                 rows.append(
                     {
                         "station": "KAAA",
+                        "timezone": "America/New_York",
                         "local_date": date,
                         "snapshot_time_local": f"{date} {hour:02d}:00:00-05:00",
                         "hour_local": hour,
@@ -33,6 +34,25 @@ def test_snapshot_selection_is_independent_of_synthetic_threshold_rows() -> None
         [pd.Timestamp("2025-01-01").date(), 14, 70],
         [pd.Timestamp("2025-01-02").date(), 14, 71],
     ]
+def test_snapshot_selection_rejects_observations_after_exact_cutoff() -> None:
+    rows = [
+        {
+            "station": "KAAA",
+            "timezone": "America/New_York",
+            "local_date": "2025-07-01",
+            "snapshot_time_local": f"2025-07-01 {clock}:00-04:00",
+            "hour_local": hour,
+            "final_high_tmpf": 80,
+        }
+        for clock, hour in [("13:52", 13), ("14:52", 14)]
+    ]
+    selected = select_horizon_snapshots(
+        pd.DataFrame(rows), EvaluationContract(bootstrap_samples=10)
+    )
+    assert len(selected) == 1
+    assert selected.iloc[0]["snapshot_time_local"] == pd.Timestamp(
+        "2025-07-01 17:52:00+00:00"
+    )
 
 
 def test_full_distribution_metrics_equal_weight_weather_dates() -> None:

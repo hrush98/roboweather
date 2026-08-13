@@ -33,12 +33,12 @@ class FixedSupport:
 class EvaluationContract:
     """Frozen F0B choices; any change creates a different fingerprint."""
 
-    version: str = "forecast_fixed_support_weather_date_v1"
+    version: str = "forecast_fixed_support_exact_cutoff_weather_date_v2"
     support: FixedSupport = FixedSupport()
     validation_start: str = "2025-01-01"
     validation_end_exclusive: str = "2026-01-01"
     horizon_hour_local: int = 14
-    snapshot_selector: str = "latest_at_or_before_local_hour"
+    snapshot_selector: str = "latest_observation_at_or_before_exact_local_cutoff"
     uncertainty_cluster: str = "local_date"
     bootstrap_samples: int = 2000
     bootstrap_seed: int = 20260812
@@ -61,22 +61,45 @@ class EvaluationContract:
 
 
 def select_horizon_snapshots(dataset: pd.DataFrame, contract: EvaluationContract) -> pd.DataFrame:
-    """Deduplicate synthetic thresholds, then select one row per station/date."""
+    """Select the latest observation at or before the exact local cutoff."""
 
-    required = {"station", "local_date", "snapshot_time_local", "hour_local", "final_high_tmpf"}
+    required = {
+        "station",
+        "timezone",
+        "local_date",
+        "snapshot_time_local",
+        "final_high_tmpf",
+    }
     missing = sorted(required - set(dataset.columns))
     if missing:
         raise ValueError(f"dataset missing required columns: {', '.join(missing)}")
     frame = dataset.copy()
     frame["local_date"] = pd.to_datetime(frame["local_date"], errors="raise").dt.date
-    frame["snapshot_time_local"] = pd.to_datetime(frame["snapshot_time_local"], errors="raise", utc=True)
-    frame["hour_local"] = pd.to_numeric(frame["hour_local"], errors="coerce")
+    frame["snapshot_time_local"] = pd.to_datetime(
+        frame["snapshot_time_local"], errors="raise", utc=True
+    )
+    frame["_snapshot_local_date"] = pd.NaT
+    frame["_snapshot_local_seconds"] = np.nan
+    for zone, index in frame.groupby("timezone", observed=True).groups.items():
+        converted = frame.loc[index, "snapshot_time_local"].dt.tz_convert(str(zone))
+        frame.loc[index, "_snapshot_local_date"] = pd.Series(
+            converted.dt.date.to_numpy(), index=index, dtype=object
+        )
+        frame.loc[index, "_snapshot_local_seconds"] = (
+            converted.dt.hour * 3600
+            + converted.dt.minute * 60
+            + converted.dt.second
+        ).to_numpy()
+    local_date_mismatch = frame["_snapshot_local_date"] != frame["local_date"]
+    if local_date_mismatch.any():
+        raise ValueError("snapshot timestamp and declared local_date disagree")
     start = pd.Timestamp(contract.validation_start).date()
     end = pd.Timestamp(contract.validation_end_exclusive).date()
+    cutoff_seconds = contract.horizon_hour_local * 3600
     frame = frame.loc[
         (frame["local_date"] >= start)
         & (frame["local_date"] < end)
-        & (frame["hour_local"] <= contract.horizon_hour_local)
+        & (frame["_snapshot_local_seconds"] <= cutoff_seconds)
         & frame["final_high_tmpf"].notna()
     ].copy()
     identity = ["station", "local_date", "snapshot_time_local"]
@@ -84,12 +107,19 @@ def select_horizon_snapshots(dataset: pd.DataFrame, contract: EvaluationContract
     if (conflicts > 1).any():
         raise ValueError("a station/date/snapshot maps to multiple outcomes")
     snapshots = frame.sort_values(identity).drop_duplicates(identity, keep="first")
-    snapshots = snapshots.groupby(["station", "local_date"], observed=True, as_index=False).tail(1).copy()
+    snapshots = snapshots.groupby(
+        ["station", "local_date"], observed=True, as_index=False
+    ).tail(1).copy()
     snapshots["horizon"] = f"latest_le_{contract.horizon_hour_local:02d}_local"
-    snapshots["target_value"] = pd.to_numeric(snapshots["final_high_tmpf"], errors="raise").round().astype(int)
-    outside = ~snapshots["target_value"].between(contract.support.minimum, contract.support.maximum)
+    snapshots["target_value"] = (
+        pd.to_numeric(snapshots["final_high_tmpf"], errors="raise").round().astype(int)
+    )
+    outside = ~snapshots["target_value"].between(
+        contract.support.minimum, contract.support.maximum
+    )
     if outside.any():
-        raise ValueError(f"targets outside frozen support: {sorted(snapshots.loc[outside, 'target_value'].unique())}")
+        values = sorted(snapshots.loc[outside, "target_value"].unique())
+        raise ValueError(f"targets outside frozen support: {values}")
     if snapshots.duplicated(["station", "local_date", "horizon"]).any():
         raise ValueError("snapshot selector did not produce unique evaluation rows")
     return snapshots.sort_values(["local_date", "station"]).reset_index(drop=True)
