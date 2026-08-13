@@ -1,7 +1,7 @@
 {
   "board": {
     "active": 0,
-    "closed": 22,
+    "closed": 23,
     "open": 1,
     "parked": 0,
     "pillars": {
@@ -18,7 +18,7 @@
       "available": true,
       "path": "docs/current-trading-system-audit.md",
       "review_date": "2026-08-13",
-      "word_count": 5875
+      "word_count": 6182
     },
     "improvement_loop": {
       "available": true,
@@ -50,12 +50,12 @@
       "word_count": 1039
     }
   },
-  "facts_fingerprint": "d35f31f7b68316b8de3be275f2aaa0a6c890e4c8cb2ffc6fe01b02ebf49f0daa",
-  "generated_at": "2026-08-13T21:08:43Z",
+  "facts_fingerprint": "032c43761853917a462be610de37015caa31ba1470f091f24bd03d248811f36f",
+  "generated_at": "2026-08-13T21:59:14Z",
   "learning": {
-    "captured": 16,
+    "captured": 18,
     "integrated": 0,
-    "open": 17,
+    "open": 19,
     "overdue": 0,
     "revisit": 1,
     "superseded": 0
@@ -67,27 +67,27 @@
     },
     "head": {
       "available": true,
-      "value": "fae901de04f30227c7a290b169e77a1434078b6c"
+      "value": "fc698ce22dfdae6a7399bda1522e750208122d46"
     },
     "root": "/home/maxrush/General/roboweather"
   },
   "runtime": {
     "discovery_registry": {
       "available": true,
-      "candidate_version_count": 0,
+      "candidate_version_count": 2,
       "completed_run_count": 0,
-      "modified_at": "2026-08-11T21:04:30Z",
+      "modified_at": "2026-08-13T21:37:13Z",
       "path": "/home/maxrush/.local/state/roboweather/discovery/catalog.sqlite",
       "size_bytes": 184320
     },
     "research_database": {
       "available": true,
       "latest_resolved_market_date": "2026-08-13",
-      "latest_snapshot_timestamp": "2026-08-13T21:03:26.453913+00:00",
-      "modified_at": "2026-08-13T21:07:56Z",
+      "latest_snapshot_timestamp": "2026-08-13T21:57:04.701393+00:00",
+      "modified_at": "2026-08-13T21:56:58Z",
       "path": "/home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite",
-      "size_bytes": 68004782080,
-      "snapshot_count": 1816884
+      "size_bytes": 68056850432,
+      "snapshot_count": 1818772
     },
     "services": {
       "roboweather-market-tape.service": {
