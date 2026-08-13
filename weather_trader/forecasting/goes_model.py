@@ -13,7 +13,7 @@ from sklearn.linear_model import LogisticRegression
 
 @dataclass(frozen=True)
 class GoesHeatingModelContract:
-    version: str = "goes_dsr_market_relative_logit_v1"
+    version: str = "goes_dsr_market_relative_logit_v2"
     minimum_calibration_dates: int = 20
     minimum_untouched_dates: int = 20
     regularization_c: float = 0.25
@@ -31,6 +31,11 @@ class GoesHeatingModelContract:
     )
     surprise_thresholds: tuple[float, ...] = (0.10, 0.20)
     abstention_edge_thresholds: tuple[float, ...] = (0.00, 0.05, 0.10, 0.15)
+    calibration_bin_edges: tuple[float, ...] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+    maximum_absolute_calibration_bias: float = 0.05
+    maximum_expected_calibration_error: float = 0.10
+    cluster_bootstrap_samples: int = 5000
+    cluster_bootstrap_seed: int = 20260814
 
     @property
     def fingerprint(self) -> str:

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -27,6 +28,12 @@ from weather_trader.forecasting.goes_heating import (
     GOES_DSR_SOURCE_ID,
     causal_station_window,
     normalized_radiation_surprise,
+)
+from weather_trader.forecasting.goes_evaluation import (
+    calibrator_paths,
+    evaluate_untouched,
+    freeze_calibrator,
+    load_calibrator,
 )
 from weather_trader.forecasting.goes_model import GoesHeatingModelContract
 from weather_trader.forecasting.remaining_heating import enforce_high_so_far_lower_bound
@@ -50,14 +57,28 @@ def main() -> int:
     parser.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
     parser.add_argument("--f3-model", type=Path, default=DEFAULT_F3)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--freeze-calibrator", action="store_true")
+    parser.add_argument(
+        "--untouched-forward-start-date",
+        help="Required with --freeze-calibrator; must be strictly future at freeze time.",
+    )
     args = parser.parse_args()
-    result, rows = run_report(args.research_db, args.catalog, args.f3_model, args.out)
+    result, _rows = run_report(
+        args.research_db,
+        args.catalog,
+        args.f3_model,
+        args.out,
+        freeze_calibrator_now=args.freeze_calibrator,
+        untouched_forward_start_date=args.untouched_forward_start_date,
+    )
     print(json.dumps({
         "status": result["status"],
         "verdict": result["verdict"],
         "artifacts": result["source_coverage"]["artifacts"],
         "eligible_rows": result["cohort"]["eligible_rows"],
         "eligible_dates": result["cohort"]["eligible_dates"],
+        "calibrator_frozen": result["cohort"]["calibrator_frozen_at_utc"] is not None,
+        "untouched_dates": len(result["cohort"]["untouched_dates"]),
     }, indent=2))
     return 0
 
@@ -67,6 +88,11 @@ def run_report(
     catalog_path: Path,
     f3_model_path: Path,
     out: Path,
+    *,
+    freeze_calibrator_now: bool = False,
+    untouched_forward_start_date: str | None = None,
+    frozen_at_utc: datetime | None = None,
+    bootstrap_samples: int | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     bundle = joblib.load(f3_model_path)
     payload = dict(bundle["evaluation_contract"])
@@ -96,25 +122,113 @@ def run_report(
         contract.support.values,
         activation_date=COLLECTION_ACTIVATION_DATE,
     )
-    dates = sorted({row["market_date"] for row in rows})
-    fit_dates = dates
-    untouched_dates: list[str] = []
+    dates = sorted({str(row["market_date"]) for row in rows})
+    predecessor = str(bundle["forecast_version"])
+    f3_fingerprint = str(bundle["evaluation_fingerprint"])
+    out.mkdir(parents=True, exist_ok=True)
+    frozen = load_calibrator(
+        rows,
+        out,
+        predecessor=predecessor,
+        f3_evaluation_fingerprint=f3_fingerprint,
+        contract=MODEL_CONTRACT,
+    )
+    if freeze_calibrator_now:
+        if frozen is not None:
+            raise ValueError("F5 calibrator is already frozen")
+        if untouched_forward_start_date is None:
+            raise ValueError(
+                "--untouched-forward-start-date is required with --freeze-calibrator"
+            )
+        frozen = freeze_calibrator(
+            rows,
+            out,
+            predecessor=predecessor,
+            f3_evaluation_fingerprint=f3_fingerprint,
+            untouched_forward_start_date=untouched_forward_start_date,
+            frozen_at_utc=frozen_at_utc,
+            contract=MODEL_CONTRACT,
+        )
+    models = None if frozen is None else frozen[0]
+    manifest = None if frozen is None else frozen[1]
+    fit_dates = (
+        dates
+        if manifest is None
+        else [str(value) for value in manifest["fit_dates"]]
+    )
+    untouched_rows = (
+        []
+        if manifest is None
+        else [
+            row
+            for row in rows
+            if str(row["market_date"]) >= manifest["untouched_forward_start_date"]
+        ]
+    )
+    untouched_dates = sorted({str(row["market_date"]) for row in untouched_rows})
+    evaluation = None
+    if models is not None and len(untouched_dates) >= MINIMUM_UNTOUCHED_DATES:
+        evaluation, scored = evaluate_untouched(
+            untouched_rows,
+            models,
+            contract=MODEL_CONTRACT,
+            bootstrap_samples=bootstrap_samples,
+        )
+        scored_by_id = {
+            int(row["source_prediction_snapshot_id"]): row for row in scored
+        }
+        rows = [
+            scored_by_id.get(int(row["source_prediction_snapshot_id"]), row)
+            for row in rows
+        ]
+    checks = acceptance_checks(fit_dates, manifest, untouched_dates, evaluation)
+    accepted = all(
+        checks[name]
+        for name in (
+            "calibration_has_at_least_20_weather_dates",
+            "calibrator_frozen_before_untouched_evaluation",
+            "untouched_has_at_least_20_weather_dates",
+            "incremental_surprise_log_loss_ci_below_zero",
+            "improves_exact_token_log_loss_vs_f3",
+            "improves_exact_token_log_loss_vs_market",
+            "selected_token_calibration_passes",
+            "predeclared_regime_threshold_and_abstention_reported",
+        )
+    )
+    if evaluation is not None:
+        status = (
+            "COMPLETED_WITH_INCREMENTAL_INFORMATION"
+            if accepted
+            else "COMPLETED_NO_INCREMENTAL_INFORMATION"
+        )
+        verdict = (
+            "ACCEPT_F5_INCREMENTAL_INFORMATION"
+            if accepted
+            else "REJECT_F5_INCREMENTAL_INFORMATION"
+        )
+    elif manifest is not None:
+        status = "ACCUMULATING_UNTOUCHED_FORWARD"
+        verdict = "NOT_EVALUATED_FORWARD_EVIDENCE_INCOMPLETE"
+    elif len(dates) >= MINIMUM_CALIBRATION_DATES:
+        status = "READY_TO_FREEZE_CALIBRATOR"
+        verdict = "NOT_EVALUATED_CALIBRATOR_NOT_FROZEN"
+    else:
+        status = "ACCUMULATING_CALIBRATION"
+        verdict = "NOT_EVALUATED_FORWARD_EVIDENCE_INCOMPLETE"
     source_bytes = sum(int(row["byte_count"]) for row in artifacts)
+    artifact_path, _manifest_path = calibrator_paths(out)
     result = {
-        "status": (
-            "ACCUMULATING_CALIBRATION"
-            if len(fit_dates) < MINIMUM_CALIBRATION_DATES
-            else "READY_TO_FREEZE_CALIBRATOR"
-            if not untouched_dates
-            else "ACCUMULATING_UNTOUCHED_FORWARD"
-        ),
-        "verdict": "NOT_EVALUATED_FORWARD_EVIDENCE_INCOMPLETE",
+        "status": status,
+        "verdict": verdict,
         "contract": {
             "cohort": "US_HIGH",
-            "predecessor": bundle["forecast_version"],
-            "f3_evaluation_fingerprint": bundle["evaluation_fingerprint"],
+            "predecessor": predecessor,
+            "f3_evaluation_fingerprint": f3_fingerprint,
             "horizon": "d0_exact_14_local",
-            "model_contract": {**asdict(MODEL_CONTRACT), "fingerprint": MODEL_CONTRACT.fingerprint},
+            "model_contract": {
+                **asdict(MODEL_CONTRACT),
+                "fingerprint": MODEL_CONTRACT.fingerprint,
+            },
             "collection_activation_date": COLLECTION_ACTIVATION_DATE,
             "trailing_observed_minutes": 60,
             "minimum_scans": 3,
@@ -131,9 +245,10 @@ def run_report(
                 "CLOUDY": "hrrr_cloud_cover_current >= 75",
             },
             "acceptance_scope": (
-                "exact selected-token calibration and incremental log loss versus both "
-                "frozen F3 and contemporaneous normalized market distribution; station/regime/threshold "
-                "and abstention diagnostics are mandatory"
+                "exact selected-token calibration and date-clustered incremental log loss "
+                "versus the no-surprise conditional baseline, frozen F3, and contemporaneous "
+                "normalized market distribution; station/regime/threshold and abstention "
+                "diagnostics are mandatory"
             ),
             "earlier_horizons": (
                 "require separate frozen forecast versions and evidence clocks"
@@ -144,10 +259,12 @@ def run_report(
             "artifacts": len(artifacts),
             "bytes": source_bytes,
             "first_causal_at": min(
-                (str(row["causal_available_at_utc"]) for row in artifacts), default=None
+                (str(row["causal_available_at_utc"]) for row in artifacts),
+                default=None,
             ),
             "latest_causal_at": max(
-                (str(row["causal_available_at_utc"]) for row in artifacts), default=None
+                (str(row["causal_available_at_utc"]) for row in artifacts),
+                default=None,
             ),
         },
         "cohort": {
@@ -156,7 +273,17 @@ def run_report(
             "eligible_rows": len(rows),
             "eligible_dates": len(dates),
             "calibration_dates": fit_dates,
-            "calibrator_frozen_at_utc": None,
+            "calibrator_frozen_at_utc": (
+                None if manifest is None else manifest["frozen_at_utc"]
+            ),
+            "calibrator_artifact_sha256": (
+                file_sha256(artifact_path) if artifact_path.exists() else None
+            ),
+            "untouched_forward_start_date": (
+                None
+                if manifest is None
+                else manifest["untouched_forward_start_date"]
+            ),
             "untouched_dates": untouched_dates,
             "station_rows": count_values(rows, "station"),
             "cloud_regime_rows": count_values(rows, "cloud_regime"),
@@ -167,29 +294,75 @@ def run_report(
                 for threshold in SURPRISE_THRESHOLDS
             },
         },
-        "acceptance_checks": {
-            "calibration_has_at_least_20_weather_dates": len(fit_dates) >= MINIMUM_CALIBRATION_DATES,
-            "calibrator_frozen_before_untouched_evaluation": False,
-            "untouched_has_at_least_20_weather_dates": len(untouched_dates) >= MINIMUM_UNTOUCHED_DATES,
-            "improves_exact_token_log_loss_vs_f3": False,
-            "improves_exact_token_log_loss_vs_market": False,
-            "selected_token_calibration_passes": False,
-            "predeclared_regime_threshold_and_abstention_reported": False,
-            "funded_authority_unchanged": True,
-        },
+        "evaluation": evaluation,
+        "acceptance_checks": checks,
         "limitations": [
             "Historical S3 and embedded GOES clocks are provenance only and do not create retrospective causal rows.",
-            "The current artifact is an accumulating evidence cohort, not a fitted challenger or edge verdict.",
-            "No date becomes untouched evaluation evidence until a calibrator and future activation boundary are persisted.",
-            "A passing information result would still require a separate executable-ask edge-decay integration gate.",
+            "No date becomes untouched evaluation evidence until a calibrator and strictly future activation boundary are persisted.",
+            "Displayed-ask diagnostics use the contemporaneous snapshot ask and do not establish useful-size or tape-valid execution.",
+            "A passing information result still requires a separate executable-ask edge-decay integration gate.",
+            "Earlier horizons require independent forecast versions, activation boundaries, and evidence clocks.",
             "No result changes funded trading authority.",
         ],
     }
-    out.mkdir(parents=True, exist_ok=True)
     (out / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     pd.DataFrame(rows).to_json(out / "rows.jsonl", orient="records", lines=True)
     (out / "report.md").write_text(render_markdown(result))
     return result, rows
+
+
+def acceptance_checks(
+    fit_dates: Sequence[str],
+    manifest: Mapping[str, object] | None,
+    untouched_dates: Sequence[str],
+    evaluation: Mapping[str, Any] | None,
+) -> dict[str, bool]:
+    comparisons = {} if evaluation is None else evaluation["comparisons"]
+
+    def improves(name: str) -> bool:
+        comparison = comparisons.get(name) or {}
+        interval = (comparison.get("weather_date_clustered_95pct_ci") or {}).get(
+            "log_loss"
+        )
+        return bool(
+            comparison.get("log_loss_delta") is not None
+            and float(comparison["log_loss_delta"]) < 0.0
+            and interval is not None
+            and float(interval[1]) < 0.0
+        )
+
+    calibration = (
+        {} if evaluation is None else evaluation["selected_token_calibration"]
+    )
+    return {
+        "calibration_has_at_least_20_weather_dates": (
+            len(fit_dates) >= MINIMUM_CALIBRATION_DATES
+        ),
+        "calibrator_frozen_before_untouched_evaluation": manifest is not None,
+        "untouched_has_at_least_20_weather_dates": (
+            len(untouched_dates) >= MINIMUM_UNTOUCHED_DATES
+        ),
+        "incremental_surprise_log_loss_ci_below_zero": improves(
+            "challenger_minus_no_surprise_baseline"
+        ),
+        "improves_exact_token_log_loss_vs_f3": improves("challenger_minus_f3"),
+        "improves_exact_token_log_loss_vs_market": improves(
+            "challenger_minus_market"
+        ),
+        "selected_token_calibration_passes": bool(calibration.get("passes")),
+        "predeclared_regime_threshold_and_abstention_reported": (
+            evaluation is not None
+        ),
+        "funded_authority_unchanged": True,
+    }
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def materialize_rows(
@@ -358,16 +531,113 @@ def render_markdown(result: Mapping[str, Any]) -> str:
         f"- Eligible exact-decision rows: {cohort['eligible_rows']}",
         f"- Eligible weather dates: {cohort['eligible_dates']}",
         f"- Calibration dates required: {result['contract']['minimum_calibration_dates']}",
-        f"- Untouched dates required after freeze: {result['contract']['minimum_untouched_dates']}",
+        f"- Calibrator frozen at: {cohort['calibrator_frozen_at_utc']}",
+        f"- Untouched forward start: {cohort['untouched_forward_start_date']}",
+        f"- Untouched dates: {len(cohort['untouched_dates'])}",
+        f"- Untouched dates required: {result['contract']['minimum_untouched_dates']}",
         "",
         "## Gate State",
         "",
     ]
     for name, passed in result["acceptance_checks"].items():
         lines.append(f"- {'PASS' if passed else 'PENDING'}: {name}")
+    evaluation = result.get("evaluation")
+    if evaluation is not None:
+        lines.extend([
+            "",
+            "## Exact Selected-Token Scores",
+            "",
+            "| probability | rows | dates | log loss | Brier | mean p | outcome rate |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ])
+        for name, metrics in evaluation["selected_token_metrics"].items():
+            lines.append(
+                f"| {name} | {metrics['rows']} | {metrics['weather_dates']} | "
+                f"{format_number(metrics['log_loss'])} | {format_number(metrics['brier'])} | "
+                f"{format_number(metrics['mean_probability'])} | "
+                f"{format_number(metrics['outcome_rate'])} |"
+            )
+        lines.extend([
+            "",
+            "## Date-Clustered Comparisons",
+            "",
+            "| comparison | log-loss delta | 95% date-clustered interval | Brier delta |",
+            "| --- | ---: | ---: | ---: |",
+        ])
+        for name, comparison in evaluation["comparisons"].items():
+            interval = comparison["weather_date_clustered_95pct_ci"]["log_loss"]
+            interval_text = (
+                "n/a"
+                if interval is None
+                else f"[{format_number(interval[0])}, {format_number(interval[1])}]"
+            )
+            lines.append(
+                f"| {name} | {format_number(comparison['log_loss_delta'])} | "
+                f"{interval_text} | {format_number(comparison['brier_delta'])} |"
+            )
+        calibration = evaluation["selected_token_calibration"]
+        lines.extend([
+            "",
+            "## Selected-Token Calibration",
+            "",
+            f"- Absolute date-equal bias: {format_number(calibration['absolute_bias'])}",
+            f"- Fixed-bin expected calibration error: {format_number(calibration['expected_calibration_error'])}",
+            f"- Frozen pass: {calibration['passes']}",
+        ])
+        append_group_table(lines, "Station Diagnostics", evaluation["station_diagnostics"])
+        append_group_table(lines, "Cloud-Regime Diagnostics", evaluation["regime_diagnostics"])
+        lines.extend([
+            "",
+            "## Predeclared Surprise Thresholds",
+            "",
+            "| threshold | direction | rows | dates | challenger minus market log loss |",
+            "| ---: | --- | ---: | ---: | ---: |",
+        ])
+        for threshold, directions in evaluation["surprise_threshold_diagnostics"].items():
+            for direction, metrics in directions.items():
+                lines.append(
+                    f"| {threshold} | {direction} | {metrics['rows']} | "
+                    f"{metrics['weather_dates']} | "
+                    f"{format_number(metrics['challenger_minus_market_log_loss'])} |"
+                )
+        lines.extend([
+            "",
+            "## Abstention At Displayed Ask",
+            "",
+            "| minimum predicted edge | rows | dates | mean predicted edge | date-equal unit PnL |",
+            "| ---: | ---: | ---: | ---: | ---: |",
+        ])
+        for item in evaluation["abstention_curve"]:
+            lines.append(
+                f"| {item['minimum_predicted_edge']:.2f} | {item['rows']} | "
+                f"{item['weather_dates']} | {format_number(item['mean_predicted_edge'])} | "
+                f"{format_number(item['date_equal_mean_unit_pnl_at_displayed_ask'])} |"
+            )
     lines.extend(["", "## Limitations", ""])
     lines.extend(f"- {item}" for item in result["limitations"])
     return "\n".join(lines) + "\n"
+
+
+def append_group_table(
+    lines: list[str], title: str, groups: Mapping[str, Mapping[str, object]]
+) -> None:
+    lines.extend([
+        "",
+        f"## {title}",
+        "",
+        "| group | rows | dates | challenger minus baseline log loss | challenger minus market log loss |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ])
+    for name, metrics in groups.items():
+        lines.append(
+            f"| {name} | {metrics['rows']} | {metrics['weather_dates']} | "
+            f"{format_number(metrics['challenger_minus_no_surprise_log_loss'])} | "
+            f"{format_number(metrics['challenger_minus_market_log_loss'])} |"
+        )
+
+
+def format_number(value: object) -> str:
+    return "n/a" if value is None else f"{float(value):.6f}"
 
 
 if __name__ == "__main__":

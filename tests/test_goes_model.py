@@ -31,6 +31,7 @@ def make_rows(dates: int = 24) -> list[dict[str, object]]:
 
 def test_contract_fingerprint_and_feature_order_are_stable() -> None:
     contract = GoesHeatingModelContract()
+    assert contract.version == "goes_dsr_market_relative_logit_v2"
     assert contract.fingerprint == GoesHeatingModelContract().fingerprint
     rows = make_rows(1)
     assert design_matrix(rows, contract, False).shape == (4, 4)
