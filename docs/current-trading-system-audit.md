@@ -29,7 +29,7 @@ net trading edge = information advantage + settlement advantage
 
 | Pillar | Current assessment | Next proof |
 | --- | --- | --- |
-| Information | Research-level advantage established for one forecast version, not yet tradable edge. F3's exact-cutoff remaining-heating ensemble improved corrected historical, untouched forward, and recent probability scores versus HRRR-rich; market-relative intervals remain uncertain. | Carry the frozen F3 version into F6 quoted-price/tape evaluation; run F4 spatial residuals next; evaluate WeatherNext only when approved ingestion-time history exists. |
+| Information | Research-level advantage established for one forecast version, not yet tradable edge. F3's exact-cutoff remaining-heating ensemble improved corrected historical, untouched forward, and recent probability scores versus HRRR-rich; F4's frozen ASOS/upwind residual update worsened untouched and recent scores and is rejected; market-relative F3 intervals remain uncertain. | Carry frozen F3 into F6 quoted-price/tape evaluation; run F5 cloud/radiation surprise next; evaluate WeatherNext only when approved ingestion-time history exists. |
 | Settlement | Baseline mapping established, not an edge. F0 found the IEM routine/special report maximum in the venue-winning bucket on 220/220 comparable June station-dates; alternative physical/display sources materially disagreed. | Backfill venue bucket and versioned source provenance, preserve fail-closed unresolved rows, and validate the mapping out of cohort before any integrated promotion. |
 | Execution | The causal tape, decision cache, and replay substrate work; an execution advantage is not proven. | Show non-toxic markouts and positive actual or conservative fill-conditioned economics for one exact quote/cancel/inventory rule. |
 | Costs and adverse selection | Partially measurable but not cleared. Price reserves and depth diagnostics exist; useful-size fills, toxicity, capacity, and concentration remain open. | Demonstrate positive net EV after all explicit costs and reserves at the intended size. |
@@ -41,7 +41,7 @@ Current confidence by layer:
 | Layer | Assessment | Decision |
 | --- | --- | --- |
 | Research collection | Broad snapshot collection is useful and operational. The previous memory-growth blocker is resolved, and collection now runs under a restartable 4 GiB-bounded user service rather than TUI child ownership. | Continue collection and investigate any service restart or memory-limit event. |
-| Forecast and settlement truth | F0 reconciled the current IEM report maximum to 220/220 venue-winning buckets; F0B/F3 corrected the evaluation cutoff; F1 added causal source vintages; F2 rejected NBM; and F3 accepted a coherent remaining-heating/HRRR ensemble for pricing research. WeatherNext remains unscored. | Backfill provenance/venue labels, evaluate the frozen F3 version through F6, run F4 spatial residuals, and add WeatherNext only after approved access supplies provider ingestion timestamps. |
+| Forecast and settlement truth | F0 reconciled the current IEM report maximum to 220/220 venue-winning buckets; F0B/F3 corrected the evaluation cutoff; F1 added causal source vintages; F2 rejected NBM; F3 accepted a coherent remaining-heating/HRRR ensemble; and F4 rejected its frozen spatial residual update. WeatherNext remains unscored. | Backfill provenance/venue labels, evaluate frozen F3 through F6, run F5 cloud/radiation surprise, and add WeatherNext only after approved access supplies provider ingestion timestamps. |
 | Full-market-lifecycle edge | Morning snapshots show more displayed depth than late afternoon, but current data do not establish D-1 traded volume, passive fills, round-trip capacity, or an early calibrated forecast. | Collect from first listing and test separate D-1/early arms against the frozen late control. |
 | Current configured portfolio | Failed the fresh July 9-14 cap-aware replay. | Do not restart it. |
 | New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
@@ -72,6 +72,7 @@ Durable conclusions from that review:
 - F1's `forecast_source_vintage_v1` catalog separates initialization, valid, provider-ingestion, first-observed, and modification clocks; raw revisions are content-addressed and replay is fail-closed before causal availability. A bounded host probe captured and decoded three NBM station subsets, three HRRR station subsets, and one IEM observation vintage. WeatherNext remains access-gated and requires provider `ingestion_time`; RRFS remains unfrozen. This validates collection/replay plumbing only, not incremental probability skill.
 - F2 materialized `nbm_v5_archive_cycle_plus_2h_v1` at three horizons and scored 541 complete same-snapshot D0 station/date rows across 55 weather dates. The untouched 22-date holdout assigned NBM 2.09% weight over HRRR-rich: RPS improved by `0.01135`, but log loss worsened by `0.00340`; the market assigned effectively zero NBM weight. Raw NBM was materially worse overall and recently. The exact transform is rejected; WeatherNext is unavailable rather than rejected, and neither enters pricing research.
 - F3 accepted `remaining_heating_hurdle_multinomial_exact_cutoff_v3` after replacing crossed independent ordinal curves that could create zero-probability learned outcomes. A coherent 43.99% remaining-heating / 56.01% conditioned-HRRR ensemble improved untouched 22-date holdout log loss by `0.17879` and RPS by `0.29365`, with both clustered intervals below zero; the recent 14-date slice also improved both. A 94.53% weather / 5.47% market combination improved holdout and recent point estimates, but its intervals cross zero. This authorizes F6 pricing research only, not funded trading.
+- F4 rejected `asos_upwind_residual_exact_cutoff_v2`. Its frozen five-neighbor ASOS network and causal HRRR interpolation covered all 541 identical rows, but the zero-intercept spatial update worsened untouched 22-date holdout log loss by `0.14235` and RPS by `0.01225`; both recent 14-date metrics also worsened. The exact transform stays out of Price Sheet V2 and does not unlock transfer work.
 
 Evidence source: `reports/research-collection-analysis-2026-07-15.md`. That file is an ad hoc analysis artifact; the conclusions above are canonical here.
 
@@ -127,7 +128,7 @@ The July 30-August 2 extension materially weakened that initial result. The froz
 7. Implement `docs/implementation/price-sheet-v2.md`: V2a walk-forward outcome pricing now, then V2b execution reductions/skips on valid tape windows.
 8. Implement `docs/implementation/tape-strategy-discovery.md`: preserve the broad causal materializer, add an append-only candidate registry, run recurring constrained discovery from resolved-data watermarks, and continuously compare post-activation champion/challenger cohorts.
 9. Evaluate passive price-making and a separately tagged stable-taker control from the same tape and economic price ceiling.
-10. Preserve the accepted F3 exact-cutoff remaining-heating version and carry it into F6 pricing/tape research; run F4's spatial residual ablation next, then F5's GOES radiation/cloud surprise; revisit WeatherNext only with approved causal history.
+10. Preserve accepted F3 and carry it into F6 pricing/tape research; keep rejected F4 v2 out of pricing and transfer work; run F5's GOES radiation/cloud surprise next; revisit WeatherNext only with approved causal history.
 11. Keep weather-only probability, settlement mapping, market-aware calibration, and execution adjustment separately versioned. No new forecast source enters funded pricing until it demonstrates causal incremental skill.
 12. Extend research and collection to the full market lifecycle. Treat D-1 open, D-1 revision, D0 early, intraday, and late as separate horizons; add them one at a time behind forecast, tape, quote, inventory, exit, and portfolio gates.
 13. For V2a, freeze one calibrator and untouched forward start before additional outcomes are inspected. Do not use the July 16-29 candidate comparison as its own promotion window.
@@ -177,6 +178,12 @@ Small funded orders may validate plumbing and replay fidelity, but they confer n
 Update the body of this document when the current assessment changes. Append one short entry below describing the evidence that caused the change; keep detailed generated tables in reproducible reports or scripts.
 
 ## Audit Log
+
+- 2026-08-13: Rejected `asos_upwind_residual_exact_cutoff_v2` for F4. The
+  frozen causal ASOS/HRRR spatial correction covered all 541 controlled rows
+  but worsened untouched and recent probability scores versus F3. Keep it out
+  of pricing and transfer work; F5 is the next US-high information ablation.
+  Funded authority is unchanged.
 
 - 2026-08-13: Approved the four-cohort information thesis. US high, global
   high, US low, and global low now retain separate settlement, forecast,

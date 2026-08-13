@@ -4,6 +4,13 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-13
 
+- Completed forecast-edge Slice F4 with a frozen, causal five-neighbor ASOS
+  network, HRRR residual interpolation, spatial correction model, controlled
+  report, and focused tests. `asos_upwind_residual_exact_cutoff_v2` covered all
+  541 identical rows but worsened untouched and recent log loss and RPS versus
+  F3, so the exact transform is rejected and remains outside Price Sheet V2.
+  No funded authority changed.
+
 - Approved the four-cohort information thesis and dependency-safe expansion
   plan. US high, global high, US low, and global low now have separate
   settlement, model, calibration, and F6 evidence clocks; active F4 remains

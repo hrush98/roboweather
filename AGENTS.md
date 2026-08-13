@@ -153,6 +153,18 @@
   local observation for NOAA/IEM artifacts. Preserve HTTP `Last-Modified` as
   provenance only; never use it to backdate replay visibility.
 
+## F4 spatial residual workflow
+
+- Reproduce the frozen US-high ASOS/upwind ablation with
+  `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/forecast_spatial_residual_report.py --bootstrap-samples 5000 --workers 8`.
+- The command reads the accepted F3 artifact, keeps fetched IEM/HRRR state under
+  `~/.local/state/roboweather/forecast_sources/f4_spatial/`, and writes the
+  generated report under `reports/forecast-edge/f4-current/`. Leave both the
+  runtime cache and generated report uncommitted.
+- `asos_upwind_residual_exact_cutoff_v2` is a rejected exact transform. Its
+  zero-intercept correction avoids crediting generic F3 recalibration to the
+  spatial features; do not route it into Price Sheet V2 or infer transfer.
+
 ## Legacy candidate-scoped shadow collection workflow
 
 - The current candidate-scoped collector is a plumbing prototype, not the Phase 3 shared market tape. It begins from policy-candidate tokens after candidate generation and its existing shadow labels are not promotion evidence.

@@ -21,7 +21,7 @@ Treat these as four separate evidence cohorts:
 
 | Cohort ID | Market family | Geography | Current evidence |
 | --- | --- | --- | --- |
-| `US_HIGH` | `HIGH_TEMP` | United States | F0 settlement mapping and F3 remaining-heating forecast accepted for research; F4 is in progress. |
+| `US_HIGH` | `HIGH_TEMP` | United States | F0 settlement mapping and F3 remaining-heating forecast accepted for research; the exact F4 spatial residual transform was rejected. |
 | `GLOBAL_HIGH` | `HIGH_TEMP` | Non-US | Collection exists; settlement, units/day semantics, localization, and probability skill are unvalidated. |
 | `US_LOW` | `LOW_TEMP` | United States | Collection exists; settlement truth and remaining-cooling model are unvalidated. |
 | `GLOBAL_LOW` | `LOW_TEMP` | Non-US | Collection exists; settlement, units/day semantics, localization, and remaining-cooling model are unvalidated. |
@@ -496,7 +496,7 @@ Queue states have these meanings:
 | F1 | Information | COMPLETE | F0 settled | Can WeatherNext, NBM, HRRR/RRFS, and observation vintages be collected and replayed from their actual causal availability times? | Source-vintage contracts, separate runtime catalog/cache, bounded collectors, tests, and coverage report. | [T0016](../../board/closed/2026/T0016-build-causal-forecast-source-catalog.md) |
 | F2 | Information | REJECTED | F0, F0B, F1 settled | Does WeatherNext 2 or NBM add held-out probability skill beyond the minimal HRRR-rich baseline and contemporaneous market on identical rows? | WeatherNext/NBM identical-coverage and market-relative benchmark with a source acceptance or rejection verdict. | [T0017](../../board/closed/2026/T0017-benchmark-nbm-and-weathernext-forecast-skill.md) |
 | F3 | Information | COMPLETE | F0 and F0B settled | Does a peak-passed plus conditional-additional-heating distribution outperform the frozen absolute/bucket baseline for US high temperature? | Coherent remaining-heating model, chronological ablation report, and acceptance or rejection verdict. | [T0018](../../board/closed/2026/T0018-build-remaining-heating-distribution.md) |
-| F4 | Information | IN_PROGRESS | F3 settled | Do frozen high-frequency upwind station residuals add information beyond target-station observations and model point features for the US-high control? | MADIS/ASOS spatial residual implementation and controlled ablation. | [T0019](../../board/T0019-implement-frozen-spatial-residual-nowcast.md) |
+| F4 | Information | REJECTED | F3 settled | Do frozen high-frequency upwind station residuals add information beyond target-station observations and model point features for the US-high control? | MADIS/ASOS spatial residual implementation and controlled ablation. | [T0019](../../board/closed/2026/T0019-implement-frozen-spatial-residual-nowcast.md) |
 | F6 | Cross-pillar | READY | F3 accepted | Does frozen US-high F3 pass Price Sheet V2 selected, quoted-price, market-relative, edge-half-life, and tape-backed research gates at one lifecycle horizon? | US-high Price Sheet V2 report with executable edge-decay curve and acceptance or rejection verdict. | — |
 | FC0 | Cross-pillar | READY | F0 settled | What immutable cohort, station, unit, local-day, and eligibility registry defines US/global high/low research without transferring evidence between them? | Four-cohort registry and dependency matrix with explicit unsupported stations and source gaps. | — |
 | F0GH | Settlement | BLOCKED | FC0 settled | What source and mapping define venue-authoritative outcomes and causal high-so-far for each eligible non-US high-temperature station? | Global-high settlement/source audit and versioned station mappings. | — |
@@ -734,6 +734,16 @@ F3 accepted contract and evidence:
 - Use F4X later to test transfer or cohort-specific refits; F4 success alone
   does not authorize global or low-temperature use.
 
+F4 settled contract and evidence:
+
+- `asos_upwind_residual_exact_cutoff_v2` freezes five outcome-blind ASOS
+  neighbors within 150 km, ten-minute availability lag, explicit QC/fallback,
+  causal HRRR interpolation, and distance/upwind/elevation weights.
+- Its zero-intercept spatial correction had 100% eligible coverage on 541
+  identical rows but worsened untouched 22-date log loss by `0.14235` and RPS
+  by `0.01225`; the recent 14-date slice also worsened both. Reject this exact
+  transform and do not pass it to Price Sheet V2 or F4X.
+
 ### Slice 5: GOES Heating Surprise
 
 - Add causal cloud/radiation extraction.
@@ -825,7 +835,7 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
 - [ ] D-1 opening and revision distributions pass causal horizon-specific evaluation.
 - [x] Identical-coverage and market-relative report implemented.
 - [x] Additional-heating distribution validated.
-- [ ] MADIS/upwind residual ablation completed.
+- [x] MADIS/upwind residual ablation completed and rejected.
 - [ ] GOES cloud/radiation ablation completed.
 - [x] One US-high forecast version passes pricing-research acceptance.
 - [ ] Four-cohort registry and three remaining settlement mappings frozen.
@@ -872,3 +882,10 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
   executable edge-half-life measurement. The accepted discovery v1 grammar
   remains unchanged; a station-scope v2 requires FC0/F3S. No funded authority
   changed.
+- 2026-08-13: Rejected `asos_upwind_residual_exact_cutoff_v2` for F4. The
+  outcome-blind five-neighbor ASOS network, causal HRRR interpolation, frozen
+  lag/QC/weighting rules, and zero-intercept correction covered all 541
+  identical rows, but worsened both log loss and RPS on the untouched 22-date
+  holdout and recent 14-date slice versus F3. F4X remains blocked and this
+  version does not enter Price Sheet V2; F5 is the next ready US-high
+  information slice. Funded authority did not change.

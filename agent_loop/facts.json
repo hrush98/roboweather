@@ -1,14 +1,14 @@
 {
   "board": {
-    "active": 1,
-    "closed": 19,
-    "open": 1,
+    "active": 0,
+    "closed": 20,
+    "open": 0,
     "parked": 0,
     "pillars": {
       "costs-adverse-selection": 0,
       "cross-pillar": 0,
       "execution": 0,
-      "information": 1,
+      "information": 0,
       "settlement": 0
     },
     "waiting": 0
@@ -18,7 +18,7 @@
       "available": true,
       "path": "docs/current-trading-system-audit.md",
       "review_date": "2026-08-13",
-      "word_count": 5599
+      "word_count": 5715
     },
     "improvement_loop": {
       "available": true,
@@ -41,7 +41,7 @@
       "available": true,
       "path": "docs/execution-rebuild-roadmap.md",
       "review_date": "2026-08-13",
-      "word_count": 2415
+      "word_count": 2424
     },
     "state": {
       "available": true,
@@ -50,12 +50,12 @@
       "word_count": 1039
     }
   },
-  "facts_fingerprint": "a4a994b6f8e59850941d7ee81ee271a806f9b978933099ce7b1395dabf6df3f4",
-  "generated_at": "2026-08-13T18:45:03Z",
+  "facts_fingerprint": "8e8c983ef3bc9897923da8bfb18da3d93d934e34c549d7b2786d527c7b7a280a",
+  "generated_at": "2026-08-13T19:02:35Z",
   "learning": {
-    "captured": 13,
+    "captured": 14,
     "integrated": 0,
-    "open": 14,
+    "open": 15,
     "overdue": 0,
     "revisit": 1,
     "superseded": 0
@@ -67,7 +67,7 @@
     },
     "head": {
       "available": true,
-      "value": "26f96c5414af1a01f09ad4b1ef625479f4debcc5"
+      "value": "01f75a0485e7231b46cdc43c228c2b560d206758"
     },
     "root": "/home/maxrush/General/roboweather"
   },
@@ -83,11 +83,11 @@
     "research_database": {
       "available": true,
       "latest_resolved_market_date": "2026-08-12",
-      "latest_snapshot_timestamp": "2026-08-13T18:45:02.809183+00:00",
-      "modified_at": "2026-08-13T18:45:00Z",
+      "latest_snapshot_timestamp": "2026-08-13T18:57:03.160827+00:00",
+      "modified_at": "2026-08-13T19:02:02Z",
       "path": "/home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite",
-      "size_bytes": 67832799232,
-      "snapshot_count": 1810688
+      "size_bytes": 67846172672,
+      "snapshot_count": 1811024
     },
     "services": {
       "roboweather-market-tape.service": {
