@@ -82,8 +82,8 @@ crediting a price visible only before the system could act.
 - F0B rejected the existing outcome-centered synthetic-ladder metrics and froze fixed-support, weather-date-clustered scoring with three minimal controls. F3 later found that the v1 hour-bucket selector admitted post-cutoff reports on 4,338/4,364 rows; `forecast_fixed_support_exact_cutoff_weather_date_v2` supersedes only that flawed selector with a timezone-aware exact as-of rule while retaining the outcome-independent support and control roles.
 - F1 froze `forecast_source_vintage_v1` and a separate content-addressed runtime catalog. WeatherNext replay requires provider `ingestion_time`; NOAA and IEM replay starts at first successful local observation; HTTP modification time cannot backdate availability. Bounded host captures decoded NBM and HRRR fields and retained one IEM observation response. WeatherNext approved access is not configured and RRFS has no frozen operational contract, so those paths remain explicit rather than substituted. No source has passed incremental-skill evaluation.
 - F2 scored `nbm_v5_archive_cycle_plus_2h_v1` on 541 identical D0 station/date rows across 55 weather dates, with complete same-snapshot HRRR-rich and market ladders and 100% NBM coverage. On the untouched 22-date holdout, the 2.09% NBM/HRRR blend improved RPS by `0.01135` but worsened log loss by `0.00340`; the market fitted effectively zero NBM weight. Raw NBM was materially worse than HRRR-rich overall and over the recent 14 dates. This exact transform is rejected. WeatherNext was not scored and remains access-gated.
-- F3 accepted `remaining_heating_hurdle_multinomial_exact_cutoff_v3` for Price Sheet V2 research. Its peak-passed hurdle and positive-heating distribution remain coherent above exact high-so-far; a 43.99% remaining-heating / 56.01% conditioned-HRRR ensemble improved untouched 22-date holdout log loss by `0.17879` and RPS by `0.29365`, with both clustered intervals below zero and positive recent results. A separately evaluated market-aware combination improved holdout and recent point estimates in both metrics, although market-relative intervals cross zero. This is forecast-layer evidence, not tradable or funded edge.
-- F4 rejected `asos_upwind_residual_exact_cutoff_v2`. Its frozen five-neighbor ASOS network and causal HRRR residuals covered all 541 identical rows, but the zero-intercept update worsened untouched holdout log loss by `0.14235` and RPS by `0.01225` versus F3 and was also negative on the recent 14-date slice. This exact spatial transform adds no demonstrated US-high information.
+- Corrected exact-cutoff revalidation rejects F3. T0021 found that the forward loader admitted the entire 14:00 hour; after it reused the exact selector, the 45.14% remaining-heating / 54.86% conditioned-HRRR ensemble still improved weather-only holdout scores, but its market-aware combination worsened holdout log loss by `0.00258` and recent log loss by `0.03028`. It no longer enters Price Sheet V2.
+- F4 remains rejected after corrected-cohort revalidation. Its frozen five-neighbor ASOS network had only 35.51% eligible coverage on 535 rows and the zero-intercept update worsened untouched holdout log loss by `0.12294` and RPS by `0.00659` versus corrected F3, with negative recent results.
 
 ## Risks And Failure Modes
 
@@ -134,3 +134,11 @@ Review after the settlement-source audit, after the first WeatherNext/NBM identi
   worsened both untouched and recent weather scores versus F3. Keep the exact
   transform out of Price Sheet V2 and do not unlock F4X or local-water work
   from this result. F5 remains the next US-high source ablation.
+- 2026-08-13: T0021 superseded the original F3 acceptance. A regression test
+  now proves the forward database path excludes every post-14:00 row. The
+  corrected artifact fails holdout and recent market-relative log-loss gates,
+  so F3 is rejected and no retrospective Price Sheet calibrator is selected.
+- 2026-08-13: F6 preserved the original baseline market/bucket/side selection
+  across 18 post-activation rows. Selected F3 probabilities underperformed the
+  same-side market, diagnostic quote economics were negative, and sparse valid
+  t0 tape had negative median net edge. F6 is rejected; no authority changed.

@@ -4,6 +4,20 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-13
 
+- Completed corrected exact-cutoff revalidation and forecast-edge Slice F6.
+  The forward F3 loader now reuses the contract-owned timezone-aware selector
+  and has a database regression test; both historical and forward diagnostics
+  prove zero rows after 14:00 local. Corrected F3 still improves weather-only
+  scores but fails holdout and recent market-relative log loss, so its earlier
+  Price Sheet V2 research acceptance is superseded. Corrected F4 remains
+  rejected. Added `scripts/forecast_f6_report.py`, which preserves frozen
+  baseline selection, emits selected/quoted-price diagnostics, and samples
+  delayed executable full-book checkpoints at t0, +30s, +2m, +5m, and +15m
+  with explicit right-censoring. F6 rejects the 18-row candidate: selected F3
+  underperforms the market, no calibrator was frozen before activation,
+  diagnostic quote economics are negative, and the two valid `$25` t0 rows
+  have negative median net edge. No funded authority changed.
+
 - Completed forecast-edge Slice F4 with a frozen, causal five-neighbor ASOS
   network, HRRR residual interpolation, spatial correction model, controlled
   report, and focused tests. `asos_upwind_residual_exact_cutoff_v2` covered all

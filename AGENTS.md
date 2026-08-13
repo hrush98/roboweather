@@ -165,6 +165,21 @@
   zero-intercept correction avoids crediting generic F3 recalibration to the
   spatial features; do not route it into Price Sheet V2 or infer transfer.
 
+## Corrected F3 and F6 workflow
+
+- Rebuild the exact-cutoff F3 artifact before F6 with
+  `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/forecast_remaining_heating_report.py --bootstrap-samples 5000`.
+  Require both historical and forward post-cutoff diagnostics to be zero; the
+  database forward path must reuse the shared exact selector rather than an
+  hour-only predicate.
+- Generate the current uncommitted F6 report with
+  `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/forecast_f6_report.py`.
+  It preserves the baseline row's selected market/bucket/side, uses the accepted
+  60-second availability ceiling plus 250 ms latency, samples t0/+30s/+2m/+5m/+15m
+  full-book checkpoints, and right-censors missing, gapped, delayed, or
+  unfillable tape. Its curve is diagnostic whenever the forecast or Price
+  Sheet V2 gate fails; never infer passive or actual fills from it.
+
 ## Legacy candidate-scoped shadow collection workflow
 
 - The current candidate-scoped collector is a plumbing prototype, not the Phase 3 shared market tape. It begins from policy-candidate tokens after candidate generation and its existing shadow labels are not promotion evidence.

@@ -21,7 +21,7 @@ Treat these as four separate evidence cohorts:
 
 | Cohort ID | Market family | Geography | Current evidence |
 | --- | --- | --- | --- |
-| `US_HIGH` | `HIGH_TEMP` | United States | F0 settlement mapping and F3 remaining-heating forecast accepted for research; the exact F4 spatial residual transform was rejected. |
+| `US_HIGH` | `HIGH_TEMP` | United States | F0 settlement mapping is established; corrected exact-cutoff F3, F4, and F6 are rejected, so no forecast currently enters Price Sheet V2. |
 | `GLOBAL_HIGH` | `HIGH_TEMP` | Non-US | Collection exists; settlement, units/day semantics, localization, and probability skill are unvalidated. |
 | `US_LOW` | `LOW_TEMP` | United States | Collection exists; settlement truth and remaining-cooling model are unvalidated. |
 | `GLOBAL_LOW` | `LOW_TEMP` | Non-US | Collection exists; settlement, units/day semantics, localization, and remaining-cooling model are unvalidated. |
@@ -495,9 +495,9 @@ Queue states have these meanings:
 | F0B | Information | COMPLETE | — | What is the smallest genuinely distinct current forecast baseline, and can it be scored without outcome-conditioned ladders or correlated-row inflation? | Prediction-correlation/pruning report and frozen fixed-support, weather-date-aware evaluation contract. | [T0014](../../board/closed/2026/T0014-freeze-minimal-forecast-baseline.md) |
 | F1 | Information | COMPLETE | F0 settled | Can WeatherNext, NBM, HRRR/RRFS, and observation vintages be collected and replayed from their actual causal availability times? | Source-vintage contracts, separate runtime catalog/cache, bounded collectors, tests, and coverage report. | [T0016](../../board/closed/2026/T0016-build-causal-forecast-source-catalog.md) |
 | F2 | Information | REJECTED | F0, F0B, F1 settled | Does WeatherNext 2 or NBM add held-out probability skill beyond the minimal HRRR-rich baseline and contemporaneous market on identical rows? | WeatherNext/NBM identical-coverage and market-relative benchmark with a source acceptance or rejection verdict. | [T0017](../../board/closed/2026/T0017-benchmark-nbm-and-weathernext-forecast-skill.md) |
-| F3 | Information | COMPLETE | F0 and F0B settled | Does a peak-passed plus conditional-additional-heating distribution outperform the frozen absolute/bucket baseline for US high temperature? | Coherent remaining-heating model, chronological ablation report, and acceptance or rejection verdict. | [T0018](../../board/closed/2026/T0018-build-remaining-heating-distribution.md) |
+| F3 | Information | REJECTED | F0 and F0B settled | Does a peak-passed plus conditional-additional-heating distribution outperform the frozen absolute/bucket baseline for US high temperature? | Coherent remaining-heating model, chronological ablation report, and acceptance or rejection verdict. | [T0018](../../board/closed/2026/T0018-build-remaining-heating-distribution.md), superseded by [T0021](../../board/closed/2026/T0021-complete-us-high-f6-market-relative-gate.md) |
 | F4 | Information | REJECTED | F3 settled | Do frozen high-frequency upwind station residuals add information beyond target-station observations and model point features for the US-high control? | MADIS/ASOS spatial residual implementation and controlled ablation. | [T0019](../../board/closed/2026/T0019-implement-frozen-spatial-residual-nowcast.md) |
-| F6 | Cross-pillar | READY | F3 accepted | Does frozen US-high F3 pass Price Sheet V2 selected, quoted-price, market-relative, edge-half-life, and tape-backed research gates at one lifecycle horizon? | US-high Price Sheet V2 report with executable edge-decay curve and acceptance or rejection verdict. | — |
+| F6 | Cross-pillar | REJECTED | F3 exact-cutoff revalidation settled | Does frozen US-high F3 pass Price Sheet V2 selected, quoted-price, market-relative, edge-half-life, and tape-backed research gates at one lifecycle horizon? | US-high Price Sheet V2 report with executable edge-decay curve and acceptance or rejection verdict. | [T0021](../../board/closed/2026/T0021-complete-us-high-f6-market-relative-gate.md) |
 | FC0 | Cross-pillar | READY | F0 settled | What immutable cohort, station, unit, local-day, and eligibility registry defines US/global high/low research without transferring evidence between them? | Four-cohort registry and dependency matrix with explicit unsupported stations and source gaps. | — |
 | F0GH | Settlement | BLOCKED | FC0 settled | What source and mapping define venue-authoritative outcomes and causal high-so-far for each eligible non-US high-temperature station? | Global-high settlement/source audit and versioned station mappings. | — |
 | F0UL | Settlement | BLOCKED | FC0 settled | What source and mapping define venue-authoritative outcomes and causal low-so-far for each eligible US low-temperature station? | US-low settlement/source audit and versioned station mappings. | — |
@@ -683,24 +683,24 @@ F2 settled contract and evidence:
 - Train and validate peak-passed plus conditional-additional-heating models.
 - Produce coherent integer distributions.
 
-F3 accepted contract and evidence:
+F3 corrected contract and rejection evidence:
 
 - `remaining_heating_hurdle_multinomial_exact_cutoff_v3` separates
   peak-passed probability from a regularized positive-additional-heating
   distribution and assigns no mass below the exact integer high-so-far.
   Independent ordinal v1/v2 variants are retired because crossed survival
   curves could collapse learned outcomes to zero probability.
-- The accepted weather forecast conditions the frozen HRRR-rich distribution
-  on high-so-far and combines it with 43.99% remaining-heating weight learned
-  only on the first 33 forward weather dates. The untouched 22-date holdout
-  improved log loss by `0.17879` and RPS by `0.29365` versus HRRR-rich;
-  both weather-date-clustered intervals remained below zero. The recent
-  14-date slice improved both metrics.
-- A separately evaluated 94.53% weather / 5.47% market combination improved
-  holdout log loss by `0.04727` and RPS by `0.14025`, with positive recent
-  point estimates. Those market-relative intervals cross zero, so F3
-  authorizes Price Sheet V2 research only; F6 still owns quoted-price and
-  tape-backed acceptance.
+- T0021 found that the original forward loader used `local_hour <= 14` and
+  admitted rows throughout the 14:00 hour. The loader now reuses the exact
+  timezone-aware selector; both historical and forward diagnostics prove zero
+  rows after 14:00 local.
+- On the corrected 535-row, 55-date cohort, the frozen weather forecast uses
+  45.14% remaining-heating and 54.86% conditioned HRRR-rich. It still improves
+  the untouched 22-date holdout versus HRRR-rich by `0.09641` log loss and
+  `0.23931` RPS, with both clustered intervals below zero.
+- The separately fitted 59.78% weather / 40.22% market combination worsens
+  holdout log loss by `0.00258` and recent log loss by `0.03028`. F3 therefore
+  fails its joint market-relative gate and no longer authorizes Price Sheet V2.
 - Reproduce the generated, uncommitted report and versioned model artifact with
   `scripts/forecast_remaining_heating_report.py`; outputs live under
   `reports/forecast-edge/f3-current/`.
@@ -739,10 +739,11 @@ F4 settled contract and evidence:
 - `asos_upwind_residual_exact_cutoff_v2` freezes five outcome-blind ASOS
   neighbors within 150 km, ten-minute availability lag, explicit QC/fallback,
   causal HRRR interpolation, and distance/upwind/elevation weights.
-- Its zero-intercept spatial correction had 100% eligible coverage on 541
-  identical rows but worsened untouched 22-date log loss by `0.14235` and RPS
-  by `0.01225`; the recent 14-date slice also worsened both. Reject this exact
-  transform and do not pass it to Price Sheet V2 or F4X.
+- On the corrected exact-cutoff cohort, its zero-intercept spatial correction
+  had only 35.51% eligible coverage on 535 rows and worsened untouched 22-date
+  log loss by `0.12294` and RPS by `0.00659`; the recent 14-date slice also
+  worsened both. Reject this exact transform and do not pass it to Price Sheet
+  V2 or F4X.
 
 ### Slice 5: GOES Heating Surprise
 
@@ -837,12 +838,12 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
 - [x] Additional-heating distribution validated.
 - [x] MADIS/upwind residual ablation completed and rejected.
 - [ ] GOES cloud/radiation ablation completed.
-- [x] One US-high forecast version passes pricing-research acceptance.
+- [ ] One US-high forecast version passes pricing-research acceptance.
 - [ ] Four-cohort registry and three remaining settlement mappings frozen.
 - [ ] Hierarchical station specialization passes controlled ablation.
 - [ ] US-low remaining-cooling distribution evaluated.
 - [ ] Global-high and global-low localized distributions evaluated.
-- [ ] Price Sheet V2 integration and executable edge half-life reviewed separately.
+- [x] Price Sheet V2 integration and executable edge half-life reviewed separately; corrected F6 rejected.
 
 ## Decision Log
 
@@ -884,8 +885,19 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
   changed.
 - 2026-08-13: Rejected `asos_upwind_residual_exact_cutoff_v2` for F4. The
   outcome-blind five-neighbor ASOS network, causal HRRR interpolation, frozen
-  lag/QC/weighting rules, and zero-intercept correction covered all 541
-  identical rows, but worsened both log loss and RPS on the untouched 22-date
-  holdout and recent 14-date slice versus F3. F4X remains blocked and this
-  version does not enter Price Sheet V2; F5 is the next ready US-high
+  lag/QC/weighting rules, and zero-intercept correction were revalidated on
+  the corrected exact-cutoff cohort. Coverage was 35.51%, and both holdout and
+  recent metrics worsened versus corrected F3. F4X remains blocked, the
+  version does not enter Price Sheet V2, and F5 is the next ready US-high
   information slice. Funded authority did not change.
+- 2026-08-13: T0021 superseded the original F3 acceptance after finding that
+  its forward path treated the full 14:00 hour as eligible. The shared loader
+  now reuses the exact timezone-aware cutoff and has a database regression
+  test. Corrected F3 still beat conditioned HRRR-rich but failed holdout and
+  recent market-relative log-loss gates, so F3 is rejected.
+- 2026-08-13: Completed and rejected F6. The frozen baseline selection yielded
+  18 post-activation rows across 14 dates; F3 was worse than the same-side
+  market ask in Brier and log loss, no calibrator had been frozen before
+  activation, diagnostic quote-cap economics were negative, and only 2/18 t0
+  rows had continuously valid, $25-fillable tape with negative median net
+  edge. The emitted curve is diagnostic only and funded authority is unchanged.
