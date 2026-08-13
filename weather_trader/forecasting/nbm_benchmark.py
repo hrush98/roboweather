@@ -30,6 +30,7 @@ from weather_trader.forecasting.evaluation import (
     evaluate_probability_matrix,
     normalize_observed_market_ladder,
     normalize_probability_matrix,
+    select_horizon_snapshots,
 )
 from weather_trader.stations.metadata import get_station
 
@@ -397,20 +398,12 @@ def load_identical_cohort(
     snapshots["local_hour"] = snapshots["decision_time_local"].map(
         lambda value: datetime.fromisoformat(value).hour
     )
-    snapshots = snapshots.loc[
-        snapshots["local_hour"] <= contract.horizon_hour_local
-    ].copy()
-    snapshots = snapshots.groupby(
-        ["station", "market_date"], observed=True, as_index=False
-    ).tail(1)
-    snapshots["target_value"] = pd.to_numeric(
-        snapshots["final_high_tmpf"]
-    ).round().astype(int)
-    snapshots = snapshots.loc[
-        snapshots["target_value"].between(
-            contract.support.minimum, contract.support.maximum
-        )
-    ]
+    snapshots["timezone"] = snapshots["station"].map(
+        lambda value: get_station(str(value)).timezone
+    )
+    snapshots["local_date"] = snapshots["market_date"]
+    snapshots["snapshot_time_local"] = snapshots["decision_time_utc"]
+    snapshots = select_horizon_snapshots(snapshots, contract)
     return snapshots.sort_values(["market_date", "station"]).reset_index(drop=True), bounds
 
 

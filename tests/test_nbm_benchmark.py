@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 import json
+import sqlite3
 
 import numpy as np
 import pytest
@@ -11,6 +12,7 @@ from weather_trader.forecasting.nbm_benchmark import (
     conservative_nbm_request,
     extract_snapshot_distributions,
     fit_convex_weight,
+    load_identical_cohort,
     metric_differences,
     normal_fixed_support,
     parse_tmax_inventory,
@@ -96,7 +98,85 @@ def test_snapshot_ladders_use_actual_bounds_and_normalize() -> None:
     }
     model, market = extract_snapshot_distributions(raw, bounds, contract)
     assert model.tolist() == pytest.approx([0.2, 0.5, 0.3])
+
     assert market.tolist() == pytest.approx([0.25, 5 / 12, 1 / 3])
+
+def test_forward_cohort_reuses_exact_local_cutoff(tmp_path) -> None:
+    database = tmp_path / "research.sqlite"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            create table prediction_snapshots (
+                id integer primary key,
+                timestamp text not null,
+                station text not null,
+                market_date text not null,
+                decision_time_utc text not null,
+                decision_time_local text not null,
+                raw_json text not null,
+                market_family text not null,
+                model_name text not null
+            );
+            create table station_date_outcomes (
+                station text not null,
+                market_date text not null,
+                final_high_tmpf real
+            );
+            create table markets (
+                market_id text primary key,
+                market_family text,
+                station text,
+                lower_f real,
+                upper_f real
+            );
+            """
+        )
+        rows = [
+            (
+                1,
+                "2026-07-01T17:52:01+00:00",
+                "2026-07-01T17:52:00+00:00",
+                "2026-07-01T13:52:00-04:00",
+            ),
+            (
+                2,
+                "2026-07-01T18:52:01+00:00",
+                "2026-07-01T18:52:00+00:00",
+                "2026-07-01T14:52:00-04:00",
+            ),
+        ]
+        connection.executemany(
+            """insert into prediction_snapshots
+               (id,timestamp,station,market_date,decision_time_utc,
+                decision_time_local,raw_json,market_family,model_name)
+               values (?,?,'KATL','2026-07-01',?,?,?,'HIGH_TEMP',?)""",
+            [
+                (
+                    row_id,
+                    timestamp,
+                    decision_utc,
+                    decision_local,
+                    json.dumps({"candidate_distribution": []}),
+                    "mvp_hrrr_rich_pm_active_us12_obs_2022_2025",
+                )
+                for row_id, timestamp, decision_utc, decision_local in rows
+            ],
+        )
+        connection.execute(
+            "insert into station_date_outcomes values ('KATL','2026-07-01',80.0)"
+        )
+
+    cohort, _ = load_identical_cohort(
+        database,
+        EvaluationContract(
+            validation_start="2026-01-01",
+            validation_end_exclusive="2027-01-01",
+            bootstrap_samples=10,
+        ),
+    )
+    assert cohort["id"].tolist() == [1]
+    assert cohort.iloc[0]["decision_time_local"] == "2026-07-01T13:52:00-04:00"
+
 
 
 def test_convex_stacking_and_clustered_difference_favor_better_source() -> None:

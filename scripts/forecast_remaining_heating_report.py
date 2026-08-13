@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, replace
+from datetime import datetime, time
 import hashlib
 import json
 from pathlib import Path
@@ -202,6 +203,12 @@ def run_report(
         ),
     }
     timing = _timing_diagnostic(dataset, contract)
+    forward_post_cutoff_rows = sum(
+        datetime.fromisoformat(str(value)).timetz().replace(tzinfo=None)
+        > time(contract.horizon_hour_local)
+        for value in forward["decision_time_local"]
+    )
+    timing["forward_exact_selector_post_cutoff_rows"] = forward_post_cutoff_rows
     coverage = _coverage_diagnostic(historical, forward)
     coherence_violations = _coherence_violations(forward, weather_stack, contract)
     checks = build_acceptance_checks(
@@ -211,6 +218,7 @@ def run_report(
         holdout_weather_dates=len(holdout_dates),
         post_cutoff_rows=timing["exact_selector_post_cutoff_rows"],
         coherence_violations=coherence_violations,
+        forward_post_cutoff_rows=forward_post_cutoff_rows,
     )
     accepted = all(checks.values())
     verdict = (
@@ -277,11 +285,11 @@ def run_report(
         "coherence_violations": coherence_violations,
         "acceptance_checks": checks,
         "limitations": [
-            "The legacy F0B selector admitted observations after the exact 14:00 local cutoff; this report supersedes it with the versioned exact-cutoff contract.",
-            "Target-station trend, dewpoint, wind, cloud, and pressure fields were not persisted in 2026 prediction snapshots, so the accepted model uses only fields reproducible in both paths.",
-            "The raw remaining-heating distribution improves corrected historical scores and forward RPS but is over-sharp forward; the accepted weather forecast is the past-only convex ensemble with HRRR-rich.",
-            "Market-relative holdout and recent point estimates improve in both metrics, but their clustered intervals cross zero. F6 remains the stricter quoted-price and tape-backed gate.",
-            "Acceptance authorizes Price Sheet V2 research only, never funded trading.",
+            "The legacy F0B selector and the original forward-cohort query admitted observations after the exact 14:00 local cutoff; this report supersedes both paths with the centralized versioned exact-cutoff predicate.",
+            "Target-station trend, dewpoint, wind, cloud, and pressure fields were not persisted in 2026 prediction snapshots, so the candidate model uses only fields reproducible in both paths.",
+            "The raw remaining-heating distribution improves corrected historical scores and forward RPS but is over-sharp forward; the evaluated weather candidate is the past-only convex ensemble with HRRR-rich.",
+            "The corrected weather candidate improves on HRRR-rich but worsens market-relative holdout and recent log loss, so F3 is rejected.",
+            "Rejection keeps this version out of Price Sheet V2 and funded trading.",
         ],
     }
     out.mkdir(parents=True, exist_ok=True)
@@ -321,6 +329,7 @@ def build_acceptance_checks(
     holdout_weather_dates: int,
     post_cutoff_rows: int,
     coherence_violations: int,
+    forward_post_cutoff_rows: int,
 ) -> dict[str, bool]:
     historical = comparisons["historical_remaining_minus_hrrr"]
     holdout = comparisons["weather_stack_minus_hrrr_holdout"]
@@ -337,6 +346,7 @@ def build_acceptance_checks(
     return {
         "exact_cutoff_has_no_post_cutoff_rows": post_cutoff_rows == 0,
         "distribution_is_coherent": coherence_violations == 0,
+        "forward_exact_cutoff_has_no_post_cutoff_rows": forward_post_cutoff_rows == 0,
         "holdout_has_at_least_20_weather_dates": holdout_weather_dates >= 20,
         "historical_improves_log_loss": deltas(historical)["log_loss"] < 0,
         "historical_improves_rps": deltas(historical)["rps"] < 0,
@@ -372,6 +382,10 @@ def _load_forward_cohort(
         raw.update(
             station=row["station"],
             local_date=str(row["market_date"]),
+            source_prediction_snapshot_id=int(row["id"]),
+            source_snapshot_timestamp_utc=str(row["timestamp"]),
+            decision_time_utc=str(row["decision_time_utc"]),
+            decision_time_local=str(row["decision_time_local"]),
             hour_local=int(row["local_hour"]),
             max_temp_so_far=raw["high_so_far"],
             final_high_tmpf=float(row["final_high_tmpf"]),
@@ -443,7 +457,7 @@ def _coverage_diagnostic(
             "forward_rate": float(
                 forward[feature].notna().mean() if feature in forward else 0.0
             ),
-            "used_by_accepted_model": feature in FORWARD_COMPATIBLE_FEATURES,
+            "used_by_candidate_model": feature in FORWARD_COMPATIBLE_FEATURES,
         }
         for feature in features
     ]
@@ -476,7 +490,8 @@ def _render_markdown(result: Mapping[str, Any]) -> str:
         "",
         f"- The legacy selector admitted {result['timing_diagnostic']['legacy_post_cutoff_rows']} of {result['timing_diagnostic']['legacy_selected_rows']} rows after the exact 14:00 local cutoff.",
         "- The independent ordinal implementation could collapse adjacent learned bins to zero mass; v3 uses a regularized multinomial positive-heating distribution behind the peak-passed hurdle.",
-        "- The accepted weather forecast uses only features persisted on both historical and forward paths.",
+        f"- The centralized exact-cutoff predicate left {result['timing_diagnostic']['forward_exact_selector_post_cutoff_rows']} post-cutoff forward rows.",
+        "- The evaluated weather candidate uses only features persisted on both historical and forward paths.",
         "",
         "## Chronological Gate",
         "",

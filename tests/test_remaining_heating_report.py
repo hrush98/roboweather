@@ -30,6 +30,7 @@ def test_acceptance_requires_every_f3_gate() -> None:
         market_relative_weight=0.7,
         holdout_weather_dates=22,
         post_cutoff_rows=0,
+        forward_post_cutoff_rows=0,
         coherence_violations=0,
     )
     assert checks
@@ -48,5 +49,6 @@ def test_acceptance_fails_when_weather_holdout_is_not_cluster_robust() -> None:
         holdout_weather_dates=22,
         post_cutoff_rows=0,
         coherence_violations=0,
+        forward_post_cutoff_rows=0,
     )
     assert not checks["weather_stack_log_loss_ci_below_zero"]
