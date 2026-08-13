@@ -18,7 +18,7 @@
       "available": true,
       "path": "docs/current-trading-system-audit.md",
       "review_date": "2026-08-13",
-      "word_count": 5873
+      "word_count": 5875
     },
     "improvement_loop": {
       "available": true,
@@ -41,7 +41,7 @@
       "available": true,
       "path": "docs/execution-rebuild-roadmap.md",
       "review_date": "2026-08-13",
-      "word_count": 2433
+      "word_count": 2439
     },
     "state": {
       "available": true,
@@ -50,8 +50,8 @@
       "word_count": 1039
     }
   },
-  "facts_fingerprint": "b11f54d2c50b9f6523ce303fb7651176cade0d9b75af3c28b37e05830e3d894f",
-  "generated_at": "2026-08-13T20:49:29Z",
+  "facts_fingerprint": "d35f31f7b68316b8de3be275f2aaa0a6c890e4c8cb2ffc6fe01b02ebf49f0daa",
+  "generated_at": "2026-08-13T21:08:43Z",
   "learning": {
     "captured": 16,
     "integrated": 0,
@@ -67,7 +67,7 @@
     },
     "head": {
       "available": true,
-      "value": "6dd349ddd9afa25965d0d4aa6b60b946779574d0"
+      "value": "fae901de04f30227c7a290b169e77a1434078b6c"
     },
     "root": "/home/maxrush/General/roboweather"
   },
@@ -82,12 +82,12 @@
     },
     "research_database": {
       "available": true,
-      "latest_resolved_market_date": "2026-08-12",
-      "latest_snapshot_timestamp": "2026-08-13T20:45:09.499477+00:00",
-      "modified_at": "2026-08-13T20:43:57Z",
+      "latest_resolved_market_date": "2026-08-13",
+      "latest_snapshot_timestamp": "2026-08-13T21:03:26.453913+00:00",
+      "modified_at": "2026-08-13T21:07:56Z",
       "path": "/home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite",
-      "size_bytes": 67985858560,
-      "snapshot_count": 1816352
+      "size_bytes": 68004782080,
+      "snapshot_count": 1816884
     },
     "services": {
       "roboweather-market-tape.service": {

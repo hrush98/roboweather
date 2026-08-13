@@ -162,7 +162,20 @@
   `systemctl --user daemon-reload`, then enable with
   `systemctl --user enable --now roboweather-goes-dsr.timer`; inspect with
   `systemctl --user status roboweather-goes-dsr.timer roboweather-goes-dsr.service --no-pager`.
-- F5 readiness and untouched evaluation use `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/forecast_goes_heating_report.py`. After at least 20 resolved post-activation dates, freeze exactly the earliest 20 with `--freeze-calibrator --untouched-forward-start-date YYYY-MM-DD`, where the start date must be strictly future at freeze time. The immutable artifact and manifest live in the generated F5 report directory; later runs verify their contract and calibration-row hash before counting untouched dates.
+- Build the independent exact-12 conditional predecessor with
+  `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/build_goes_horizon_predecessor.py --horizon-hour-local 12`.
+  The generated artifact remains under `reports/forecast-edge/f5-h12-predecessor/`
+  and must remain uncommitted. It uses its own exact-12 model version,
+  evaluation fingerprint, and 2026-08-14 evidence clock; never substitute the
+  exact-14 F3 artifact. The builder publishes atomically, treats a byte-identical rebuild as a no-op, and fails if an existing version would change.
+- F5 readiness and untouched evaluation use
+  `/home/maxrush/miniconda3/envs/roboweather/bin/python scripts/forecast_goes_heating_report.py --horizon-hour-local HOUR`
+  for frozen `HOUR=12` and `HOUR=14` arms. Each writes a separate generated
+  report directory. After an arm has at least 20 resolved post-activation
+  dates, freeze exactly its earliest 20 with `--freeze-calibrator
+  --untouched-forward-start-date YYYY-MM-DD`, where the start date must be
+  strictly future at freeze time. Later runs verify that arm's contract and
+  calibration-row hash before counting its own untouched dates.
 
 ## F4 spatial residual workflow
 
