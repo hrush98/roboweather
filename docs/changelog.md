@@ -4,6 +4,16 @@ Keep this file up to date for notable data, model, and trading changes.
 
 ## 2026-08-13
 
+- Completed forecast-edge Slice F3 and accepted
+  `remaining_heating_hurdle_multinomial_exact_cutoff_v3` for Price Sheet V2
+  research. Corrected the legacy hour-bucket evaluation leak, added exact
+  timezone-aware cutoff selection, replaced crossed ordinal curves with a
+  coherent peak-passed hurdle and multinomial additional-heating distribution,
+  conditioned the HRRR baseline on high-so-far, and added a reproducible
+  chronological acceptance report. The frozen 43.99% remaining-heating /
+  56.01% HRRR ensemble improved untouched and recent log loss and RPS. This
+  opens F6 research evaluation but does not authorize funded trading.
+
 - Completed forecast-edge Slice F2 with a reproducible causal NBM archive
   materializer and identical-row probability benchmark. The generated report
   scored 541 D0 station/date rows over 55 weather dates against the frozen
