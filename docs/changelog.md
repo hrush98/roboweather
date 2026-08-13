@@ -2,6 +2,17 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-08-13
+
+- Completed forecast-edge Slice F2 with a reproducible causal NBM archive
+  materializer and identical-row probability benchmark. The generated report
+  scored 541 D0 station/date rows over 55 weather dates against the frozen
+  HRRR-rich control and complete contemporaneous ask ladders. The exact NBM
+  transform failed joint held-out and market-relative gates and is rejected;
+  WeatherNext remains unavailable rather than rejected. Added focused tests,
+  including the integer-label half-degree binning contract. No forecast entered
+  Price Sheet V2 and funded authority did not change.
+
 ## 2026-08-12
 
 - Completed forecast-edge Slice F1. Added

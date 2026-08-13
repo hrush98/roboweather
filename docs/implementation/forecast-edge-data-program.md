@@ -435,7 +435,7 @@ Queue states have these meanings:
 | F0 | Settlement | COMPLETE | — | Do IEM, Weather Underground, CLI, high-frequency ASOS, and venue settlement agree sufficiently to define the US high-temperature training target and exact high-so-far? | Reproducible truth-audit command/report, station mismatch table, and canonical target/backfill decision. | [T0015](../../board/closed/2026/T0015-audit-high-temperature-settlement-truth.md) |
 | F0B | Information | COMPLETE | — | What is the smallest genuinely distinct current forecast baseline, and can it be scored without outcome-conditioned ladders or correlated-row inflation? | Prediction-correlation/pruning report and frozen fixed-support, weather-date-aware evaluation contract. | [T0014](../../board/closed/2026/T0014-freeze-minimal-forecast-baseline.md) |
 | F1 | Information | COMPLETE | F0 settled | Can WeatherNext, NBM, HRRR/RRFS, and observation vintages be collected and replayed from their actual causal availability times? | Source-vintage contracts, separate runtime catalog/cache, bounded collectors, tests, and coverage report. | [T0016](../../board/closed/2026/T0016-build-causal-forecast-source-catalog.md) |
-| F2 | Information | READY | F0, F0B, F1 settled | Does WeatherNext 2 or NBM add held-out probability skill beyond the minimal HRRR-rich baseline and contemporaneous market on identical rows? | WeatherNext/NBM identical-coverage and market-relative benchmark with a source acceptance or rejection verdict. | — |
+| F2 | Information | REJECTED | F0, F0B, F1 settled | Does WeatherNext 2 or NBM add held-out probability skill beyond the minimal HRRR-rich baseline and contemporaneous market on identical rows? | WeatherNext/NBM identical-coverage and market-relative benchmark with a source acceptance or rejection verdict. | [T0017](../../board/closed/2026/T0017-benchmark-nbm-and-weathernext-forecast-skill.md) |
 | F3 | Information | READY | F0 and F0B settled | Does a peak-passed plus conditional-additional-heating distribution outperform the frozen absolute/bucket baseline? | Coherent remaining-heating model, chronological ablation report, and acceptance or rejection verdict. | — |
 | F4 | Information | BLOCKED | F3 settled | Do frozen high-frequency upwind station residuals add information beyond target-station observations and model point features? | MADIS/ASOS spatial residual implementation and controlled ablation. | — |
 | F5 | Information | BLOCKED | F3 settled | Does causally observed cloud/radiation surprise add broad or predeclared cloud-regime skill? | GOES heating-surprise implementation and controlled ablation. | — |
@@ -577,6 +577,32 @@ F1 accepted contract and current evidence:
 - Materialize causal D-1 opening, D-1 revision, and D0 station distributions.
 - Run identical-coverage baseline and market-relative reports.
 
+F2 settled contract and evidence:
+
+- `nbm_v5_archive_cycle_plus_2h_v1` freezes historical NBM v5 eligibility at
+  cycle initialization plus two hours, retains archive modification time as
+  provenance only, and materializes nearest-grid 12-hour TMAX mean and
+  ensemble-standard-deviation distributions for D-1 08:00, D-1 20:00, and
+  the frozen D0 latest-at-or-before-14:00 station-local horizons.
+- `scripts/forecast_source_benchmark.py` scored 541 D0 station/date rows over
+  55 weather dates and 10 stations with complete same-snapshot HRRR-rich and
+  normalized ask-ladder distributions. NBM archive materialization covered
+  100% of that cohort; 17 otherwise eligible rows failed closed for incomplete
+  observed ladders.
+- The untouched 22-date holdout gave NBM only a 2.09% fit-period weight over
+  HRRR-rich. The blend improved RPS by `0.01135` but worsened log loss by
+  `0.00340`; its clustered log-loss interval crossed zero. Against the market,
+  fitted NBM weight was effectively zero. Raw NBM was materially worse than
+  HRRR-rich overall and on the recent 14-date slice in both scores.
+- Reject this exact NBM transform for F2 and do not pass it to Price Sheet V2.
+  WeatherNext is unavailable, not rejected: approved access and provider
+  ingestion-time history remain absent. A future localized NBM transform or
+  WeatherNext contract is a new version with a new evidence clock, not a
+  reinterpretation of this holdout.
+- D-1 NBM rows were materialized but not scored because the ledger lacks
+  identical D-1 baseline and complete market ladders. F2 therefore settles the
+  tested D0 source contract without claiming D-1 skill.
+
 ### Slice 3: Remaining-Heating Distribution
 
 - Build the exact-high-so-far state.
@@ -664,9 +690,9 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
 - [x] Separate runtime catalog/cache selected and tested.
 - [x] Forecast collection begins by first supported market listing.
 - [ ] WeatherNext historical station distributions materialized.
-- [ ] NBM probabilistic baseline collected and scored.
+- [x] NBM probabilistic baseline collected and scored.
 - [ ] D-1 opening and revision distributions pass causal horizon-specific evaluation.
-- [ ] Identical-coverage and market-relative report implemented.
+- [x] Identical-coverage and market-relative report implemented.
 - [ ] Additional-heating distribution validated.
 - [ ] MADIS/upwind residual ablation completed.
 - [ ] GOES cloud/radiation ablation completed.
@@ -685,3 +711,10 @@ Reuse existing feature, station metadata, and model infrastructure where contrac
 - 2026-08-12: Completed F0B. Retired outcome-centered synthetic-ladder validation, froze full-distribution scoring on fixed support with weather-date uncertainty, audited 18 current artifacts on 4,364 identical station/date rows, and reduced the baseline to three information-set controls. This is an evaluation repair, not evidence of market-relative information edge.
 - 2026-08-12: Completed F0. Across 220 venue-resolved station-dates, the existing IEM routine/special METAR maximum matched every winning bucket while CLI, one-minute ASOS, and interval-aware rendered Weather Underground did not. Froze venue bucket as authoritative, IEM report maximum as numeric proxy/high-so-far semantics, fail-closed source handling, and provenance-plus-venue backfill without matched-cohort numeric relabeling. No information-edge or funded authority changed.
 - 2026-08-12: Completed F1. Froze `forecast_source_vintage_v1`, a separate content-addressed runtime catalog, listing-bounded NBM/HRRR/IEM collectors, strict WeatherNext/RRFS manifest imports, source-format validation, bounded retry/size behavior, immutable revision and failure telemetry, and causal replay queries. The host probe captured and decoded NBM, HRRR, and IEM artifacts; WeatherNext access and an operational RRFS contract remain explicit limitations. This establishes an information-research substrate, not forecast skill or funded authority.
+- 2026-08-13: Rejected the exact F2 NBM v5 archive transform after a 541-row,
+  55-weather-date identical-coverage D0 benchmark. A 2.09% fit-period NBM
+  blend improved held-out RPS but worsened log loss, raw NBM was materially
+  worse overall and recently, and the contemporaneous market assigned it
+  effectively zero weight. WeatherNext remained unavailable rather than
+  rejected because approved ingestion-time history is absent. No forecast
+  entered pricing research and funded authority did not change.

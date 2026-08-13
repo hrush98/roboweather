@@ -1,7 +1,7 @@
 {
   "board": {
     "active": 0,
-    "closed": 16,
+    "closed": 17,
     "open": 0,
     "parked": 0,
     "pillars": {
@@ -17,8 +17,8 @@
     "audit": {
       "available": true,
       "path": "docs/current-trading-system-audit.md",
-      "review_date": "2026-08-12",
-      "word_count": 5332
+      "review_date": "2026-08-13",
+      "word_count": 5435
     },
     "improvement_loop": {
       "available": true,
@@ -50,12 +50,12 @@
       "word_count": 900
     }
   },
-  "facts_fingerprint": "27d4092673cee21729cc515c0ee9c53378127bde90f5a3fe3d3c9989a0bd9b32",
-  "generated_at": "2026-08-12T17:44:24Z",
+  "facts_fingerprint": "e00c823be792bc3df07baea649ad431497b94e690e2986fa70c37c2c8d5b3ebe",
+  "generated_at": "2026-08-13T17:17:49Z",
   "learning": {
-    "captured": 10,
+    "captured": 11,
     "integrated": 0,
-    "open": 11,
+    "open": 12,
     "overdue": 0,
     "revisit": 1,
     "superseded": 0
@@ -67,7 +67,7 @@
     },
     "head": {
       "available": true,
-      "value": "b9a416745da61914c64cf273f54d8eabd41525aa"
+      "value": "5042569b03b14938171814de638cd20fbefed0bc"
     },
     "root": "/home/maxrush/General/roboweather"
   },
@@ -82,12 +82,12 @@
     },
     "research_database": {
       "available": true,
-      "latest_resolved_market_date": "2026-08-11",
-      "latest_snapshot_timestamp": "2026-08-12T17:42:42.934014+00:00",
-      "modified_at": "2026-08-12T17:42:41Z",
+      "latest_resolved_market_date": "2026-08-12",
+      "latest_snapshot_timestamp": "2026-08-13T17:15:48.919472+00:00",
+      "modified_at": "2026-08-13T17:15:48Z",
       "path": "/home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite",
-      "size_bytes": 66745409536,
-      "snapshot_count": 1783496
+      "size_bytes": 67728715776,
+      "snapshot_count": 1807436
     },
     "services": {
       "roboweather-market-tape.service": {
@@ -109,6 +109,9 @@
   },
   "schema_version": 1,
   "warnings": [
-    "live_journal has no machine-readable Last reviewed/Last updated date"
+    "live_journal has no machine-readable Last reviewed/Last updated date",
+    "roadmap review date 2026-08-12 predates audit review 2026-08-13",
+    "project_overview review date 2026-08-12 predates audit review 2026-08-13",
+    "improvement_loop review date 2026-08-12 predates audit review 2026-08-13"
   ]
 }

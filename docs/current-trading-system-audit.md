@@ -4,7 +4,7 @@ This is the living financial and systems audit for RoboWeather. Update this docu
 
 Generated or ad hoc analysis may live under `reports/`, but durable conclusions, open risks, and decisions belong here. The current implementation sequence belongs in `docs/execution-rebuild-roadmap.md`; funded operating state belongs in `docs/live-trading-journal.md`.
 
-Last reviewed: 2026-08-12
+Last reviewed: 2026-08-13
 
 ## Current Verdict
 
@@ -29,7 +29,7 @@ net trading edge = information advantage + settlement advantage
 
 | Pillar | Current assessment | Next proof |
 | --- | --- | --- |
-| Information | Unproven. Current fairs are overconfident versus outcomes and the contemporaneous market; the maximally broad finite causal search produced zero survivors on its untouched August 7-11 holdout. F1 now provides causal source-vintage collection and replay, not skill evidence. | Run F2 on identical causal rows: benchmark NBM first and WeatherNext when approved access is available, then accept a source only for untouched market-relative probability skill. |
+| Information | Unproven. Current fairs are overconfident; broad causal discovery produced zero holdout survivors; and the exact F2 NBM archive transform failed joint held-out and market-relative probability gates. WeatherNext remains access-gated. | Run F3's coherent remaining-heating ablation against the frozen baseline; evaluate WeatherNext only when approved ingestion-time history exists. |
 | Settlement | Baseline mapping established, not an edge. F0 found the IEM routine/special report maximum in the venue-winning bucket on 220/220 comparable June station-dates; alternative physical/display sources materially disagreed. | Backfill venue bucket and versioned source provenance, preserve fail-closed unresolved rows, and validate the mapping out of cohort before any integrated promotion. |
 | Execution | The causal tape, decision cache, and replay substrate work; an execution advantage is not proven. | Show non-toxic markouts and positive actual or conservative fill-conditioned economics for one exact quote/cancel/inventory rule. |
 | Costs and adverse selection | Partially measurable but not cleared. Price reserves and depth diagnostics exist; useful-size fills, toxicity, capacity, and concentration remain open. | Demonstrate positive net EV after all explicit costs and reserves at the intended size. |
@@ -41,7 +41,7 @@ Current confidence by layer:
 | Layer | Assessment | Decision |
 | --- | --- | --- |
 | Research collection | Broad snapshot collection is useful and operational. The previous memory-growth blocker is resolved, and collection now runs under a restartable 4 GiB-bounded user service rather than TUI child ownership. | Continue collection and investigate any service restart or memory-limit event. |
-| Forecast and settlement truth | F0 reconciled the current IEM report maximum to 220/220 venue-winning buckets; F0B froze honest baseline evaluation; F1 added a separate causal source-vintage catalog with bounded NBM/HRRR/IEM host captures and strict WeatherNext/RRFS manifest gates. These establish target and data substrate, not forecast edge. | Backfill provenance/venue labels, materialize F2 NBM distributions on identical rows, and add WeatherNext only after approved access supplies provider ingestion timestamps. |
+| Forecast and settlement truth | F0 reconciled the current IEM report maximum to 220/220 venue-winning buckets; F0B froze honest baseline evaluation; F1 added causal source vintages; F2 rejected the exact NBM archive transform on 541 identical D0 rows. WeatherNext remains unscored. | Backfill provenance/venue labels, run F3's remaining-heating model, and add WeatherNext only after approved access supplies provider ingestion timestamps. |
 | Full-market-lifecycle edge | Morning snapshots show more displayed depth than late afternoon, but current data do not establish D-1 traded volume, passive fills, round-trip capacity, or an early calibrated forecast. | Collect from first listing and test separate D-1/early arms against the frozen late control. |
 | Current configured portfolio | Failed the fresh July 9-14 cap-aware replay. | Do not restart it. |
 | New late HRRR signals | Promising but based on six correlated weather dates. | Freeze as forward shadow hypotheses, not funded strategies. |
@@ -70,6 +70,7 @@ Durable conclusions from that review:
 - The METAR+HRRR tuned-dynamic artifact was behaviorally identical to its HRRR-rich counterpart in the fresh window and must not be counted as independent confirmation.
 - F0's `us_high_temperature_truth_v1` audit covered 230 June 1-23 station-dates across all 10 US stations. Polymarket exposed 220 fully resolved venue buckets; the other 10 were all unresolved June 18 chains and failed closed. The IEM routine/special report maximum matched 220/220 winning buckets. CLI conflicted on 56/176, NCEI one-minute ASOS on 115/196, and interval-aware localized Weather Underground on 21/220. Venue bucket is authoritative; IEM report maximum is the versioned numeric proxy/report-stream high-so-far, and matched-cohort numeric relabeling is unnecessary. Provenance and venue-bucket backfill remain required.
 - F1's `forecast_source_vintage_v1` catalog separates initialization, valid, provider-ingestion, first-observed, and modification clocks; raw revisions are content-addressed and replay is fail-closed before causal availability. A bounded host probe captured and decoded three NBM station subsets, three HRRR station subsets, and one IEM observation vintage. WeatherNext remains access-gated and requires provider `ingestion_time`; RRFS remains unfrozen. This validates collection/replay plumbing only, not incremental probability skill.
+- F2 materialized `nbm_v5_archive_cycle_plus_2h_v1` at three horizons and scored 541 complete same-snapshot D0 station/date rows across 55 weather dates. The untouched 22-date holdout assigned NBM 2.09% weight over HRRR-rich: RPS improved by `0.01135`, but log loss worsened by `0.00340`; the market assigned effectively zero NBM weight. Raw NBM was materially worse overall and recently. The exact transform is rejected; WeatherNext is unavailable rather than rejected, and neither enters pricing research.
 
 Evidence source: `reports/research-collection-analysis-2026-07-15.md`. That file is an ad hoc analysis artifact; the conclusions above are canonical here.
 
@@ -125,7 +126,7 @@ The July 30-August 2 extension materially weakened that initial result. The froz
 7. Implement `docs/implementation/price-sheet-v2.md`: V2a walk-forward outcome pricing now, then V2b execution reductions/skips on valid tape windows.
 8. Implement `docs/implementation/tape-strategy-discovery.md`: preserve the broad causal materializer, add an append-only candidate registry, run recurring constrained discovery from resolved-data watermarks, and continuously compare post-activation champion/challenger cohorts.
 9. Evaluate passive price-making and a separately tagged stable-taker control from the same tape and economic price ceiling.
-10. Run the approved research-only forecast-edge program in parallel without changing the execution critical path: target/sensor truth audit first, then identical-coverage WeatherNext/NBM benchmarks, high-frequency spatial residuals, and GOES radiation/cloud surprise.
+10. Continue the approved research-only forecast-edge program without changing the execution critical path: run F3's coherent remaining-heating ablation next, then gate spatial residuals and GOES radiation/cloud surprise on its result; revisit WeatherNext only with approved causal history.
 11. Keep weather-only probability, settlement mapping, market-aware calibration, and execution adjustment separately versioned. No new forecast source enters funded pricing until it demonstrates causal incremental skill.
 12. Extend research and collection to the full market lifecycle. Treat D-1 open, D-1 revision, D0 early, intraday, and late as separate horizons; add them one at a time behind forecast, tape, quote, inventory, exit, and portfolio gates.
 13. For V2a, freeze one calibrator and untouched forward start before additional outcomes are inspected. Do not use the July 16-29 candidate comparison as its own promotion window.
@@ -175,6 +176,12 @@ Small funded orders may validate plumbing and replay fidelity, but they confer n
 Update the body of this document when the current assessment changes. Append one short entry below describing the evidence that caused the change; keep detailed generated tables in reproducible reports or scripts.
 
 ## Audit Log
+
+- 2026-08-13: Completed F2's identical-coverage source benchmark. The exact
+  NBM v5 archive transform covered all 541 scored D0 rows but failed the joint
+  held-out log-loss/RPS and market-relative gates; raw NBM was materially worse
+  overall and recently. WeatherNext remains unavailable rather than rejected.
+  The information pillar remains unproven and funded authority remains paused.
 
 - 2026-08-12: Completed F1 causal forecast-source collection. Froze source-specific availability rules, a separate content-addressed runtime catalog, listing-bounded collectors, format validation, retry/size bounds, immutable revision/failure telemetry, and replay queries. Bounded host evidence decoded NBM and HRRR subsets and captured IEM observations; WeatherNext access and RRFS versioning remain explicit. The information pillar remains unproven and funded authority remains paused.
 
