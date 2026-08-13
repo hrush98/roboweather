@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import joblib
 import numpy as np
 import pandas as pd
 import pytest
@@ -68,7 +69,7 @@ def test_materializer_keeps_exact_selected_side_and_causal_window(monkeypatch) -
     )
     assert len(rows) == 1
     assert rows[0]["selected_side"] == "BUY_NO"
-    assert rows[0]["f3_selected_token_probability"] == pytest.approx(0.1)
+    assert rows[0]["predecessor_selected_token_probability"] == pytest.approx(0.1)
     assert rows[0]["market_selected_token_probability"] == pytest.approx(0.2)
     assert rows[0]["outcome_label"] == 0
     assert rows[0]["cloud_regime"] == "CLOUDY"
@@ -78,3 +79,30 @@ def test_materializer_keeps_exact_selected_side_and_causal_window(monkeypatch) -
         "trailing": 60,
         "minimum": 3,
     }
+
+
+def test_report_refuses_cross_horizon_predecessor(tmp_path) -> None:
+    artifact = tmp_path / "mismatch.joblib"
+    joblib.dump({
+        "evaluation_contract": {
+            "version": "forecast_fixed_support_exact_cutoff_weather_date_v2",
+            "support": {"minimum": -20, "maximum": 130, "unit": "F"},
+            "validation_start": "2025-01-01",
+            "validation_end_exclusive": "2026-01-01",
+            "horizon_hour_local": 12,
+            "snapshot_selector": "latest_observation_at_or_before_exact_local_cutoff",
+            "uncertainty_cluster": "local_date",
+            "bootstrap_samples": 2000,
+            "bootstrap_seed": 20260812,
+            "duplicate_probability_correlation": 0.999,
+            "duplicate_mean_total_variation": 0.005,
+        },
+        "forecast_version": "remaining_heating_hurdle_multinomial_exact_cutoff_v3",
+    }, artifact)
+    with pytest.raises(ValueError, match="requires predecessor"):
+        report.run_report(
+            tmp_path / "missing-research.sqlite",
+            tmp_path / "missing-catalog.sqlite",
+            artifact,
+            tmp_path / "out",
+        )

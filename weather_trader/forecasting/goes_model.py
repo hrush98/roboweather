@@ -13,13 +13,14 @@ from sklearn.linear_model import LogisticRegression
 
 @dataclass(frozen=True)
 class GoesHeatingModelContract:
-    version: str = "goes_dsr_market_relative_logit_v2"
+    version: str = "goes_dsr_market_relative_logit_exact_14_local_v1"
+    horizon_id: str = "d0_exact_14_local"
     minimum_calibration_dates: int = 20
     minimum_untouched_dates: int = 20
     regularization_c: float = 0.25
     probability_clip: float = 1e-4
     base_features: tuple[str, ...] = (
-        "logit_f3",
+        "logit_predecessor",
         "logit_market",
         "regime_mixed",
         "regime_cloudy",
@@ -87,12 +88,14 @@ def design_matrix(
 ) -> np.ndarray:
     output = []
     for row in rows:
-        f3 = clipped_probability(row["f3_selected_token_probability"], contract)
+        predecessor = clipped_probability(
+            row["predecessor_selected_token_probability"], contract
+        )
         market = clipped_probability(row["market_selected_token_probability"], contract)
         regime = str(row["cloud_regime"])
         mixed = float(regime == "MIXED")
         cloudy = float(regime == "CLOUDY")
-        values = [logit(f3), logit(market), mixed, cloudy]
+        values = [logit(predecessor), logit(market), mixed, cloudy]
         if include_surprise:
             surprise = float(row["radiation_surprise"])
             values.extend([surprise, surprise * mixed, surprise * cloudy])

@@ -21,7 +21,7 @@ def make_rows(dates: int = 24) -> list[dict[str, object]]:
             rows.append({
                 "market_date": f"2026-09-{date_index + 1:02d}",
                 "outcome_label": outcome,
-                "f3_selected_token_probability": 0.5,
+                "predecessor_selected_token_probability": 0.5,
                 "market_selected_token_probability": 0.5,
                 "cloud_regime": ("CLEAR", "MIXED", "CLOUDY")[row_index % 3],
                 "radiation_surprise": surprise,
@@ -31,7 +31,7 @@ def make_rows(dates: int = 24) -> list[dict[str, object]]:
 
 def test_contract_fingerprint_and_feature_order_are_stable() -> None:
     contract = GoesHeatingModelContract()
-    assert contract.version == "goes_dsr_market_relative_logit_v2"
+    assert contract.version == "goes_dsr_market_relative_logit_exact_14_local_v1"
     assert contract.fingerprint == GoesHeatingModelContract().fingerprint
     rows = make_rows(1)
     assert design_matrix(rows, contract, False).shape == (4, 4)

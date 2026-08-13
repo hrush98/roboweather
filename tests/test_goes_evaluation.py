@@ -29,7 +29,7 @@ def make_rows(start: date, dates: int = 20) -> list[dict[str, object]]:
                 "selected_market_id": f"m-{snapshot_id}",
                 "selected_side": "BUY_YES",
                 "outcome_label": outcome,
-                "f3_selected_token_probability": 0.50,
+                "predecessor_selected_token_probability": 0.50,
                 "market_selected_token_probability": 0.50,
                 "source_same_side_ask": 0.48,
                 "cloud_regime": ("CLEAR", "MIXED", "CLOUDY", "MIXED")[row_index],
@@ -47,7 +47,7 @@ def test_freeze_is_immutable_future_activated_and_replay_validated(tmp_path) -> 
         rows,
         tmp_path,
         predecessor="f3-v1",
-        f3_evaluation_fingerprint="f3-fingerprint",
+        predecessor_evaluation_fingerprint="f3-fingerprint",
         untouched_forward_start_date="2026-09-24",
         frozen_at_utc=frozen_at,
     )
@@ -63,7 +63,7 @@ def test_freeze_is_immutable_future_activated_and_replay_validated(tmp_path) -> 
         rows,
         tmp_path,
         predecessor="f3-v1",
-        f3_evaluation_fingerprint="f3-fingerprint",
+        predecessor_evaluation_fingerprint="f3-fingerprint",
     )
     assert loaded is not None
     assert loaded[0].fit_dates == models.fit_dates
@@ -75,14 +75,14 @@ def test_freeze_is_immutable_future_activated_and_replay_validated(tmp_path) -> 
             changed,
             tmp_path,
             predecessor="f3-v1",
-            f3_evaluation_fingerprint="f3-fingerprint",
+            predecessor_evaluation_fingerprint="f3-fingerprint",
         )
     with pytest.raises(ValueError, match="already exists"):
         freeze_calibrator(
             rows,
             tmp_path,
             predecessor="f3-v1",
-            f3_evaluation_fingerprint="f3-fingerprint",
+            predecessor_evaluation_fingerprint="f3-fingerprint",
             untouched_forward_start_date="2026-09-23",
             frozen_at_utc=frozen_at,
         )
@@ -94,7 +94,7 @@ def test_freeze_refuses_nonfuture_or_undersized_evidence(tmp_path) -> None:
             make_rows(date(2026, 9, 1)),
             tmp_path,
             predecessor="f3-v1",
-            f3_evaluation_fingerprint="f3-fingerprint",
+            predecessor_evaluation_fingerprint="f3-fingerprint",
             untouched_forward_start_date="2026-09-21",
             frozen_at_utc=datetime(2026, 9, 21, 12, tzinfo=UTC),
         )
@@ -103,7 +103,7 @@ def test_freeze_refuses_nonfuture_or_undersized_evidence(tmp_path) -> None:
             make_rows(date(2026, 9, 1), dates=19),
             tmp_path,
             predecessor="f3-v1",
-            f3_evaluation_fingerprint="f3-fingerprint",
+            predecessor_evaluation_fingerprint="f3-fingerprint",
             untouched_forward_start_date="2026-09-22",
             frozen_at_utc=datetime(2026, 9, 21, 12, tzinfo=UTC),
         )
@@ -115,7 +115,7 @@ def test_untouched_report_covers_incremental_groups_calibration_and_abstention(t
         calibration,
         tmp_path,
         predecessor="f3-v1",
-        f3_evaluation_fingerprint="f3-fingerprint",
+        predecessor_evaluation_fingerprint="f3-fingerprint",
         untouched_forward_start_date="2026-10-01",
         frozen_at_utc=datetime(2026, 9, 21, 12, tzinfo=UTC),
     )
@@ -129,7 +129,7 @@ def test_untouched_report_covers_incremental_groups_calibration_and_abstention(t
     assert evaluation["weather_dates"] == 20
     for comparison in (
         "challenger_minus_no_surprise_baseline",
-        "challenger_minus_f3",
+        "challenger_minus_predecessor",
         "challenger_minus_market",
     ):
         assert evaluation["comparisons"][comparison]["log_loss_delta"] < 0
@@ -162,7 +162,7 @@ def test_markdown_renders_every_required_diagnostic_section(tmp_path) -> None:
         calibration,
         tmp_path,
         predecessor="f3-v1",
-        f3_evaluation_fingerprint="f3-fingerprint",
+        predecessor_evaluation_fingerprint="f3-fingerprint",
         untouched_forward_start_date="2026-10-01",
         frozen_at_utc=datetime(2026, 9, 21, 12, tzinfo=UTC),
     )
@@ -205,7 +205,7 @@ def test_untouched_evaluation_refuses_fewer_than_twenty_dates(tmp_path) -> None:
         make_rows(date(2026, 9, 1)),
         tmp_path,
         predecessor="f3-v1",
-        f3_evaluation_fingerprint="f3-fingerprint",
+        predecessor_evaluation_fingerprint="f3-fingerprint",
         untouched_forward_start_date="2026-10-01",
         frozen_at_utc=datetime(2026, 9, 21, 12, tzinfo=UTC),
     )

@@ -29,6 +29,10 @@ from weather_trader.forecasting.goes_heating import (
     causal_station_window,
     normalized_radiation_surprise,
 )
+from weather_trader.forecasting.goes_horizon import (
+    goes_model_contract,
+    horizon_contract,
+)
 from weather_trader.forecasting.goes_evaluation import (
     calibrator_paths,
     evaluate_untouched,
@@ -42,32 +46,36 @@ from weather_trader.stations.metadata import get_station
 UTC = timezone.utc
 DEFAULT_RESEARCH_DB = Path("/home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite")
 DEFAULT_CATALOG = Path("/home/maxrush/.local/state/roboweather/forecast_sources/catalog.sqlite")
-DEFAULT_F3 = ROOT / "reports/forecast-edge/f3-current/remaining_heating_weather_ensemble.joblib"
-DEFAULT_OUT = ROOT / "reports/forecast-edge/f5-current"
-COLLECTION_ACTIVATION_DATE = "2026-08-14"
 MODEL_CONTRACT = GoesHeatingModelContract()
-MINIMUM_CALIBRATION_DATES = MODEL_CONTRACT.minimum_calibration_dates
-MINIMUM_UNTOUCHED_DATES = MODEL_CONTRACT.minimum_untouched_dates
-SURPRISE_THRESHOLDS = MODEL_CONTRACT.surprise_thresholds
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--research-db", type=Path, default=DEFAULT_RESEARCH_DB)
     parser.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
-    parser.add_argument("--f3-model", type=Path, default=DEFAULT_F3)
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--horizon-hour-local", type=int, choices=(12, 14), default=14)
+    parser.add_argument(
+        "--predecessor-model", "--f3-model", dest="predecessor_model", type=Path
+    )
+    parser.add_argument("--out", type=Path)
     parser.add_argument("--freeze-calibrator", action="store_true")
     parser.add_argument(
         "--untouched-forward-start-date",
         help="Required with --freeze-calibrator; must be strictly future at freeze time.",
     )
     args = parser.parse_args()
+    horizon = horizon_contract(args.horizon_hour_local)
+    predecessor_model = args.predecessor_model or (
+        ROOT
+        / horizon.predecessor_artifact_directory
+        / "remaining_heating_weather_ensemble.joblib"
+    )
+    out = args.out or ROOT / horizon.report_directory
     result, _rows = run_report(
         args.research_db,
         args.catalog,
-        args.f3_model,
-        args.out,
+        predecessor_model,
+        out,
         freeze_calibrator_now=args.freeze_calibrator,
         untouched_forward_start_date=args.untouched_forward_start_date,
     )
@@ -86,7 +94,7 @@ def main() -> int:
 def run_report(
     research_db: Path,
     catalog_path: Path,
-    f3_model_path: Path,
+    predecessor_model_path: Path,
     out: Path,
     *,
     freeze_calibrator_now: bool = False,
@@ -94,7 +102,7 @@ def run_report(
     frozen_at_utc: datetime | None = None,
     bootstrap_samples: int | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    bundle = joblib.load(f3_model_path)
+    bundle = joblib.load(predecessor_model_path)
     payload = dict(bundle["evaluation_contract"])
     payload["support"] = FixedSupport(**payload["support"])
     contract = replace(
@@ -102,12 +110,23 @@ def run_report(
         validation_start="2026-01-01",
         validation_end_exclusive="2100-01-01",
     )
+    horizon = horizon_contract(contract.horizon_hour_local)
+    model_contract = goes_model_contract(contract.horizon_hour_local)
+    predecessor = str(bundle["forecast_version"])
+    if predecessor != horizon.predecessor_version:
+        raise ValueError(
+            f"F5 horizon {horizon.horizon_id} requires predecessor "
+            f"{horizon.predecessor_version}; got {predecessor}"
+        )
+    artifact_horizon = bundle.get("horizon_id")
+    if artifact_horizon is not None and artifact_horizon != horizon.horizon_id:
+        raise ValueError("F5 predecessor artifact horizon identity changed")
     forward, baseline, market, exclusions = _load_forward_cohort(research_db, contract)
     remaining = bundle["remaining_heating_model"].predict_proba(forward)
     coherent = enforce_high_so_far_lower_bound(
         baseline, forward["max_temp_so_far"], contract.support
     )
-    f3 = (
+    predecessor_matrix = (
         float(bundle["remaining_heating_weight"]) * remaining
         + float(bundle["hrrr_baseline_weight"]) * coherent
     )
@@ -115,23 +134,22 @@ def run_report(
     bounds = load_bounds(research_db)
     rows = materialize_rows(
         forward,
-        f3,
+        predecessor_matrix,
         market,
         artifacts,
         bounds,
         contract.support.values,
-        activation_date=COLLECTION_ACTIVATION_DATE,
+        activation_date=horizon.collection_activation_date,
     )
     dates = sorted({str(row["market_date"]) for row in rows})
-    predecessor = str(bundle["forecast_version"])
-    f3_fingerprint = str(bundle["evaluation_fingerprint"])
+    predecessor_fingerprint = str(bundle["evaluation_fingerprint"])
     out.mkdir(parents=True, exist_ok=True)
     frozen = load_calibrator(
         rows,
         out,
         predecessor=predecessor,
-        f3_evaluation_fingerprint=f3_fingerprint,
-        contract=MODEL_CONTRACT,
+        predecessor_evaluation_fingerprint=predecessor_fingerprint,
+        contract=model_contract,
     )
     if freeze_calibrator_now:
         if frozen is not None:
@@ -144,10 +162,10 @@ def run_report(
             rows,
             out,
             predecessor=predecessor,
-            f3_evaluation_fingerprint=f3_fingerprint,
+            predecessor_evaluation_fingerprint=predecessor_fingerprint,
             untouched_forward_start_date=untouched_forward_start_date,
             frozen_at_utc=frozen_at_utc,
-            contract=MODEL_CONTRACT,
+            contract=model_contract,
         )
     models = None if frozen is None else frozen[0]
     manifest = None if frozen is None else frozen[1]
@@ -167,11 +185,14 @@ def run_report(
     )
     untouched_dates = sorted({str(row["market_date"]) for row in untouched_rows})
     evaluation = None
-    if models is not None and len(untouched_dates) >= MINIMUM_UNTOUCHED_DATES:
+    if (
+        models is not None
+        and len(untouched_dates) >= model_contract.minimum_untouched_dates
+    ):
         evaluation, scored = evaluate_untouched(
             untouched_rows,
             models,
-            contract=MODEL_CONTRACT,
+            contract=model_contract,
             bootstrap_samples=bootstrap_samples,
         )
         scored_by_id = {
@@ -181,7 +202,9 @@ def run_report(
             scored_by_id.get(int(row["source_prediction_snapshot_id"]), row)
             for row in rows
         ]
-    checks = acceptance_checks(fit_dates, manifest, untouched_dates, evaluation)
+    checks = acceptance_checks(
+        fit_dates, manifest, untouched_dates, evaluation, model_contract
+    )
     accepted = all(
         checks[name]
         for name in (
@@ -189,7 +212,7 @@ def run_report(
             "calibrator_frozen_before_untouched_evaluation",
             "untouched_has_at_least_20_weather_dates",
             "incremental_surprise_log_loss_ci_below_zero",
-            "improves_exact_token_log_loss_vs_f3",
+            "improves_exact_token_log_loss_vs_predecessor",
             "improves_exact_token_log_loss_vs_market",
             "selected_token_calibration_passes",
             "predeclared_regime_threshold_and_abstention_reported",
@@ -209,7 +232,7 @@ def run_report(
     elif manifest is not None:
         status = "ACCUMULATING_UNTOUCHED_FORWARD"
         verdict = "NOT_EVALUATED_FORWARD_EVIDENCE_INCOMPLETE"
-    elif len(dates) >= MINIMUM_CALIBRATION_DATES:
+    elif len(dates) >= model_contract.minimum_calibration_dates:
         status = "READY_TO_FREEZE_CALIBRATOR"
         verdict = "NOT_EVALUATED_CALIBRATOR_NOT_FROZEN"
     else:
@@ -223,22 +246,22 @@ def run_report(
         "contract": {
             "cohort": "US_HIGH",
             "predecessor": predecessor,
-            "f3_evaluation_fingerprint": f3_fingerprint,
-            "horizon": "d0_exact_14_local",
+            "predecessor_evaluation_fingerprint": predecessor_fingerprint,
+            "horizon": horizon.horizon_id,
             "model_contract": {
-                **asdict(MODEL_CONTRACT),
-                "fingerprint": MODEL_CONTRACT.fingerprint,
+                **asdict(model_contract),
+                "fingerprint": model_contract.fingerprint,
             },
-            "collection_activation_date": COLLECTION_ACTIVATION_DATE,
+            "collection_activation_date": horizon.collection_activation_date,
             "trailing_observed_minutes": 60,
             "minimum_scans": 3,
-            "minimum_calibration_dates": MINIMUM_CALIBRATION_DATES,
-            "minimum_untouched_dates": MINIMUM_UNTOUCHED_DATES,
+            "minimum_calibration_dates": model_contract.minimum_calibration_dates,
+            "minimum_untouched_dates": model_contract.minimum_untouched_dates,
             "surprise_definition": (
                 "trailing GOES DSR transmission proxy minus HRRR next-3h "
                 "shortwave transmission proxy, each normalized by frozen NOAA solar geometry"
             ),
-            "surprise_thresholds": list(SURPRISE_THRESHOLDS),
+            "surprise_thresholds": list(model_contract.surprise_thresholds),
             "cloud_regimes": {
                 "CLEAR": "hrrr_cloud_cover_current <= 25",
                 "MIXED": "25 < hrrr_cloud_cover_current < 75",
@@ -246,7 +269,8 @@ def run_report(
             },
             "acceptance_scope": (
                 "exact selected-token calibration and date-clustered incremental log loss "
-                "versus the no-surprise conditional baseline, frozen F3, and contemporaneous "
+                "versus the no-surprise conditional baseline, horizon-specific "
+                "predecessor, and contemporaneous "
                 "normalized market distribution; station/regime/threshold and abstention "
                 "diagnostics are mandatory"
             ),
@@ -291,7 +315,7 @@ def run_report(
                 str(threshold): sum(
                     abs(float(row["radiation_surprise"])) >= threshold for row in rows
                 )
-                for threshold in SURPRISE_THRESHOLDS
+                for threshold in model_contract.surprise_thresholds
             },
         },
         "evaluation": evaluation,
@@ -316,6 +340,7 @@ def acceptance_checks(
     manifest: Mapping[str, object] | None,
     untouched_dates: Sequence[str],
     evaluation: Mapping[str, Any] | None,
+    model_contract: GoesHeatingModelContract = MODEL_CONTRACT,
 ) -> dict[str, bool]:
     comparisons = {} if evaluation is None else evaluation["comparisons"]
 
@@ -336,16 +361,18 @@ def acceptance_checks(
     )
     return {
         "calibration_has_at_least_20_weather_dates": (
-            len(fit_dates) >= MINIMUM_CALIBRATION_DATES
+            len(fit_dates) >= model_contract.minimum_calibration_dates
         ),
         "calibrator_frozen_before_untouched_evaluation": manifest is not None,
         "untouched_has_at_least_20_weather_dates": (
-            len(untouched_dates) >= MINIMUM_UNTOUCHED_DATES
+            len(untouched_dates) >= model_contract.minimum_untouched_dates
         ),
         "incremental_surprise_log_loss_ci_below_zero": improves(
             "challenger_minus_no_surprise_baseline"
         ),
-        "improves_exact_token_log_loss_vs_f3": improves("challenger_minus_f3"),
+        "improves_exact_token_log_loss_vs_predecessor": improves(
+            "challenger_minus_predecessor"
+        ),
         "improves_exact_token_log_loss_vs_market": improves(
             "challenger_minus_market"
         ),
@@ -367,7 +394,7 @@ def file_sha256(path: Path) -> str:
 
 def materialize_rows(
     forward: pd.DataFrame,
-    f3: np.ndarray,
+    predecessor_probabilities: np.ndarray,
     market: np.ndarray,
     artifacts: Sequence[Mapping[str, object]],
     bounds: Mapping[str, tuple[float | None, float | None]],
@@ -408,7 +435,9 @@ def materialize_rows(
         bound = bounds.get(selected_market_id)
         if not bound or selected_side not in {"BUY_YES", "BUY_NO"}:
             continue
-        f3_yes = bucket_probability(f3[position], support_values, *bound)
+        predecessor_yes = bucket_probability(
+            predecessor_probabilities[position], support_values, *bound
+        )
         market_yes = bucket_probability(market[position], support_values, *bound)
         candidate = next((
             item for item in row.get("candidate_distribution") or []
@@ -416,7 +445,9 @@ def materialize_rows(
         ), {})
         ask_key = "yes_ask" if selected_side == "BUY_YES" else "no_ask"
         source_same_side_ask = finite(candidate.get(ask_key))
-        selected_f3 = f3_yes if selected_side == "BUY_YES" else 1.0 - f3_yes
+        selected_predecessor = (
+            predecessor_yes if selected_side == "BUY_YES" else 1.0 - predecessor_yes
+        )
         selected_market = market_yes if selected_side == "BUY_YES" else 1.0 - market_yes
         outcome_yes = bucket_won(int(row["target_value"]), *bound)
         cloud = finite(row.get("hrrr_cloud_cover_current"))
@@ -428,7 +459,7 @@ def materialize_rows(
             "selected_market_id": selected_market_id,
             "selected_side": selected_side,
             "outcome_label": int(outcome_yes if selected_side == "BUY_YES" else not outcome_yes),
-            "f3_selected_token_probability": selected_f3,
+            "predecessor_selected_token_probability": selected_predecessor,
             "market_selected_token_probability": selected_market,
             "source_same_side_ask": source_same_side_ask,
             "hrrr_shortwave_next_3h_mean": expected_shortwave,

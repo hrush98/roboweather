@@ -28,7 +28,7 @@ def freeze_calibrator(
     out: Path,
     *,
     predecessor: str,
-    f3_evaluation_fingerprint: str,
+    predecessor_evaluation_fingerprint: str,
     untouched_forward_start_date: str,
     frozen_at_utc: datetime | None = None,
     contract: GoesHeatingModelContract = GoesHeatingModelContract(),
@@ -58,7 +58,7 @@ def freeze_calibrator(
         "model_version": contract.version,
         "model_contract_fingerprint": contract.fingerprint,
         "predecessor": predecessor,
-        "f3_evaluation_fingerprint": f3_evaluation_fingerprint,
+        "predecessor_evaluation_fingerprint": predecessor_evaluation_fingerprint,
         "fit_dates": list(fit_dates),
         "fit_rows": len(fit_rows),
         "calibration_rows_sha256": rows_sha256(fit_rows),
@@ -80,7 +80,7 @@ def load_calibrator(
     out: Path,
     *,
     predecessor: str,
-    f3_evaluation_fingerprint: str,
+    predecessor_evaluation_fingerprint: str,
     contract: GoesHeatingModelContract = GoesHeatingModelContract(),
 ) -> tuple[GoesHeatingModels, dict[str, Any]] | None:
     artifact_path, manifest_path = calibrator_paths(out)
@@ -96,8 +96,11 @@ def load_calibrator(
         raise ValueError("F5 calibrator model contract fingerprint changed")
     if manifest.get("predecessor") != predecessor:
         raise ValueError("F5 calibrator predecessor changed")
-    if manifest.get("f3_evaluation_fingerprint") != f3_evaluation_fingerprint:
-        raise ValueError("F5 calibrator F3 evaluation fingerprint changed")
+    if (
+        manifest.get("predecessor_evaluation_fingerprint")
+        != predecessor_evaluation_fingerprint
+    ):
+        raise ValueError("F5 calibrator predecessor evaluation fingerprint changed")
     fit_dates = set(str(item) for item in manifest["fit_dates"])
     fit_rows = [row for row in rows if str(row["market_date"]) in fit_dates]
     if len(fit_rows) != int(manifest["fit_rows"]):
@@ -147,10 +150,10 @@ def evaluate_untouched(
             contract,
             samples,
         ),
-        "challenger_minus_f3": paired_comparison(
+        "challenger_minus_predecessor": paired_comparison(
             scored,
             "goes_challenger_selected_token_probability",
-            "f3_selected_token_probability",
+            "predecessor_selected_token_probability",
             contract,
             samples,
         ),
@@ -179,7 +182,7 @@ def evaluate_untouched(
             for field in (
                 "goes_challenger_selected_token_probability",
                 "goes_baseline_selected_token_probability",
-                "f3_selected_token_probability",
+                "predecessor_selected_token_probability",
                 "market_selected_token_probability",
                 "source_same_side_ask",
             )
