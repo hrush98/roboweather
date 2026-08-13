@@ -4,9 +4,11 @@ channels:
 dependencies:
   - python=3.11
   - joblib
+  - h5py
   - numpy
   - pandas
   - pygrib
+  - pyproj
   - pytest
   - requests
   - scikit-learn=1.5.2

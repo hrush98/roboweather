@@ -132,6 +132,22 @@ SOURCE_CONTRACTS: tuple[SourceContract, ...] = (
         raw_retention="content-addressed station/day query response",
         notes=("Observation valid time is not publication availability.",),
     ),
+    SourceContract(
+        source_id="goes_abi_dsr",
+        provider="NOAA/NESDIS GOES-R",
+        model_family="observed_surface_downward_shortwave_radiation",
+        operational_version="ABI-L2-DSRF-v02r00",
+        access_method="NOAA Open Data S3 full-disk NetCDF4",
+        cadence_hours=None,
+        selected_fields=("DSR", "DQF", "time_coverage_start", "time_coverage_end"),
+        availability_rule="FIRST_SUCCESSFUL_OBSERVATION",
+        provider_availability_field=None,
+        raw_retention="content-addressed full-disk NetCDF4 artifact",
+        notes=(
+            "GOES-18 is the western view and GOES-19 is the eastern view.",
+            "Embedded creation time and S3 Last-Modified are provenance only.",
+        ),
+    ),
 )
 
 
@@ -677,6 +693,9 @@ def validate_payload(
         header = content.splitlines()[0].lower() if content.splitlines() else b""
         if b"station" not in header or b"valid" not in header:
             raise ValueError("IEM artifact is not an observation CSV")
+    elif source_id == "goes_abi_dsr":
+        if not content.startswith(b"\x89HDF\r\n\x1a\n"):
+            raise ValueError("GOES ABI DSR artifact is not NetCDF4/HDF5")
     elif "text/html" in content_type or prefix.startswith((b"<html", b"<!doctype html")):
         raise ValueError("source returned HTML instead of a data artifact")
 

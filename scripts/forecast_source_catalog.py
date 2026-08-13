@@ -405,6 +405,10 @@ def source_limitations(coverage: dict[str, Any]) -> list[str]:
         limitations.append(
             "WeatherNext 2 has no collected artifacts; approved Google access and an ingestion_time manifest are required."
         )
+    if not by_source.get("goes_abi_dsr", {}).get("artifacts"):
+        limitations.append(
+            "GOES ABI DSR has no forward-observed artifacts; historical S3 clocks cannot backdate causal replay."
+        )
     if not by_source.get("rrfs", {}).get("artifacts"):
         limitations.append(
             "RRFS remains fail-closed until an operational product/version and endpoint are frozen in a manifest."

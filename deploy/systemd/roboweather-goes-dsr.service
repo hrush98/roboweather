@@ -1,0 +1,18 @@
+[Unit]
+Description=RoboWeather forward-causal GOES ABI DSR collection cycle
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=-%h/General/roboweather
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=%h/miniconda3/envs/roboweather/bin:/usr/bin:/bin
+ExecStartPre=/usr/bin/mkdir -p %h/.local/state/roboweather/forecast_sources/raw
+ExecStart=/usr/bin/flock -n %h/.local/state/roboweather/forecast_sources/goes-dsr.lock /usr/bin/env python scripts/collect_goes_dsr.py --research-db %h/.local/state/roboweather/research_2026-05-08_multimodel.sqlite
+TimeoutStartSec=240
+MemoryMax=1G
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=%h/.local/state/roboweather
