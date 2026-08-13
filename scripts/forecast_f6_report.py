@@ -97,11 +97,15 @@ def run_report(
     quoted = quoted_price_diagnostic(post_activation)
 
     tape_rows: list[dict[str, Any]] = []
-    tape_mapping: dict[str, str] = {}
+    tape_mapping: dict[tuple[str, str], str] = {}
     if tape_catalog.exists():
         with _read_only_connection(tape_catalog) as tape:
             tape_mapping = _load_tape_tokens(
-                tape, {str(row["selected_market_id"]) for row in post_activation}
+                tape,
+                {
+                    (str(row["selected_market_id"]), str(row["selected_side"]))
+                    for row in post_activation
+                },
             )
             provider = PostReadyCheckpointBookProvider(
                 tape, tape_mapping.values(), maximum_execution_delay_seconds=30.0
@@ -153,7 +157,7 @@ def run_report(
             "evaluation_fingerprint": bundle["evaluation_fingerprint"],
             "activation_date": bundle["activation_date"],
             "selection_rule": (
-                "preserve the accepted HRRR-rich baseline snapshot's selected "
+                "preserve the frozen HRRR-rich baseline snapshot's selected "
                 "market, bucket, and side at the exact-cutoff row; never reselect "
                 "from F3 probabilities"
             ),
@@ -187,7 +191,8 @@ def run_report(
             "selected_rows": len(post_activation),
             "selected_market_dates": len({row["market_date"] for row in post_activation}),
             "tape_mapped_rows": sum(
-                str(row["selected_market_id"]) in tape_mapping for row in post_activation
+                (str(row["selected_market_id"]), str(row["selected_side"])) in tape_mapping
+                for row in post_activation
             ),
         },
         "f3_prerequisite": {
@@ -361,7 +366,7 @@ def quoted_price_diagnostic(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]
 
 def replay_edge_decay(
     rows: Sequence[Mapping[str, Any]],
-    token_mapping: Mapping[str, str],
+    token_mapping: Mapping[tuple[str, str], str],
     provider: PostReadyCheckpointBookProvider,
     *,
     timing_contract: DecisionCacheContract,
@@ -369,7 +374,8 @@ def replay_edge_decay(
     output = []
     for row in rows:
         market_id = str(row["selected_market_id"])
-        token_id = token_mapping.get(market_id)
+        selected_side = str(row["selected_side"])
+        token_id = token_mapping.get((market_id, selected_side))
         quote_ready = quote_ready_timestamp(str(row["source_snapshot_timestamp_utc"]), timing_contract)
         for offset in CHECKPOINTS_SECONDS:
             item = {
@@ -545,16 +551,24 @@ def _load_market_bounds(database: Path) -> dict[str, tuple[float | None, float |
     }
 
 
-def _load_tape_tokens(tape: sqlite3.Connection, market_ids: Iterable[str]) -> dict[str, str]:
-    ids = sorted(set(market_ids))
+def _load_tape_tokens(
+    tape: sqlite3.Connection,
+    market_sides: Iterable[tuple[str, str]],
+) -> dict[tuple[str, str], str]:
+    requested = set(market_sides)
+    ids = sorted({market_id for market_id, _side in requested})
     if not ids:
         return {}
     placeholders = ",".join("?" for _ in ids)
     rows = tape.execute(
-        f"select market_id,token_id,outcome from tape_tokens where market_id in ({placeholders}) and outcome='YES'",
+        f"select market_id,token_id,outcome from tape_tokens where market_id in ({placeholders})",
         ids,
     ).fetchall()
-    return {str(row["market_id"]): str(row["token_id"]) for row in rows}
+    available = {
+        (str(row["market_id"]), f"BUY_{str(row['outcome']).upper()}"): str(row["token_id"])
+        for row in rows
+    }
+    return {key: available[key] for key in sorted(requested) if key in available}
 
 
 def _read_only_connection(path: Path) -> sqlite3.Connection:

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import sqlite3
 import numpy as np
 import pandas as pd
 import pytest
 
 from scripts.forecast_f6_report import (
+    _load_tape_tokens,
     binary_metrics,
     bucket_probability,
     build_selected_rows,
@@ -71,6 +73,31 @@ def test_binary_metrics_equal_weight_market_dates() -> None:
     result = binary_metrics(rows, "p")
     assert result["market_dates"] == 2
     assert result["brier"] == pytest.approx(0.01)
+
+
+def test_tape_tokens_are_mapped_to_the_selected_side() -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        "create table tape_tokens (market_id text, token_id text, outcome text)"
+    )
+    connection.executemany(
+        "insert into tape_tokens values (?,?,?)",
+        [
+            ("m1", "yes-1", "YES"),
+            ("m1", "no-1", "NO"),
+            ("m2", "yes-2", "YES"),
+            ("m2", "no-2", "NO"),
+        ],
+    )
+    mapping = _load_tape_tokens(
+        connection,
+        {("m1", "BUY_NO"), ("m2", "BUY_YES")},
+    )
+    assert mapping == {
+        ("m1", "BUY_NO"): "no-1",
+        ("m2", "BUY_YES"): "yes-2",
+    }
 
 
 def test_edge_decay_summaries_keep_censoring_explicit() -> None:
