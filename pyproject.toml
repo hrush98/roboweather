@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "roboweather"
 version = "0.1.0"
-description = "Brutally simple MVP for same-day U.S. temperature market modeling."
+description = "Research and live-execution system for weather prediction markets."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

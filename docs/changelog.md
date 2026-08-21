@@ -2,6 +2,13 @@
 
 Keep this file up to date for notable data, model, and trading changes.
 
+## 2026-08-21
+
+- Replaced the public README. It now describes the current research and
+  live-execution system, paused funded status, and fail-closed eval contract
+  instead of the original five-station MVP. Package metadata in
+  `pyproject.toml` matches. Operator command catalogs stay in `AGENTS.md`.
+
 ## 2026-08-13
 
 - Finalized F5 multi-horizon semantics before any eligible outcome: exact-14 now has an explicit horizon version, both arms use generic immutable predecessor identities rather than an F3-named field, and cross-horizon predecessor substitution fails closed.
