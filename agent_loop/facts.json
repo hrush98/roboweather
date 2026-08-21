@@ -1,7 +1,7 @@
 {
   "board": {
     "active": 0,
-    "closed": 23,
+    "closed": 24,
     "open": 1,
     "parked": 0,
     "pillars": {
@@ -50,8 +50,8 @@
       "word_count": 1039
     }
   },
-  "facts_fingerprint": "032c43761853917a462be610de37015caa31ba1470f091f24bd03d248811f36f",
-  "generated_at": "2026-08-13T21:59:14Z",
+  "facts_fingerprint": "9a842ad9998f230b5a2159fd38e4cbb1a97aa449a7c047f3ef8c38ab787cea16",
+  "generated_at": "2026-08-21T14:04:18Z",
   "learning": {
     "captured": 18,
     "integrated": 0,
@@ -67,33 +67,24 @@
     },
     "head": {
       "available": true,
-      "value": "fc698ce22dfdae6a7399bda1522e750208122d46"
+      "value": "e1c32fcd315c7c501fac9a226a37686648e83fc5"
     },
-    "root": "/home/maxrush/General/roboweather"
+    "root": "/home/hmrush/Desktop/personal/roboweather"
   },
   "runtime": {
     "discovery_registry": {
-      "available": true,
-      "candidate_version_count": 2,
-      "completed_run_count": 0,
-      "modified_at": "2026-08-13T21:37:13Z",
-      "path": "/home/maxrush/.local/state/roboweather/discovery/catalog.sqlite",
-      "size_bytes": 184320
+      "available": false,
+      "path": "/home/maxrush/.local/state/roboweather/discovery/catalog.sqlite"
     },
     "research_database": {
-      "available": true,
-      "latest_resolved_market_date": "2026-08-13",
-      "latest_snapshot_timestamp": "2026-08-13T21:57:04.701393+00:00",
-      "modified_at": "2026-08-13T21:56:58Z",
-      "path": "/home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite",
-      "size_bytes": 68056850432,
-      "snapshot_count": 1818772
+      "available": false,
+      "path": "/home/maxrush/.local/state/roboweather/research_2026-05-08_multimodel.sqlite"
     },
     "services": {
       "roboweather-market-tape.service": {
         "available": true,
-        "returncode": 0,
-        "value": "active"
+        "returncode": 3,
+        "value": "inactive"
       },
       "roboweather-phase3d-discovery.service": {
         "available": true,
@@ -102,8 +93,8 @@
       },
       "roboweather-research.service": {
         "available": true,
-        "returncode": 0,
-        "value": "active"
+        "returncode": 3,
+        "value": "inactive"
       }
     }
   },
