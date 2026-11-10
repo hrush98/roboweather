@@ -1,14 +1,14 @@
 # RoboWeather
 
-Research and live-execution system for weather prediction markets: causal
-data, conservative pricing, and fail-closed evals that treat a working stack
-as substrate, not as proof of edge.
+RoboWeather forecasts same-day high temperatures and evaluates those forecasts
+against official station observations. It uses only observations and forecast
+runs available at each decision cutoff. The system also tests how those
+probabilities translate to decisions in weather prediction markets.
 
-The domain is same-day temperature contracts on Polymarket. Public weather
-models, live observations, and a liquid market all exist, so a naive backtest
-is easy and usually wrong. The hard problem is not "can I train a temperature
-model." It is that weather labels, venue settlement, displayed book, and
-actual fills are different scores, and mixing them invents edge.
+The original evaluation defined its scoring buckets using the realized daily
+high, which leaked outcome information into the score. I replaced that
+evaluation and re-scored 18 saved models on a 2025 holdout of 4,364 station-days,
+using fixed local decision cutoffs and frozen calibrators.
 
 ## Status
 
@@ -90,5 +90,5 @@ Operator workflow for those services lives in `AGENTS.md`.
 
 ## License
 
-Private research code unless a license file is added. No strategy in this
+Public research code. No open-source license has been granted. No strategy in this
 repository is authorized for funded trading.
